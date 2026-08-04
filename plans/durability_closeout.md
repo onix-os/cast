@@ -2351,3 +2351,48 @@ path, already covered by
 
 **`stateful_activation_recovery.rs` is now fully accounted for: 2 ported, 5
 deletions.**
+
+### `stateful_journal_and_identity_preflight.rs` (9) — sized 2026-08-04
+
+Scanned by asserted error type. Unlike `stateful_activation_recovery.rs`, this
+file splits into **two distinct groups**, and only one of them is disposition:
+
+**Group A — shared identity-preparation guards (3). Likely portable or already
+covered; these are NOT legacy dispositions.**
+
+| test | asserts |
+|---|---|
+| `unresolved_journal_evidence_blocks_marker_publication_before_activation` | `StatefulTreeIdentityPreparationFailed` |
+| `orphan_transition_row_blocks_marker_publication_before_activation` | `StatefulTreeIdentityPreparationFailed` |
+| `duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees` | `DuplicateTreeToken`, `StatefulTreeIdentity`, `StatefulTreeIdentityPreparationFailed` |
+
+These fire in `StatefulTreeIdentity::prepare*`, which the **coordinated route
+also calls** — `fixture_parts_with_root_abi_mask` builds its identity through
+exactly these functions. So the guard is shared, not legacy. Check against the
+`transition_identity` suite (158 tests) before porting; the plan's counterpart
+table already points "marker/token substitution refusal" there.
+
+**Group B — legacy dispositions (5). Delete the disposition half; check each for
+a residual physical claim first, as in `stateful_activation_recovery.rs`.**
+
+| test | disposition asserted |
+|---|---|
+| `failed_first_install_can_retry_the_exact_marker_only_previous_baseline` | `StatefulCandidatePreserved` |
+| `missing_live_usr_between_identity_check_and_exchange_is_never_recreated` | `StatefulCandidatePreserved` |
+| `isolation_root_abi_conflict_fails_before_usr_exchange_and_preserves_foreign_entry` | `StatefulCandidatePreserved` + quarantine-and-invalidate |
+| `recovery_rejects_same_content_marker_name_substitution_without_repair` | `StatefulTransitionRecoveryFailed` |
+| `recovery_rejects_whole_directory_same_token_substitution_without_exchange` | `StatefulTransitionRecoveryFailed` |
+
+Two of these name a physical claim in the test name itself — **"is never
+recreated"** (missing live `usr`) and **"preserves foreign entry"** (isolation
+root-ABI). Those are namespace properties, not dispositions, and are the same
+class that made root-ABI #4 and the two racing-destination proofs real ports.
+The isolation-root-ABI one is a likely sibling of the already-ported
+`coordinated_root_abi_mutation_at_the_exchange_boundary_fails_closed`, but at the
+*isolation* root rather than the installation root — verify, do not assume.
+
+**Group C — one success-path test, unclassified:**
+`first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr`
+asserts no error and needs reading in full. First-install is the D1.5 path that
+opens this plan, so check whether the coordinated first-install work already
+covers it.
