@@ -36,7 +36,7 @@ fn startup_active_reblit_candidate_preserve_production_leaf_dispatches_applied_a
                             UsrRollbackCandidatePreserveReady::Finish(authority)
                         }
                         UsrRollbackCandidatePreserveAdmission::NotApplicable
-                        | UsrRollbackCandidatePreserveAdmission::Deferred => {
+                        | UsrRollbackCandidatePreserveAdmission::Deferred(_) => {
                             panic!("exact ActiveReblit evidence did not admit candidate preservation")
                         }
                     };

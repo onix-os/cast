@@ -70,9 +70,49 @@ pub(in crate::client) use target_creation::UsrRollbackNewStateCandidatePreserveC
 pub(in crate::client) use target_normalization::UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation;
 
 /// Exact result of read-only candidate-preservation admission.
+/// Why candidate preservation declined to run this time.
+///
+/// A deferral is only safe when something can still change. A *permanent* one
+/// is a stalled boot, and without a reason it is undiagnosable: the gate turns
+/// it into a recovery-pending result with no blocker, so every restart looks
+/// identical. Carrying the cause is what makes "waiting" distinguishable from
+/// "stuck" — measured the hard way on 2026-08-04, when a fixture ordering error
+/// presented as a product liveness bug and took a session to unwind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::client) enum UsrRollbackCandidatePreserveDeferral {
+    /// The record carries no rollback plan yet.
+    RollbackPlanAbsent,
+    /// The namespace could not be inspected at all.
+    NamespaceInspectionBegin(String),
+    /// The database disagrees with the record, or the plan is not exact.
+    DatabaseIncompatibleOrPlanInexact,
+    /// The database changed between the two capture passes.
+    DatabaseChangedDuringCapture,
+    /// The namespace changed, or failed its topology, during capture.
+    NamespaceInspectionFinish(String),
+}
+
+impl std::fmt::Display for UsrRollbackCandidatePreserveDeferral {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RollbackPlanAbsent => formatter.write_str("record carries no rollback plan"),
+            Self::NamespaceInspectionBegin(source) => {
+                write!(formatter, "namespace inspection could not begin: {source}")
+            }
+            Self::DatabaseIncompatibleOrPlanInexact => {
+                formatter.write_str("database is incompatible with the record, or the plan is not exact")
+            }
+            Self::DatabaseChangedDuringCapture => formatter.write_str("database changed between capture passes"),
+            Self::NamespaceInspectionFinish(source) => {
+                write!(formatter, "namespace inspection could not finish: {source}")
+            }
+        }
+    }
+}
+
 pub(in crate::client) enum UsrRollbackCandidatePreserveAdmission<'reservation> {
     NotApplicable,
-    Deferred,
+    Deferred(UsrRollbackCandidatePreserveDeferral),
     Apply(UsrRollbackCandidatePreserveApplyAuthority<'reservation>),
     Finish(UsrRollbackCandidatePreserveFinishAuthority<'reservation>),
 }
@@ -194,7 +234,9 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
         if record.rollback.is_none() {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::RollbackPlanAbsent,
+            ));
         }
         if !crate::transition_journal::rollback_evidence_is_on_chain(record) {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
@@ -210,22 +252,34 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             record,
         ) {
             Ok(inspection) => inspection,
-            Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                    UsrRollbackCandidatePreserveDeferral::NamespaceInspectionBegin(format!("{source}")),
+                ));
+            }
         };
         let database = inspect_database(record, state_db, initial_in_flight)?;
         if !database_is_compatible(record, &database) || !candidate_preserve_plan_is_exact(record) {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::DatabaseIncompatibleOrPlanInexact,
+            ));
         }
 
         run_between_initial_database_captures();
         let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
         let database_after = inspect_database(record, state_db, in_flight_after)?;
         if !database_is_compatible(record, &database_after) || database != database_after {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::DatabaseChangedDuringCapture,
+            ));
         }
         let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
-            Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                    UsrRollbackCandidatePreserveDeferral::NamespaceInspectionFinish(format!("{source}")),
+                ));
+            }
         };
 
         let retained_state_db = state_db.clone();

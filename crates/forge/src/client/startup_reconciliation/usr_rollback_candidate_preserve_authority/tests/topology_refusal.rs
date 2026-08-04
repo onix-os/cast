@@ -24,6 +24,7 @@ use crate::{
     tree_marker::TreeMarkerStore,
 };
 
+use super::super::UsrRollbackCandidatePreserveDeferral;
 use super::{
     fixture::{OperationKind, create_private_directory},
     support::{
@@ -477,7 +478,11 @@ fn require_deferred(fixture: &CandidatePreserveFixture) {
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         fixture.capture(&journal, &reservation),
-        UsrRollbackCandidatePreserveAdmission::Deferred
+        // Topology refusals surface as an inspection failure; the reason is what
+        // makes a permanent one diagnosable.
+        UsrRollbackCandidatePreserveAdmission::Deferred(
+            UsrRollbackCandidatePreserveDeferral::NamespaceInspectionBegin(_)
+        )
     ));
     fixture.assert_evidence_unchanged(&before);
 }
@@ -490,7 +495,11 @@ fn require_deferred_preserving_target(fixture: &CandidatePreserveFixture, target
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         fixture.capture(&journal, &reservation),
-        UsrRollbackCandidatePreserveAdmission::Deferred
+        // Topology refusals surface as an inspection failure; the reason is what
+        // makes a permanent one diagnosable.
+        UsrRollbackCandidatePreserveAdmission::Deferred(
+            UsrRollbackCandidatePreserveDeferral::NamespaceInspectionBegin(_)
+        )
     ));
     assert_eq!(target_witness(target), target_before);
     assert_eq!(fixture.fixture.canonical_bytes(), journal_before);

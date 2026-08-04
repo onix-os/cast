@@ -13,6 +13,7 @@ use crate::{
     transition_journal::RollbackActionOutcome,
 };
 
+use super::super::UsrRollbackCandidatePreserveDeferral;
 use super::{
     fixture::{OperationKind, create_private_directory},
     support::{CandidateLayout, CandidatePreserveFixture, CandidateSource, reserved_active_reblit_wrapper_path},
@@ -136,7 +137,9 @@ fn startup_candidate_preserve_capture_races_defer_without_authority() {
     arm_between_usr_rollback_candidate_preserve_database_captures(fixture.candidate_transition_clear_hook());
     assert!(matches!(
         fixture.capture(&journal, &reservation),
-        UsrRollbackCandidatePreserveAdmission::Deferred
+        UsrRollbackCandidatePreserveAdmission::Deferred(
+            UsrRollbackCandidatePreserveDeferral::DatabaseChangedDuringCapture
+        )
     ));
     assert_eq!(fixture.fixture.canonical_bytes(), before.0);
     assert_eq!(fixture.fixture.namespace_snapshot(), before.2);
@@ -156,7 +159,9 @@ fn startup_candidate_preserve_capture_races_defer_without_authority() {
     );
     assert!(matches!(
         fixture.capture(&journal, &reservation),
-        UsrRollbackCandidatePreserveAdmission::Deferred
+        UsrRollbackCandidatePreserveAdmission::Deferred(
+            UsrRollbackCandidatePreserveDeferral::NamespaceInspectionFinish(_)
+        )
     ));
 }
 
