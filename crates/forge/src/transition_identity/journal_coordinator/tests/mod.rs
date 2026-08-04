@@ -68,7 +68,10 @@ pub(crate) struct CoordinatorFixture {
     pub(crate) candidate_path: PathBuf,
 }
 
-pub(crate) fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (CoordinatorFixture, StatefulTreeIdentity) {
+pub(crate) fn fixture(
+    candidate_kind: CandidateKind,
+    previous_kind: PreviousKind,
+) -> (CoordinatorFixture, StatefulTreeIdentity) {
     let (fixture, identity, authority) = fixture_parts(candidate_kind, previous_kind, false, false);
     assert!(authority.is_none());
     (fixture, identity)
@@ -146,6 +149,7 @@ fn fixture_parts_with_root_abi_mask(
     prepare_previous_tree(&installation, previous_kind, previous_state);
     installation.active_state = (previous_kind == PreviousKind::Active).then_some(previous_state);
     install_root_abi_subset(&installation.root, root_abi_mask);
+    plant_pending_root_entry(&installation.root);
 
     if retain_previous_slot {
         assert_eq!(candidate_kind, CandidateKind::ActiveReblit);
@@ -265,6 +269,58 @@ fn prepare_previous_tree(installation: &Installation, previous_kind: PreviousKin
         }
         PreviousKind::SynthesizedEmpty => {}
     }
+}
+
+std::thread_local! {
+    static PENDING_ROOT_ENTRY: std::cell::RefCell<Option<(String, Vec<u8>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Build an installation carrying a foreign entry at `name` in its root, and
+/// return the result of taking the pre-journal client authority over it.
+///
+/// The entry must be planted *before* the authority takes its lease. Creating
+/// it afterwards changes the root directory's own metadata, which the retained
+/// active-state lease revalidates — the transition then fails with
+/// `installation-root metadata changed during retained active-state lease`
+/// before any root-ABI check runs, so the test would prove nothing about
+/// root-ABI conflict handling.
+///
+/// The error is returned rendered because its type is part of the client
+/// facade, not the coordinator's, and only its shape matters here.
+pub(crate) fn prejournal_authority_over_root_entry(
+    name: &str,
+    contents: &[u8],
+) -> (tempfile::TempDir, Result<(), String>) {
+    let temporary = private_installation_tempdir();
+    let mut installation = Installation::open(temporary.path(), None).unwrap();
+    let database = db::state::Database::new(":memory:").unwrap();
+    let previous_state = database.add(&[], Some("root abi previous"), None).unwrap().id;
+    prepare_previous_tree(&installation, PreviousKind::Active, previous_state);
+    installation.active_state = Some(previous_state);
+    install_root_abi_subset(&installation.root, 0);
+    write_canonical_file(&installation.root.join(name), contents);
+
+    let outcome = JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(&installation, None)
+        .map(|_| ())
+        .map_err(|error| format!("{error:?}"));
+    (temporary, outcome)
+}
+
+#[allow(dead_code)]
+fn plant_root_entry_before_lease(name: impl Into<String>, contents: impl Into<Vec<u8>>) {
+    PENDING_ROOT_ENTRY.with(|slot| {
+        let previous = slot.borrow_mut().replace((name.into(), contents.into()));
+        assert!(previous.is_none(), "a root entry is already pending");
+    });
+}
+
+fn plant_pending_root_entry(root: &Path) {
+    PENDING_ROOT_ENTRY.with(|slot| {
+        if let Some((name, contents)) = slot.borrow_mut().take() {
+            write_canonical_file(&root.join(name), &contents);
+        }
+    });
 }
 
 fn create_canonical_directory(path: &Path) {

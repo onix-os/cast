@@ -552,3 +552,36 @@ fn coordinated_candidate_clone_failure_precedes_all_metadata_decoration() {
         4,
     );
 }
+
+// Ported from
+// `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`.
+//
+// A foreign entry occupying a root-ABI name — either the canonical link name or
+// its `.next` staging name — must be refused before the transition touches
+// anything. In the coordinated route that bound is even tighter than the legacy
+// one: the refusal comes from taking the pre-journal client authority, so it
+// happens before a journal exists, before any trigger runs, and before the
+// candidate is prepared. There is no transition to unwind because none was
+// created.
+#[test]
+fn coordinated_root_abi_conflicts_are_refused_before_any_authority_is_taken() {
+    for (name, expected) in [
+        ("bin", "RootAbiLinkTypeConflict"),
+        ("bin.next", "RootAbiStagingConflict"),
+    ] {
+        let (_temporary, outcome) = prejournal_authority_over_root_entry(name, b"foreign root ABI entry");
+        let rendered = outcome
+            .err()
+            .unwrap_or_else(|| panic!("a foreign entry at `{name}` must refuse the authority"));
+        assert!(
+            rendered.contains(expected),
+            "`{name}` was not refused as {expected}: {rendered}"
+        );
+        // The refusal names the offending path and what it actually found, so
+        // an operator can act on it without re-deriving the ABI table.
+        assert!(
+            rendered.contains("regular file") && rendered.contains(name),
+            "the refusal does not identify the conflicting entry: {rendered}"
+        );
+    }
+}
