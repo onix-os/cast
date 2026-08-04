@@ -1229,75 +1229,25 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
 // stale journal, an unreleased reservation — would satisfy every single-
 // transition assertion and still make the next transition impossible.
 #[test]
-// IGNORED — a reproducer, not a passing port. Measured 2026-08-04: the
-// ActivateArchived rollback reaches `CandidatePreserveIntent` and then neither
-// advances nor names a blocker. `drive_startup_recovery_to_clean` records the
-// trail `[UsrRestored, CandidatePreserveIntent x31]`, every entry blocker-free.
-// Confirmed independently by `reverse_exchange_intent_refusal_reason`, which
-// trips its own "stalled without naming a blocker" assertion at that phase.
+// The fixture must give the archived candidate its slot link *before*
+// preparation, and that is the whole trick.
 //
-// A blocker-free non-advancing entry is a liveness failure whatever the cause:
-// a real system would spin at every boot with nothing to diagnose it by.
+// `archived_topology` requires the candidate's marker to be a two-link pair
+// sharing `<state>/.cast-state-slot-<state>-<token>`
+// (`candidate_preserve_proof.rs:715`), because production reaches
+// `ActivateArchived` by moving the tree out of that slot. `RetainedIdentity::prepare`
+// adopts such a marker through `adopt_or_create_before_journal_for_transition`
+// — the one `nlink=2`-tolerant reader — and then authorizes the extra link
+// (`tree_lifecycle.rs:536`). Every *later* read is strict, and passes only
+// because the retained marker was authorized at preparation.
 //
-// Cause, narrowed 2026-08-04. The stall is a *silent deferral*:
-// `UsrRollbackCandidatePreserveAuthority::capture` returns `Deferred`, which
-// the gate maps to `Dispatch::Unhandled` — recovery-pending, nothing named.
-// Four of its five deferral sites discard the underlying error with `Err(_)`
-// (`usr_rollback_candidate_preserve_authority.rs:213`, `:217`, `:224`, `:228`),
-// so a *permanent* deferral is undiagnosable by construction. That is worth
-// fixing independently of this test.
-//
-// Which deferral fires here: `archived_topology` requires the candidate's
-// marker to be a two-link pair sharing `<state>/.cast-state-slot-<state>-<token>`
-// (`candidate_preserve_proof.rs:715`, `:736`), because production reaches
-// `ActivateArchived` by moving the tree *out of* that slot. The plain fixture
-// stages its candidate directly: `nlink=1`, no wrapper, so `Rearchive` has no
-// destination.
-//
-// Driver split and re-measured 2026-08-04, and the result points at the
-// product rather than the fixture. `coordinator_from_exchange_fixture_after_begin`
-// can now plant the slot link at any point in the forward pass. Every position
-// is refused:
-//
-//   after `begin_transition`      -> begin_candidate_prepare_through_staging
-//                                    fails, UnsafeMarker links=2
-//   after `finish_candidate_prepare` -> prepare_archived_isolation fails,
-//                                    Preflight { UnsafeMarker links=2 }
-//
-// So **the forward ActivateArchived path admits no candidate whose marker has
-// `nlink=2`** — every step is a strict `nlink=1` reader — while the rollback's
-// `archived_topology` *requires* `marker_links() == 2`
-// (`candidate_preserve_proof.rs:715`). A candidate that legitimately reached
-// the exchange therefore cannot satisfy the topology its own rollback demands,
-// and defers forever. Running this fixture with the wrapper present but no link
-// stalls identically: `[ReverseExchangeIntent, UsrRestored,
-// CandidatePreserveIntent x30]`.
-//
-// Resolved 2026-08-04: nothing creates the second link, anywhere. Every
-// non-test reference to `.cast-state-slot-` in the crate is a read
-// (`starts_with`, `strip_prefix`, inspection, error text) or a doc comment;
-// no product code constructs that name or calls `hard_link`/`linkat` for it.
-// The only creators in the tree are test fixtures.
-//
-// And `archived_topology` is the only one of the three that wants two links:
-//
-//   new_state_topology     marker_links() != 1 -> reject  (:673)
-//   active_reblit_topology marker_links() != 1 -> reject  (:773)
-//   archived_topology      marker_links() != 2 -> reject  (:715)
-//
-// So the `== 2` requirement is unsatisfiable by any real ActivateArchived
-// candidate, and every such rollback defers forever at CandidatePreserveIntent
-// — silently, because the deferral discards its reason. That is consistent with
-// the guest-side CandidatePreserveIntent deferrals behind tasks #18/#26/#27.
-//
-// The fix is almost certainly in the predicate (expect 1, like its two
-// siblings), but that is a product change and wants its own task, so this
-// stays ignored rather than being made to pass.
-//
-// Caveat: verified that no code constructs the slot-link *name*. Not
-// exhaustively traced whether such a link could arise another way — e.g. a
-// directory rename carrying a link created under an older format.
-#[ignore = "reproducer for the CandidatePreserveIntent rollback stall; see comment"]
+// So a link planted after preparation is never authorized and every subsequent
+// step refuses it (`UnsafeMarker links=2` at
+// `begin_candidate_prepare_through_staging`, then at
+// `prepare_archived_isolation`), while a candidate with no link at all fails
+// the rollback topology and defers forever at `CandidatePreserveIntent`.
+// Both wrong orderings were measured on 2026-08-04 and cost most of a session;
+// see the plan. The ordering is the requirement, not a fixture detail.
 fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
     let (fixture, identity, authority) = fixture_with_exchange_authority_and_candidate_slot();
     let (fixture, intent, authority) = coordinator_from_exchange_fixture_after_begin(
@@ -1321,20 +1271,26 @@ fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
         &fixture.layout_database,
     );
 
-    let _entries = drive_startup_recovery_to_clean(
+    let entries = drive_startup_recovery_to_clean(
         &fixture.installation,
         &fixture.database,
         &fixture.layout_database,
     );
-    assert!(_entries > 1, "the rollback completed without advancing");
+    assert!(entries > 1, "the rollback completed without advancing");
 
     // A clean startup means no record survives to block the next transition.
     assert_canonical_journal_absent(&fixture.installation.root);
-    assert_exchange_layout(&fixture, false, candidate, previous);
+    // The previous tree is live again at its original identity, and the
+    // candidate went back to its archive slot rather than being left in
+    // staging — `AbortDisposition::Rearchive`, carried through to completion.
+    assert_eq!(directory_identity(&fixture.installation.root.join("usr")), previous);
+    assert_state_metadata_name_absent(&fixture.candidate_path);
+    let slot = fixture.installation.root_path(fixture.candidate_state.to_string());
+    assert_eq!(directory_identity(&slot.join("usr")), candidate);
 
-    // The installation must now accept a fresh transition that archives the
-    // same previous state the rollback just restored.
-    fs::remove_dir_all(fixture.installation.staging_path("usr")).unwrap();
+    // The installation must now accept a fresh transition. This is the claim
+    // the legacy test was really making: a completed compensating recovery
+    // leaves no residue that blocks the next one.
     let (identity, authority) = reacquire_new_state(&fixture);
     drop(identity);
     drop(authority);

@@ -221,6 +221,28 @@ fn fixture_parts_with_root_abi_mask(
             COORDINATOR_SYSTEM_SNAPSHOT,
         );
     }
+    if retain_candidate_slot {
+        // The archived candidate arrives already carrying its slot link,
+        // because it came *out of* that slot. Publishing the marker and linking
+        // it here — before preparation — is what lets `RetainedIdentity::prepare`
+        // adopt an `nlink=2` marker through
+        // `adopt_or_create_before_journal_for_transition` and then authorize the
+        // extra link (`tree_lifecycle.rs:536`). A link added after preparation
+        // is never authorized, so every later strict re-read refuses it.
+        let marker_store = TreeMarkerStore::open_path(&candidate_path).unwrap();
+        let marker = marker_store.adopt_or_create_before_journal().unwrap();
+        let wrapper = installation.root_path(candidate_state.to_string());
+        fs::hard_link(
+            candidate_path.join(".cast-tree-id"),
+            wrapper.join(format!(
+                ".cast-state-slot-{}-{}",
+                candidate_state,
+                marker.token().as_str()
+            )),
+        )
+        .unwrap();
+    }
+
     let (identity, exchange_authority) = match (candidate_kind, exchange_preflight) {
         (CandidateKind::NewState, preflight) => {
             write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
