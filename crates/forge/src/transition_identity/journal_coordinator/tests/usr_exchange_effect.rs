@@ -52,6 +52,36 @@ fn coordinator_from_exchange_fixture_with_options(
     UsrExchangeIntentCoordinator,
     JournalUsrExchangeAuthority,
 ) {
+    coordinator_from_exchange_fixture_after_begin(
+        candidate_kind,
+        fixture,
+        identity,
+        authority,
+        run_system_triggers,
+        run_boot_sync,
+        |_| {},
+    )
+}
+
+/// As above, but with a hook that runs immediately after `begin_transition`
+/// and before the staging pair.
+///
+/// That window is where production creates the archived candidate's slot link:
+/// the journal record exists, but no preparation API has read the marker yet,
+/// so an `nlink=2` marker is admissible there and nowhere earlier.
+fn coordinator_from_exchange_fixture_after_begin(
+    candidate_kind: CandidateKind,
+    fixture: CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    run_system_triggers: bool,
+    run_boot_sync: bool,
+    after_begin: impl FnOnce(&CoordinatorFixture),
+) -> (
+    CoordinatorFixture,
+    UsrExchangeIntentCoordinator,
+    JournalUsrExchangeAuthority,
+) {
     let mut coordinator = identity
         .begin_transition(request(
             candidate_kind,
@@ -69,6 +99,7 @@ fn coordinator_from_exchange_fixture_with_options(
     }
     coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     let prepared = finish_candidate_prepare(coordinator).unwrap();
+    after_begin(&fixture);
     let ready = match prepared {
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
             TestUsrExchangeReady::Archived(ready.prepare_archived_isolation(&fixture.installation).unwrap())
@@ -1223,22 +1254,42 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
 // stages its candidate directly: `nlink=1`, no wrapper, so `Rearchive` has no
 // destination.
 //
-// `fixture_with_exchange_authority_and_candidate_slot` builds that provenance,
-// and this test now uses it — but the link is still planted too early. The
-// ordinary preparation APIs are strict `nlink=1` readers, so `begin_transition`
-// refuses the two-link marker with
-// `UnsafeMarker { role: "canonical", links: 2 }`. In production the slot link
-// is created by the archived-staging move, *after* the journal record exists.
+// Driver split and re-measured 2026-08-04, and the result points at the
+// product rather than the fixture. `coordinator_from_exchange_fixture_after_begin`
+// can now plant the slot link at any point in the forward pass. Every position
+// is refused:
 //
-// Next step: split `coordinator_from_exchange_fixture_with_options` so the slot
-// link can be planted between `begin_transition` and
-// `begin_candidate_prepare_through_staging`, matching the real ordering. Then
-// re-run and see whether the stall survives a faithful topology.
+//   after `begin_transition`      -> begin_candidate_prepare_through_staging
+//                                    fails, UnsafeMarker links=2
+//   after `finish_candidate_prepare` -> prepare_archived_isolation fails,
+//                                    Preflight { UnsafeMarker links=2 }
+//
+// So **the forward ActivateArchived path admits no candidate whose marker has
+// `nlink=2`** — every step is a strict `nlink=1` reader — while the rollback's
+// `archived_topology` *requires* `marker_links() == 2`
+// (`candidate_preserve_proof.rs:715`). A candidate that legitimately reached
+// the exchange therefore cannot satisfy the topology its own rollback demands,
+// and defers forever. Running this fixture with the wrapper present but no link
+// stalls identically: `[ReverseExchangeIntent, UsrRestored,
+// CandidatePreserveIntent x30]`.
+//
+// Unverified remaining possibility: something between `UsrExchanged` and
+// `CandidatePreserveIntent` creates the second link. It cannot be the rearchive
+// effect itself, which is gated behind exactly this check. Confirming or ruling
+// that out is the next step, and it decides whether the fix is in the topology
+// predicate or in whatever should have been creating the link.
 #[ignore = "reproducer for the CandidatePreserveIntent rollback stall; see comment"]
 fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
     let (fixture, identity, authority) = fixture_with_exchange_authority_and_candidate_slot();
-    let (fixture, intent, authority) =
-        coordinator_from_exchange_fixture(CandidateKind::Archived, fixture, identity, authority);
+    let (fixture, intent, authority) = coordinator_from_exchange_fixture_after_begin(
+        CandidateKind::Archived,
+        fixture,
+        identity,
+        authority,
+        false,
+        false,
+        |_| {},
+    );
     let candidate = directory_identity(&fixture.candidate_path);
     let previous = directory_identity(&fixture.installation.root.join("usr"));
     reset_retained_exchange_syscall_count();

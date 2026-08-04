@@ -271,26 +271,6 @@ fn fixture_parts_with_root_abi_mask(
             }
         }
     };
-    if retain_candidate_slot {
-        let token = TreeMarkerStore::open_path(&candidate_path)
-            .unwrap()
-            .read_for_recovery()
-            .unwrap()
-            .token()
-            .as_str()
-            .to_owned();
-        let wrapper = installation.root_path(candidate_state.to_string());
-        fs::hard_link(
-            candidate_path.join(".cast-tree-id"),
-            wrapper.join(format!(".cast-state-slot-{candidate_state}-{token}")),
-        )
-        .unwrap();
-        assert_eq!(
-            fs::symlink_metadata(candidate_path.join(".cast-tree-id")).unwrap().nlink(),
-            2
-        );
-    }
-
     let fixture = CoordinatorFixture {
         _temporary: temporary,
         installation,
@@ -301,6 +281,38 @@ fn fixture_parts_with_root_abi_mask(
         candidate_path,
     };
     (fixture, identity, exchange_authority)
+}
+
+/// Hardlink the archived candidate's published marker into its originating
+/// slot, giving the tree the two-link identity production reaches
+/// `ActivateArchived` with.
+///
+/// Must be called *after* `begin_transition`. The ordinary preparation APIs are
+/// strict `nlink=1` readers (`tree_marker.rs:319`), so a link planted before
+/// preparation is refused as `UnsafeMarker { links: 2 }`. Production creates it
+/// in the archived-staging move, which is likewise after the record exists.
+#[allow(dead_code)] // retained as the reproducer's next experiment; see usr_exchange_effect.rs
+pub(crate) fn plant_candidate_slot_link(fixture: &CoordinatorFixture) {
+    let token = TreeMarkerStore::open_path(&fixture.candidate_path)
+        .unwrap()
+        .read_for_recovery()
+        .unwrap()
+        .token()
+        .as_str()
+        .to_owned();
+    let state = fixture.candidate_state;
+    let wrapper = fixture.installation.root_path(state.to_string());
+    fs::hard_link(
+        fixture.candidate_path.join(".cast-tree-id"),
+        wrapper.join(format!(".cast-state-slot-{state}-{token}")),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::symlink_metadata(fixture.candidate_path.join(".cast-tree-id"))
+            .unwrap()
+            .nlink(),
+        2
+    );
 }
 
 fn add_cleared_state_with_provenance(database: &db::state::Database, summary: &str, digit: char) -> state::Id {
