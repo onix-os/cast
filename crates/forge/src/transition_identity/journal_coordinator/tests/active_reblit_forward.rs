@@ -969,3 +969,165 @@ fn coordinated_active_reblit_rejects_a_pre_boot_state_id_mutation() {
         10,
     );
 }
+
+/// Build a *second* ActiveReblit identity and authority against an installation
+/// that has already run one transition.
+///
+/// `fixture_with_exchange_authority*` cannot do this: it mints a fresh
+/// installation per call, and the first run consumes the staged candidate. This
+/// re-stages `staging/usr` and re-acquires the pre-journal client authority
+/// over the existing installation, which is what "two reblits on one client"
+/// actually means.
+fn reacquire_active_reblit(fixture: &CoordinatorFixture) -> (StatefulTreeIdentity, JournalUsrExchangeAuthority) {
+    let candidate_path = fixture.installation.staging_path("usr");
+    create_canonical_directory(&candidate_path);
+    let active_reblit = fixture.database.get(fixture.candidate_state).unwrap();
+    JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(&fixture.installation, Some(active_reblit))
+        .unwrap()
+        .prepare_active_reblit_identity(&fixture.database, &candidate_path, fixture.candidate_state)
+        .unwrap()
+}
+
+// Ported from `two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots`.
+//
+// Wrapper names are indexed, and the index is chosen by scanning. Two
+// successive reblits on one installation must therefore land in *different*
+// slots: a second transition that reused index 0 would overwrite the first
+// transition's preserved tree, which is the one copy of it that exists.
+#[test]
+fn coordinated_two_successive_active_reblits_use_distinct_wrapper_slots() {
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+
+    let first_live = fs::symlink_metadata(fixture.installation.root.join("usr"))
+        .unwrap()
+        .ino();
+    run_active_reblit(&fixture, identity, authority)
+        .expect("first reblit forward")
+        .complete_active_reblit_without_boot()
+        .expect("first reblit completion");
+    let after_first = wrapper_quarantines(&fixture);
+    assert_eq!(
+        after_first.len(),
+        1,
+        "the first reblit did not preserve exactly one wrapper"
+    );
+
+    let second_live = fs::symlink_metadata(fixture.installation.root.join("usr"))
+        .unwrap()
+        .ino();
+    assert_ne!(
+        second_live, first_live,
+        "the first reblit did not replace the live tree"
+    );
+
+    let (identity, authority) = reacquire_active_reblit(&fixture);
+    run_active_reblit(&fixture, identity, authority)
+        .expect("second reblit forward")
+        .complete_active_reblit_without_boot()
+        .expect("second reblit completion");
+
+    // Two distinct wrappers, at distinct names.
+    let after_second = wrapper_quarantines(&fixture);
+    assert_eq!(
+        after_second.len(),
+        2,
+        "the second reblit did not take a distinct slot: {after_second:?}"
+    );
+    assert_ne!(after_second[0], after_second[1]);
+
+    // Each wrapper holds the tree that was live when its transition started —
+    // the proof that the second run preserved rather than overwrote.
+    let held = after_second
+        .iter()
+        .map(|wrapper| fs::symlink_metadata(wrapper.join("usr")).unwrap().ino())
+        .collect::<Vec<_>>();
+    assert!(
+        held.contains(&first_live),
+        "the first preserved tree was lost: {held:?}"
+    );
+    assert!(
+        held.contains(&second_live),
+        "the second preserved tree was lost: {held:?}"
+    );
+}
+
+/// Build a NewState identity and authority over an installation that has
+/// already run a transition, so a *subsequent* transition can be driven against
+/// whatever namespace the previous one left behind.
+fn reacquire_new_state(fixture: &CoordinatorFixture) -> (StatefulTreeIdentity, JournalUsrExchangeAuthority) {
+    let candidate_path = fixture.installation.staging_path("usr");
+    create_canonical_directory(&candidate_path);
+    write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
+    JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(&fixture.installation, None)
+        .unwrap()
+        .prepare_unallocated_candidate(&fixture.database, &candidate_path)
+        .unwrap()
+}
+
+// Ported from `active_reblit_preserves_authorized_two_link_previous_marker_pair`.
+//
+// The parking half of this duplicates
+// `journal_coordinator_active_reblit_reservation_handles_one_link_and_parks_two_link_previous`
+// and is asserted here only as the precondition. The claim that has no
+// coordinated counterpart is the *cross-transition* one: a parked slot's marker
+// is a two-link pair shared with the tree it names, and a later, unrelated
+// transition must leave both links intact. A subsequent transition that
+// unlinked or re-created the marker would silently break the parked slot's
+// binding to its tree, and nothing in a single-transition test would notice.
+#[test]
+fn coordinated_parked_previous_slot_marker_survives_a_later_transition() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let token = previous_slot_token(&fixture);
+    let parked = parked_slot_path(&fixture, &token, 0);
+    let marker_inode = fs::symlink_metadata(slot_marker_path(
+        &fixture.installation.root_path(fixture.previous_state.to_string()),
+        &fixture,
+        &token,
+    ))
+    .unwrap()
+    .ino();
+
+    run_active_reblit(&fixture, identity, authority)
+        .expect("reblit forward")
+        .complete_active_reblit_without_boot()
+        .expect("reblit completion");
+
+    // Precondition: the two-link pair was parked, not collapsed.
+    let slot_marker = slot_marker_path(&parked, &fixture, &token);
+    let parked_meta = fs::symlink_metadata(&slot_marker).unwrap();
+    assert_eq!(parked_meta.ino(), marker_inode, "the parked slot lost its marker inode");
+    assert_eq!(parked_meta.nlink(), 2, "the parked marker is not a two-link pair");
+
+    // Now run an unrelated NewState transition over the same installation.
+    let (identity, authority) = reacquire_new_state(&fixture);
+    let (complete, allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.candidate_state),
+        &[],
+        "successor over a parked slot",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect("a successor transition runs over a parked previous slot");
+    assert_eq!(complete.record().candidate.id, Some(i32::from(allocated)));
+
+    // The parked slot is untouched by the successor: same inode, still paired.
+    let after = fs::symlink_metadata(&slot_marker).unwrap();
+    assert_eq!(
+        after.ino(),
+        marker_inode,
+        "a later transition replaced the parked marker"
+    );
+    assert_eq!(after.nlink(), 2, "a later transition broke the parked marker pair");
+}
