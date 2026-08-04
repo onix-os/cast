@@ -2786,3 +2786,29 @@ not in bulk.
 shared helpers before estimating. A single `grep` for the route entry point
 measures how many *places call it*, which is not the quantity anyone cares
 about.
+
+### Deletion pass — COMPLETE except the open ports (2026-08-04)
+
+| file | outcome |
+|---|---|
+| `tests/root_abi_preflight.rs` | deleted whole (4) |
+| `tests/stateful_activation_recovery.rs` | 7 of 8 deleted; 8th survives on `activate_state` |
+| `tests/stateful_candidate_metadata.rs` | 8 of 10 deleted with `apply_fresh_candidate` and its now-orphaned helpers; the 2 survivors drive `decorate_stateful` directly |
+| `client/active_reblit_tests.rs` | **deleted whole** (25 tests + `fn run`) — the plan's "18 ported, 7 deletions" accounted for every test in the file; module was self-contained, nothing exported or referenced |
+| `tests/stateful_previous_tree_recovery.rs` | 2 of 5 deleted; **3 remain, all open ports** |
+
+**46 legacy tests removed this session** (4 + 7 + 8 + 25 + 2). Suite:
+**2735 passed, 0 failed, 7 ignored** — clean at every step.
+
+**No test outside `stateful_previous_tree_recovery.rs` touches the legacy route
+any more.** The remaining call sites are:
+
+- `tests/stateful_previous_tree_recovery.rs` (4 sites / 3 tests) — the open
+  ports: the cross-transition one blocked on task #29, plus the two reduced
+  retirement claims
+- product code: `client/core/stateful_transition.rs` (the definitions),
+  `core/state_metadata.rs`, `core/state_planning.rs`,
+  `new_state_boot_transition.rs`, `journal_coordinator/new_state_forward.rs` (2)
+
+So #10's remaining shape is: **3 ports, then excise the route from those five
+product files.** The test-side work is otherwise done.
