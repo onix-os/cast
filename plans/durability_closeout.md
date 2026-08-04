@@ -1959,6 +1959,38 @@ legacy route. The other 21 drive `transition_identity` primitives directly and
 survive the deletion untouched. Sizing that file by its length would have
 overstated it fivefold.
 
+**Starting points for those 5 (NOT verdicts — read both sides first):** two of
+them arm fault surfaces that the coordinated suite also exercises —
+`arm_retained_previous_move_fault` (legacy line 490) is armed by
+`journal_coordinator/tests/new_state_forward.rs:201`, and
+`arm_retained_exchange_fault` (legacy line 887) by
+`journal_coordinator/tests/usr_exchange_effect.rs:414`. Shared hook, unknown
+whether the same claim. The other three
+(`fresh_identity_can_archive_after_a_complete_compensating_recovery`,
+`previous_archive_abort_retirement_faults_resume_in_production_recovery`,
+`retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange`)
+show no hook in their first lines and need reading in full.
+
+### Environment: `$TMPDIR` must be 0700
+
+`UnsafeInitialMaterializationParent { path: "<TMPDIR>", mode: 509 }` means the
+temp dir is `0o775`. `509 = 0o775`. Several tests (e.g.
+`self_upgrade_hardening::ephemeral_self_upgrade_returns_a_typed_error_without_mutating_either_root`)
+require a private parent and fail immediately without it — **in isolation, on a
+clean tree**, so it looks exactly like a regression you just introduced.
+
+Fix: `chmod 700 "$TMPDIR"`. This recurs whenever the nix-shell is recreated with
+a permissive umask, which is easy to hit after an environment restart mid-session.
+
+Two process rules this cost half a session to relearn:
+
+- **Never pipe a suite run through `tail`/`grep` before reading it.** It discards
+  the failure names *and* masks the exit code, so a failing run reports success.
+  Write full output to a file and capture `$?` separately.
+- **Never run another `cargo` command against the same `target/` while a suite
+  runs** (already in memory). Concurrent runs produced a phantom extra failure
+  that did not reproduce.
+
 ### `stateful_quarantine_recovery.rs` (7) — DELETE, structurally
 
 All seven drive `apply_stateful_blit_with_checkpoint` and assert on the
