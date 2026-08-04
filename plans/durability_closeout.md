@@ -2751,3 +2751,38 @@ before deleting caught this — the standing rule keeps paying:
 So the honest remaining count is **10 legacy-route tests**, not 19: 7 + 2 + 1,
 plus two helper call sites that die only when their last legacy caller does.
 The earlier "~19" counted call sites and assumed one test each.
+
+### Deletion pass, second measurement — the count was undercounted twice
+
+**Deleted so far (2026-08-04):** `root_abi_preflight.rs` whole (4), seven of
+eight in `stateful_activation_recovery.rs` (the 8th,
+`archived_state_activation_carries_each_generated_snapshot_with_its_usr_tree`,
+uses `activate_state` and survives), and the two settled deletions in
+`stateful_previous_tree_recovery.rs`. **13 legacy tests gone.** Suite: **2768
+passed, 0 failed, 7 ignored.**
+
+**The remaining count is bigger than reported, and for a reason worth naming.**
+Counting *call sites* undercounts whenever a test file routes the legacy call
+through a shared helper. Two files do:
+
+| file | legacy call sites | actual legacy-route tests |
+|---|---|---|
+| `active_reblit_tests.rs` | 2 | **~26** — `fn run(...)` (:67) wraps the call and has **26 callers**; 25 `#[test]`s in the file |
+| `stateful_candidate_metadata.rs` | 1 | **~8** — `fn apply_fresh_candidate(...)` (:408) has **8 callers**; 10 `#[test]`s |
+| `stateful_previous_tree_recovery.rs` | 4 | 3 (one test uses two call sites) |
+
+So the real remaining figure is roughly **35–37 legacy-route tests**, not 10.
+Both earlier numbers ("~19", then "10") were derived from call sites and are
+withdrawn.
+
+This does *not* mean 35 unported claims. The plan already records
+`active_reblit_tests.rs` as "18 ported, 7 deletions" and
+`stateful_candidate_metadata.rs` as "8 ported" — those verdicts stand; the
+originals were simply never removed. The remaining work there is mostly
+mechanical deletion, but it must be done per test against the recorded verdict,
+not in bulk.
+
+**Method note for the rest of the pass:** count `#[test]` attributes and trace
+shared helpers before estimating. A single `grep` for the route entry point
+measures how many *places call it*, which is not the quantity anyone cares
+about.
