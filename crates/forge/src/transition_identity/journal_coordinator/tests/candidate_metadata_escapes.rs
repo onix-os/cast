@@ -585,3 +585,91 @@ fn coordinated_root_abi_conflicts_are_refused_before_any_authority_is_taken() {
         );
     }
 }
+
+// Ported from `retained_live_root_abi_rejects_replacement_at_the_exchange_boundary`
+// and `retained_absent_root_abi_rejects_appearance_at_the_exchange_boundary`.
+//
+// Both legacy tests mutate a root-ABI entry in the window before the usr
+// exchange — one replacing a retained *present* link, one making an entry
+// appear where absence was retained — and require the exchange to refuse
+// without disturbing the live tree or the foreign entry.
+//
+// The coordinated route enforces the same outcome through a broader guard. It
+// has no root-ABI-specific pre-exchange comparison (`live_root_abi.revalidate()`
+// exists only on the legacy route); instead the retained active-state lease
+// covers the whole installation root, so *any* mutation of it during the lease
+// fails the exchange closed. That strictly subsumes the root-ABI case: you
+// cannot replace a root-ABI entry without changing root metadata.
+//
+// Asserted as a lease proof rather than as a root-ABI proof, because that is
+// what actually holds. Claiming a root-ABI-specific check here would describe a
+// guard the coordinated route does not have.
+#[test]
+fn coordinated_root_abi_mutation_at_the_exchange_boundary_fails_closed() {
+    for retained_present in [true, false] {
+        let (fixture, identity, authority) = fixture_parts_with_root_abi_mask(
+            CandidateKind::NewState,
+            PreviousKind::Active,
+            true,
+            false,
+            // Bit 0 is `bin -> usr/bin`. It is a *dangling* symlink in this
+            // fixture (no `usr/bin` target), so `Path::exists()` reports false
+            // for it — presence must be checked with `symlink_metadata`.
+            u8::from(retained_present),
+        );
+        let authority = authority.expect("exchange fixture retained the client authority");
+        let foreign = fixture.installation.root.join("bin");
+        assert_eq!(
+            fs::symlink_metadata(&foreign).is_ok(),
+            retained_present,
+            "fixture did not establish retained_present={retained_present}"
+        );
+
+        let live = fixture.installation.root.join("usr");
+        let live_inode = fs::symlink_metadata(&live).unwrap().ino();
+        let hook_foreign = foreign.clone();
+        arm_before_retained_exchange_rename(move || {
+            let _ = fs::remove_file(&hook_foreign);
+            fs::write(&hook_foreign, b"foreign at the exchange boundary").unwrap();
+        });
+
+        let error = execute_new_state_forward(
+            identity,
+            authority,
+            &fixture.database,
+            NewStatePrevious::Active(fixture.previous_state),
+            &[],
+            "root abi boundary slice",
+            false,
+            |_| {
+                crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                    COORDINATOR_OS_RELEASE,
+                    crate::system_model::snapshot_authorities(),
+                    COORDINATOR_SYSTEM_SNAPSHOT,
+                )
+            },
+            |_view| Ok::<(), TriggerEffectError>(()),
+            |_view| Ok::<(), TriggerEffectError>(()),
+        )
+        .expect_err("a root mutation at the exchange boundary must fail closed");
+
+        assert_eq!(error.stage(), "/usr exchange", "{retained_present}: {error:#?}");
+        let rendered = format!("{error:?}");
+        // `NotApplied` is the load-bearing part: the exchange syscall never
+        // ran, so the live tree is intact because it was never replaced.
+        assert!(
+            rendered.contains("NotApplied"),
+            "{retained_present}: the exchange was applied before refusing: {error:#?}"
+        );
+        assert!(
+            rendered.contains("installation-root metadata changed during retained active-state lease"),
+            "{retained_present}: refusal did not come from the root lease: {error:#?}"
+        );
+
+        // The live tree is untouched and the stranger is left exactly as it
+        // was written — the transition refuses, it does not clean up after the
+        // actor that raced it.
+        assert_eq!(fs::symlink_metadata(&live).unwrap().ino(), live_inode);
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign at the exchange boundary");
+    }
+}
