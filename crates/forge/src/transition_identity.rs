@@ -163,6 +163,7 @@ pub(crate) use fault_injection::{
     arm_before_retained_previous_move_rename, arm_retained_exchange_fault,
     arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
     reset_retained_exchange_syscall_count, retained_exchange_fault_armed, retained_exchange_syscall_count,
+    retained_previous_move_faults_remaining,
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;

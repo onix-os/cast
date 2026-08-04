@@ -28,6 +28,16 @@ pub(crate) fn arm_retained_previous_move_faults(points: &[RetainedPreviousMoveFa
     });
 }
 
+/// How many armed previous-tree move faults have not yet fired.
+///
+/// Same reason as [`retained_exchange_fault_armed`]: a clean run with an armed
+/// fault means either "the code survived it" or "the fault point was never
+/// reached", and those are opposite conclusions from an identical green result.
+#[cfg(test)]
+pub(crate) fn retained_previous_move_faults_remaining() -> usize {
+    RETAINED_PREVIOUS_MOVE_FAULT.with(|slot| slot.borrow().len())
+}
+
 #[cfg(test)]
 pub(crate) fn arm_before_previous_archive_slot_reopen(hook: impl FnOnce() + 'static) {
     BEFORE_PREVIOUS_ARCHIVE_SLOT_REOPEN.with(|slot| {

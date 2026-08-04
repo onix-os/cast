@@ -298,3 +298,153 @@ fn previous_archive_uses_the_slot_its_record_named() {
         "the predecessor tree should be published under its canonical state name",
     );
 }
+
+
+// Ported from `previous_archive_abort_retirement_faults_resume_in_production_recovery`
+// and `applied_previous_archive_and_restore_faults_use_full_client_suffix_routing`.
+// Both legacy tests reduce to one claim — the dispatcher resumes a slot-retirement
+// fault — so they collapse into this.
+//
+// The retirement points already had *primitive* coverage from the surviving
+// `retained_previous_restore_retirement_faults_resume_without_a_second_rename`.
+// What had none was resumption through the sealed recovery path, which is what
+// the legacy pair reached via the client's suffix routing.
+//
+// Measured 2026-08-05 before writing any assertion, because a green run with an
+// armed fault is ambiguous: all four points are consumed during the *restore*,
+// never during `archive_previous_tree` (which completes with the fault still
+// armed). So the retirement suffix belongs to the restore, not the archive —
+// the opposite of what the legacy test names suggest.
+#[test]
+fn recovery_sealed_restore_resumes_its_slot_retirement_suffix() {
+    for point in [
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::BeforeSlotRetire,
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::RootsAfterSlotRetireSync,
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::FinalSlotRetirementRevalidation,
+    ] {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+        let previous = NewStatePrevious::Active(fixture.previous_state);
+
+        let (complete, _allocated) = execute_new_state_forward(
+            identity,
+            authority,
+            &fixture.database,
+            previous,
+            &[],
+            "new-state retirement-resume slice",
+            false,
+            |_| {
+                crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                    COORDINATOR_OS_RELEASE,
+                    crate::system_model::snapshot_authorities(),
+                    COORDINATOR_SYSTEM_SNAPSHOT,
+                )
+            },
+            |_view| Ok::<(), TriggerEffectError>(()),
+            |_view| Ok::<(), TriggerEffectError>(()),
+        )
+        .expect("new-state forward prefix reaches system-triggers complete");
+
+        crate::transition_identity::arm_retained_previous_move_fault(point);
+        let archived = complete
+            .archive_previous_tree()
+            .expect("archive_previous advances through PreviousArchived");
+        assert_eq!(
+            crate::transition_identity::retained_previous_move_faults_remaining(),
+            1,
+            "{point:?} fired during the archive; it belongs to the restore suffix",
+        );
+
+        let installation = archived.installation();
+        let identity = archived.tree_identity();
+        let previous_id = archived
+            .record()
+            .previous
+            .id
+            .map(crate::state::Id::from)
+            .expect("archived record has a predecessor");
+        let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+
+        let failure = identity
+            .restore_previous_with_journal(installation, previous_id, &seal)
+            .expect_err("the armed retirement fault stops the restore after the rename");
+        assert_eq!(
+            crate::transition_identity::retained_previous_move_faults_remaining(),
+            0,
+            "{point:?} was never reached; a clean run would have proved nothing",
+        );
+        assert_eq!(
+            failure.outcome(),
+            crate::transition_identity::RetainedPreviousMoveOutcome::Applied,
+            "the tree moved at {point:?}; only the retirement suffix remains",
+        );
+
+        // Resumption completes the suffix without a second rename — the whole
+        // point of splitting `Applied` from the durability tail.
+        identity
+            .finish_applied_previous_restore_with_journal(installation, previous_id, &seal)
+            .unwrap_or_else(|error| panic!("sealed resume completes retirement at {point:?}: {error:?}"));
+    }
+}
+
+/// `AfterSlotRetire` is the one retirement point a restore survives.
+///
+/// It is reached and consumed like the other three, but the restore still
+/// succeeds: by then the retiring rename is durable, so the remaining work is
+/// re-derivable and the fault has nothing left to invalidate. Pinning this
+/// separately keeps the loop above honest — folding it in would have forced an
+/// `expect_err` that does not hold, and dropping it would leave the
+/// distinction untested.
+#[test]
+fn recovery_sealed_restore_survives_a_fault_after_the_retiring_rename() {
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let previous = NewStatePrevious::Active(fixture.previous_state);
+
+    let (complete, _allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        previous,
+        &[],
+        "new-state retirement-tolerance slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect("new-state forward prefix reaches system-triggers complete");
+
+    crate::transition_identity::arm_retained_previous_move_fault(
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::AfterSlotRetire,
+    );
+    let archived = complete
+        .archive_previous_tree()
+        .expect("archive_previous advances through PreviousArchived");
+    let installation = archived.installation();
+    let identity = archived.tree_identity();
+    let previous_id = archived
+        .record()
+        .previous
+        .id
+        .map(crate::state::Id::from)
+        .expect("archived record has a predecessor");
+    let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+
+    identity
+        .restore_previous_with_journal(installation, previous_id, &seal)
+        .expect("a fault after the retiring rename does not fail the restore");
+
+    assert_eq!(
+        crate::transition_identity::retained_previous_move_faults_remaining(),
+        0,
+        "the fault was tolerated because it never fired, not because it was survived",
+    );
+}
