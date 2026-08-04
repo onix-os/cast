@@ -2352,7 +2352,7 @@ path, already covered by
 **`stateful_activation_recovery.rs` is now fully accounted for: 2 ported, 5
 deletions.**
 
-### `stateful_journal_and_identity_preflight.rs` (9, 1 ported / 8 left) — sized 2026-08-04
+### `stateful_journal_and_identity_preflight.rs` (9, 3 ported / 6 left) — sized 2026-08-04
 
 The legacy tests are left in place as each port lands; the whole file is deleted
 in one commit once all 9 are resolved, rather than gutting it incrementally.
@@ -2443,8 +2443,39 @@ these need coordinated tests, not deletion.
 
    New file because 8 tests from this legacy file remain and will want the same
    home; it is `include!`d from `tests/mod.rs`.
-2. `unresolved_journal_evidence_blocks_marker_publication_before_activation` and
-3. `orphan_transition_row_blocks_marker_publication_before_activation` — both
-   need a fixture with a pre-planted journal record / orphan DB row before
-   `prepare*` is called, the same "plant before the lease" shape that
-   `prejournal_authority_over_root_entry` needed for root-ABI.
+2. ~~`unresolved_journal_evidence_blocks_marker_publication_before_activation`~~ and
+3. ~~`orphan_transition_row_blocks_marker_publication_before_activation`~~ —
+   **PORTED 2026-08-04**, both into `identity_preflight_guards.rs`. 8/8 green
+   across the whole 155-test coordinator module.
+
+   Both guards are `require_clean_baseline` (`transition_identity.rs:1000`),
+   called from `prepare_candidate` at `tree_lifecycle.rs:452-459` — *before*
+   `candidate_name_authority.retain` (461) and before any marker store opens
+   (466). So "before marker publication" is structural, not incidental.
+
+   **Fourth same-name-different-type false match, avoided.** Eight distinct
+   types in the tree carry an `UnresolvedJournal` or `OrphanTransitionRow`
+   variant. The two coordinated hits that a name-grep surfaces
+   (`root_abi_publication_persistence.rs:190`, `usr_exchange_effect.rs:912`) are
+   both `client::JournalUsrExchangeAuthorityError::UnresolvedJournal` — not
+   `transition_identity::Error::UnresolvedJournal`. There was no coordinated
+   coverage of either guard.
+
+   **The legacy "unresolved journal" test does not test `UnresolvedJournal`.**
+   It plants undecodable bytes (`b"not-a-canonical-transition-record"`), so
+   `journal.load()?` fails to decode and the refusal is `Error::Journal`. The
+   legacy test never noticed because it only asserted the client's outer
+   `StatefulTreeIdentityPreparationFailed` wrapper, which is satisfied by any
+   inner failure. The port pins `Error::Journal` for that shape and adds
+   `a_durable_pending_record_blocks_a_second_transition_from_preparing` for the
+   real guard — a decodable pending record, planted by running
+   `begin_transition` and dropping the coordinator (dropping it matters: a live
+   coordinator still holds the canonical lock, so the second attempt would
+   refuse on `WouldBlock` instead of on the record).
+
+   **Added a negative control**,
+   `a_clean_preflight_fixture_prepares_and_publishes_both_markers`. Every guard
+   test asserts a refusal plus "no marker published"; without pinning that the
+   bare fixture *does* prepare and *does* publish both markers, all of them
+   could pass vacuously on some unrelated fixture failure. This is cheap and
+   should be the default shape for any future guard port in this file.
