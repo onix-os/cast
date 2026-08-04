@@ -1975,11 +1975,26 @@ disposition; the quarantine *directory* is written by
 (`usr_rollback_candidate_preserve_authority` and the `activation_namespace`
 capture suites).
 
-**Caveat to check before deleting:** `preserve_failed_candidate` has a second
-caller, `archived_repair.rs:247`. If that path can run with a journal-free
-identity, quarantine coverage may still be needed there — but it belongs in
-`archived_repair_tests.rs`, not in a test driving the legacy blit. Verify that
-call site before removing the file.
+**Caveat resolved, and it was a false alarm.** `archived_repair.rs:247` calls a
+*different function of the same name*:
+`ArchivedStateRepairIdentity::preserve_failed_candidate`
+(`archived_state_repair/preservation.rs:23`), not
+`Client::preserve_failed_candidate` (`stateful_recovery.rs:336`). Only the
+latter reaches the quarantine. `quarantine_candidate` has exactly **one** caller
+in the whole crate: `stateful_recovery.rs:370`.
+
+Two same-named methods on different types is exactly the shape that makes a
+grep-level check look conclusive when it isn't — worth the extra minute here.
+
+**DELETED 2026-08-04**: `crates/forge/src/client/tests/stateful_quarantine_recovery.rs`
+plus its `include!` in `tests/mod.rs`.
+
+Deleting it orphaned two test-only hooks, `arm_quarantine_fault` and
+`arm_quarantine_faults` (`transition_identity/fault_injection.rs` + the re-export
+in `transition_identity.rs`); both removed in the same commit. Warning count
+went 48 → 50 on deletion and back to **48** after removing them, so the deletion
+left nothing dangling. Checking the warning delta is the cheap way to catch that
+— a deletion that silently orphans helpers reads as clean otherwise.
 
 Notes from the later ports:
 

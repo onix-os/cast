@@ -160,7 +160,7 @@ pub(crate) use archived_state_repair::{
 pub(crate) use fault_injection::{
     arm_after_retained_exchange_rename, arm_before_live_usr_mkdir, arm_before_previous_archive_slot_reopen,
     arm_before_previous_slot_retirement_rename, arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename,
-    arm_before_retained_previous_move_rename, arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault,
+    arm_before_retained_previous_move_rename, arm_retained_exchange_fault,
     arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
     reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
 };

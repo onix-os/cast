@@ -507,6 +507,5 @@ include!("frozen_discard.rs");
 include!("frozen_root_validation.rs");
 include!("stateful_archived_candidate_recovery.rs");
 include!("stateful_previous_tree_recovery.rs");
-include!("stateful_quarantine_recovery.rs");
 include!("stateful_journal_and_identity_preflight.rs");
 include!("stateful_activation_recovery.rs");

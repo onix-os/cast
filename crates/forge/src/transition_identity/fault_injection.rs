@@ -1,22 +1,6 @@
 use super::*;
 
 #[cfg(test)]
-pub(crate) fn arm_quarantine_fault(point: QuarantineFaultPoint) {
-    arm_quarantine_faults(point, 1);
-}
-
-#[cfg(test)]
-pub(crate) fn arm_quarantine_faults(point: QuarantineFaultPoint, count: usize) {
-    assert!(count > 0, "quarantine fault count must be nonzero");
-    QUARANTINE_FAULT.with(|slot| {
-        assert!(
-            slot.replace(Some((point, count))).is_none(),
-            "quarantine fault already armed"
-        );
-    });
-}
-
-#[cfg(test)]
 pub(crate) fn arm_retained_exchange_fault(point: RetainedExchangeFaultPoint) {
     RETAINED_EXCHANGE_FAULT.with(|slot| {
         assert!(
