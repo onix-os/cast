@@ -12,6 +12,51 @@ use super::{
     startup_gate::{self, CleanSystemStartup},
 };
 
+/// Enter the real mutable startup gate at a reverse-exchange intent and
+/// require that it does **not** reach `UsrRestored`, returning a rendering of
+/// why it declined.
+///
+/// Every other helper here asserts that recovery *advances* to an exact phase.
+/// A test that plants a substituted live tree needs the opposite proof, and
+/// cannot express it through an assertion that hard-codes the phase it expects.
+/// The reason is returned rendered because `startup_gate::Error` is private to
+/// this facade; only the fact of refusal, and which blocker produced it,
+/// crosses into the coordinator tests.
+pub(crate) fn reverse_exchange_intent_refusal_reason(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+) -> String {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
+        Ok(_) => panic!("startup unexpectedly admitted a substituted live tree"),
+        Err(error) => error,
+    };
+    match error {
+        startup_gate::Error::RecoveryPending(pending) => {
+            assert_ne!(
+                pending.phase(),
+                Phase::UsrRestored,
+                "recovery reversed the exchange over a substituted live tree"
+            );
+            let blockers = format!("{:?}", pending.blockers());
+            assert!(
+                !pending.blockers().is_empty(),
+                "recovery stalled at {:?} without naming a blocker",
+                pending.phase()
+            );
+            blockers
+        }
+        other => format!("{other:?}"),
+    }
+}
+
 /// Enter the real mutable startup gate after a coordinator-owned exchange
 /// fault and require the exact recovery-pending rollback decision. A durable
 /// `UsrExchanged` source first consumes the separate root-ABI normalization
