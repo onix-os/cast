@@ -1941,6 +1941,46 @@ reversed entirely), root-ABI #2/#3 (wrong side of the exchange), root-ABI #4
 (wrong conflict kind). It has not once been right without checking. Treat a
 matching name as a place to start reading, never as a verdict.
 
+## The remaining scope, measured exactly
+
+The four remaining files hold **58 tests but only 28 that touch the legacy
+route**. The rest already run against other entry points and are unaffected by
+the deletion. Only these 28 need a port-or-delete decision:
+
+| file | tests using the legacy route |
+|---|---|
+| `stateful_journal_and_identity_preflight.rs` (9) | `unresolved_journal_evidence_blocks_marker_publication_before_activation`, `orphan_transition_row_blocks_marker_publication_before_activation`, `first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr`, `failed_first_install_can_retry_the_exact_marker_only_previous_baseline`, `duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees`, `recovery_rejects_same_content_marker_name_substitution_without_repair`, `recovery_rejects_whole_directory_same_token_substitution_without_exchange`, `missing_live_usr_between_identity_check_and_exchange_is_never_recreated`, `isolation_root_abi_conflict_fails_before_usr_exchange_and_preserves_foreign_entry` |
+| `stateful_quarantine_recovery.rs` (7) | all seven |
+| `stateful_activation_recovery.rs` (7) | `new_stateful_post_swap_failure_*`, `new_stateful_pre_swap_failure_*`, `previous_archive_never_replaces_a_racing_empty_destination`, `previous_restore_never_replaces_a_racing_empty_staging_destination`, `incomplete_fresh_reverse_retains_live_candidate_record_and_reopens`, `incomplete_previous_restore_retains_live_fresh_candidate_record_and_reopens`, `two_failed_active_state_reblits_use_unique_non_state_quarantines` |
+| `stateful_previous_tree_recovery.rs` (5 of 26) | `applied_previous_archive_and_restore_faults_use_full_client_suffix_routing`, `fresh_identity_can_archive_after_a_complete_compensating_recovery`, `previous_archive_abort_retirement_faults_resume_in_production_recovery`, `retained_exchange_post_move_faults_run_the_swapped_recovery_path`, `retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange` |
+
+`stateful_previous_tree_recovery.rs` is the surprise: 26 tests, only **5** on the
+legacy route. The other 21 drive `transition_identity` primitives directly and
+survive the deletion untouched. Sizing that file by its length would have
+overstated it fivefold.
+
+### `stateful_quarantine_recovery.rs` (7) — DELETE, structurally
+
+All seven drive `apply_stateful_blit_with_checkpoint` and assert on the
+quarantine it performs on failure. That quarantine is
+`TreeIdentity::quarantine_candidate`, whose **first statement** is
+`self.require_no_journal()?`. A coordinated identity always holds a journal, so
+the coordinated route can never reach it — this is not "no counterpart happens
+to exist", it is structurally unreachable.
+
+Confirmed earlier from the other direction too: the coordinated forward route
+has no quarantine-on-failure at all. It parks the journal and recovery owns the
+disposition; the quarantine *directory* is written by
+`startup_reconciliation`, i.e. the recovery side, which has its own coverage
+(`usr_rollback_candidate_preserve_authority` and the `activation_namespace`
+capture suites).
+
+**Caveat to check before deleting:** `preserve_failed_candidate` has a second
+caller, `archived_repair.rs:247`. If that path can run with a journal-free
+identity, quarantine coverage may still be needed there — but it belongs in
+`archived_repair_tests.rs`, not in a test driving the legacy blit. Verify that
+call site before removing the file.
+
 Notes from the later ports:
 
 - **#14's hook is reachable.** `arm_before_quarantine_slot_reopen` fires via
