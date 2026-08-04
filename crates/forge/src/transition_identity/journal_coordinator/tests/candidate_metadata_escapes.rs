@@ -673,3 +673,66 @@ fn coordinated_root_abi_mutation_at_the_exchange_boundary_fails_closed() {
         assert_eq!(fs::read(&foreign).unwrap(), b"foreign at the exchange boundary");
     }
 }
+
+// Ported from `previous_archive_never_replaces_a_racing_empty_destination`.
+//
+// The previous tree is archived by renaming it to `<state>/usr`. If something
+// races an empty directory into that destination first, the rename must refuse
+// rather than replace it — an empty directory is the shape most likely to look
+// safe to overwrite, and overwriting it would destroy whatever the racer was
+// about to put there.
+//
+// Only the no-replace claim is ported. The legacy test also asserted
+// `StatefulTransitionUsrRestored` and a restored live `.stateID`, i.e. inline
+// reversal; the coordinated route has no such disposition and leaves reversal
+// to recovery.
+#[test]
+fn coordinated_previous_archive_never_replaces_a_racing_empty_destination() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let destination = fixture
+        .installation
+        .root_path(fixture.previous_state.to_string())
+        .join("usr");
+
+    let (complete, _allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "racing archive destination slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect("forward prefix reaches system-triggers complete");
+
+    // Race the empty destination in after the exchange, before the archive.
+    fs::create_dir_all(&destination).unwrap();
+    let occupant = fs::symlink_metadata(&destination).unwrap().ino();
+
+    let error = complete
+        .archive_previous_tree()
+        .err()
+        .expect("archiving over a racing destination must refuse");
+
+    // The occupant is the same inode and still empty: nothing was moved into
+    // it and it was not unlinked and recreated.
+    assert_eq!(
+        fs::symlink_metadata(&destination).unwrap().ino(),
+        occupant,
+        "the racing destination was replaced: {error:#?}"
+    );
+    assert_eq!(
+        fs::read_dir(&destination).unwrap().count(),
+        0,
+        "the previous tree was moved into the racing destination: {error:#?}"
+    );
+}
