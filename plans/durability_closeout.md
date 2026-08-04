@@ -1782,15 +1782,15 @@ FIFO kinds were not. Two things it turned up:
 
 ### Running tally for the 25
 
-- **Ported (15 legacy → 15 coordinated tests):** #1–#6, #12, #14, #17, #19,
+- **Ported (16 legacy → 16 coordinated tests):** #1–#7, #12, #14, #17, #19,
   #21–#25, plus a clean-run record proof and the rotation-boundary guard.
 - **Confirmed deletions (7):** #8–#11 (legacy rotation exchange), #13, #18, #20
   (superseded by the reservation suite).
-- **Remaining (3), each blocked on missing test infrastructure:**
+- **Remaining (2), each blocked on missing test infrastructure:**
 
 | # | legacy test | what it needs |
 |---|---|---|
-| 7 | `pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot` | a driver with `run_boot_sync: true` plus `into_active_reblit_boot_sync_handoff`; all three current drivers pass `false`, so the pre-boot checkpoint is never reached |
+| ~~7~~ | ~~`pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot`~~ | **DONE** — see below |
 | 15 | `two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots` | a *second* identity+authority against the same installation. `fixture_with_exchange_authority*` builds a fresh installation per call, and the candidate staging tree is consumed by the first run — needs a re-acquire helper over `fixture.installation` that re-stages a candidate |
 | 16 | `preserves_authorized_two_link_previous_marker_pair` | its parking half duplicates `handles_one_link_and_parks_two_link_previous`; the unique half runs a *subsequent NewState transition* and asserts the parked slot's marker inode and `nlink == 2` survive it — a cross-transition fixture the coordinator tests have no shape for yet |
 
@@ -1807,6 +1807,35 @@ Notes from the later ports:
 - **#24/#25 folded into one test** over both trigger boundaries: the parked slot
   moved back to canonical is caught as `PostEffectEvidence` at whichever
   boundary the un-move happens on.
+
+### #7: the boot-sync driver turned out to be four lines, not a fixture merge
+
+The estimate above ("needs `into_active_reblit_boot_sync_handoff`") was right
+about the mechanism and wrong about the cost. Reading the call chain suggested a
+hard blocker: staging boot sync needs a `BoundActiveReblitBlsPublicationPlan`
+(topology, attempts, stones, roots), which only `RenderFixture` in
+`client/boot/` builds — and that fixture is `pub(super)` to a different suite,
+so using it from `journal_coordinator::tests` meant widening a fixture designed
+for BLS rendering and marrying it to `CoordinatorFixture`.
+
+**None of that was needed.** `into_active_reblit_boot_sync_handoff` runs
+`require_system_trigger_same_store_evidence` in its *own* preflight, so a
+mutated live `.stateID` is refused at the handoff — strictly before any boot
+effect and before a plan is ever required:
+
+    baseline  handoff = Ok("minted")
+    mutated   handoff = Err(Preflight { Identity(LiveUsr {
+                              "revalidate retained state ID",
+                              "retained state ID inode metadata changed" }) })
+
+The driver is `run_active_reblit_for_boot` — the existing forward with
+`run_boot_sync: true`. The port asserts both arms: without the baseline, a
+handoff failing for any unrelated reason would satisfy the mutated arm.
+
+The lesson is the mirror of the `legacy_lifecycle::rotate` one. There, reading
+suggested the code was reachable and it was not. Here, reading suggested it was
+unreachable without heavy scaffolding and it was one call away. Both were
+settled in minutes by running the cheap experiment first.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
