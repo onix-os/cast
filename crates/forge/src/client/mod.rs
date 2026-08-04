@@ -134,8 +134,6 @@ mod active_reblit_publication_plan;
 #[allow(dead_code)] // authenticated root locator consumed by the render-input aggregate
 #[path = "boot/active_reblit_root_filesystem_intent.rs"]
 mod active_reblit_root_filesystem_intent;
-#[cfg(test)]
-mod active_reblit_tests;
 mod active_reblit_transition;
 mod active_state_authority;
 #[cfg(test)]
