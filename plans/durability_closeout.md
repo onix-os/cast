@@ -2674,3 +2674,60 @@ two remaining tests likely collapse into a single test, since both reduce to
 parallel families (`RetainedExchangeFaultPoint` on the legacy exchange,
 `UsrExchangeParentDurabilityFaultPoint` on the coordinated recovery suffix)
 with overlapping variant names. Grepping a variant name proves nothing.
+
+## The ActivateArchived rollback cannot complete — found 2026-08-04
+
+Surfaced while porting `fresh_identity_can_archive_after_a_complete_compensating_recovery`.
+Reproducer: `journal_coordinator_a_completed_rollback_leaves_the_installation_reusable`
+in `usr_exchange_effect.rs`, `#[ignore]`d with the full trail in its comment.
+
+**Symptom.** An ActivateArchived rollback reaches `CandidatePreserveIntent` and
+stops: recovery-pending, **no blocker named**, no advance, forever. Measured
+trail `[ReverseExchangeIntent, UsrRestored, CandidatePreserveIntent x30]`.
+
+**Cause.** `archived_topology` requires the candidate's marker to have
+`marker_links() == 2` — a state-slot hardlink
+(`candidate_preserve_proof.rs:715`). Two independent facts make that
+unsatisfiable:
+
+1. **Nothing creates state-slot links.** Every non-test reference to
+   `.cast-state-slot-` in the crate is a read (`starts_with`, `strip_prefix`,
+   inspection, error text) or a doc comment. No product code constructs that
+   name or hardlinks it. The only creators in the tree are test fixtures.
+2. **The forward path forbids two links anyway.** Every step of the forward
+   ActivateArchived flow is a strict `nlink=1` reader —
+   `begin_candidate_prepare_through_staging`, `prepare_archived_isolation`, and
+   the exchange preflight each refuse `UnsafeMarker { links: 2 }`. Verified by
+   planting the link at each position via the new
+   `coordinator_from_exchange_fixture_after_begin` hook.
+
+`archived_topology` is also the odd one out among the three:
+
+| topology | required `marker_links()` |
+|---|---|
+| `new_state_topology` (:673) | 1 |
+| `active_reblit_topology` (:773) | 1 |
+| `archived_topology` (:715) | **2** |
+
+**Why it is silent.** `UsrRollbackCandidatePreserveAuthority::capture` returns
+`Deferred`, which the gate maps to `Dispatch::Unhandled` — pending, nothing
+reported. Four of its five deferral sites discard the underlying error with
+`Err(_)` (`usr_rollback_candidate_preserve_authority.rs:213`, `:217`, `:224`,
+`:228`), so a *permanent* deferral is undiagnosable by construction. This is
+worth fixing on its own merits, independently of the predicate.
+
+**Consistent with** the guest-side `CandidatePreserveIntent` deferrals behind
+tasks #18, #26 and #27, which circled this phase repeatedly without pinning a
+cause.
+
+**Two follow-ups, both product changes:**
+1. Fix the predicate — almost certainly `== 1`, matching its two siblings — or
+   establish what should have been creating the link. Needs a decision, not a
+   guess: the `nlink=2` concept is real elsewhere (`tree_marker.rs:317`,
+   `transition_identity.rs:919`) and belongs to ActiveReblit previous-slot
+   parking.
+2. Make deferral carry its reason, so a permanent one is diagnosable.
+
+**Caveat.** Verified that no code constructs the slot-link *name*. Not
+exhaustively traced whether such a link could arise another way — e.g. a
+directory rename carrying a link created under an older format.
