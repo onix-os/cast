@@ -2812,3 +2812,51 @@ any more.** The remaining call sites are:
 
 So #10's remaining shape is: **3 ports, then excise the route from those five
 product files.** The test-side work is otherwise done.
+
+## CORRECTION 2026-08-05 — the "ActivateArchived rollback defect" was a fixture error
+
+The section above titled "The ActivateArchived rollback cannot complete" is
+**wrong and is withdrawn.** The predicate is correct; my fixture was not.
+
+`archived_topology`'s `marker_links() == 2` requirement *is* satisfiable.
+`RetainedIdentity::prepare` — the path taken for `ExistingId` candidates, i.e.
+ActivateArchived — calls `adopt_or_create_before_journal_for_transition()`,
+the single `nlink=2`-tolerant reader, and then authorizes the extra link
+(`tree_lifecycle.rs:536`). Every later read is strict and passes *because* the
+retained marker was authorized during preparation.
+
+**The ordering is the requirement.** The archived candidate must already carry
+its slot link when preparation runs, exactly as production does — the tree came
+*out of* that slot. Two wrong orderings, both measured:
+
+| fixture ordering | result |
+|---|---|
+| link planted after preparation | never authorized; `UnsafeMarker links=2` at `begin_candidate_prepare_through_staging`, then `prepare_archived_isolation` |
+| no link at all | rollback topology unsatisfied; silent deferral loop at `CandidatePreserveIntent` |
+| **link planted before preparation** | **passes** |
+
+**Where the reasoning went wrong.** I established that no product code
+constructs a `.cast-state-slot-` name and concluded the requirement was
+unsatisfiable. The first half was true and the second did not follow: the link
+is *pre-existing state the candidate arrives with*, not something the
+transition creates. Absence of a creator in this crate says nothing about
+whether the input can legitimately have one. Two other signals should have
+stopped me — `tree_lifecycle.rs:536` exists precisely to authorize such a link,
+and `adopt_or_create_before_journal_for_transition` documents itself as
+tolerating `nlink=2`. Both were read and neither was weighed.
+
+**Generalizable:** "nothing in this crate creates X" is not evidence that X
+cannot be present. Check whether X is an input before concluding it is
+impossible.
+
+**Task #30 stands, and is the real finding.** The deferral discards its reason
+(`usr_rollback_candidate_preserve_authority.rs:213`, `:217`, `:224`, `:228`),
+which is exactly why a fixture ordering error presented as a product liveness
+bug and took most of a session to unwind. A deferral that named "candidate
+marker has 1 link, expected 2" would have ended this in minutes.
+
+**Port complete.** `journal_coordinator_a_completed_rollback_leaves_the_installation_reusable`
+passes, is no longer `#[ignore]`d, and asserts the full claim: journal absent,
+previous live at its original identity, candidate rearchived into its slot, and
+a fresh transition acquirable afterwards. Legacy original deleted. 6x161
+stress-clean; suite **2735 passed, 0 failed, 6 ignored**.
