@@ -2352,7 +2352,10 @@ path, already covered by
 **`stateful_activation_recovery.rs` is now fully accounted for: 2 ported, 5
 deletions.**
 
-### `stateful_journal_and_identity_preflight.rs` (9) — sized 2026-08-04
+### `stateful_journal_and_identity_preflight.rs` (9, 1 ported / 8 left) — sized 2026-08-04
+
+The legacy tests are left in place as each port lands; the whole file is deleted
+in one commit once all 9 are resolved, rather than gutting it incrementally.
 
 Scanned by asserted error type. Unlike `stateful_activation_recovery.rs`, this
 file splits into **two distinct groups**, and only one of them is disposition:
@@ -2416,10 +2419,30 @@ coordinated route calls, so the code under test survives the route deletion —
 these need coordinated tests, not deletion.
 
 **Next step for Group A**, in order:
-1. `duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees` —
-   drive two `fixture_parts` identities sharing a token; assert
-   `transition_identity::Error::DuplicateTreeToken` and that **both** trees are
-   retained (that retention claim is the substance, not the error).
+1. ~~`duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees`~~ —
+   **PORTED 2026-08-04** as
+   `duplicate_permanent_tree_tokens_block_the_exchange_and_retain_both_trees` in
+   the new `journal_coordinator/tests/identity_preflight_guards.rs`. 8/8 green.
+
+   The `fixture_parts` route was the wrong shape: it prepares the identity
+   internally and unwraps, so there is no seam to plant the duplicate frame
+   before preparation. The test builds the installation inline instead —
+   publish the candidate's own marker, copy that frame byte-for-byte onto the
+   live tree at `MARKER_MODE` (0o444), then call
+   `StatefulTreeIdentity::prepare` and read the error.
+
+   Copying an *already-published* frame is what makes both tokens equal without
+   either marker looking forged, so the guard at `tree_lifecycle.rs:567` is what
+   refuses — not an earlier validity check. That raise site is the only one for
+   the variant, confirming this is the legacy test's guard.
+
+   The retention half is asserted in full: both marker frames, both `.stateID`
+   files, the candidate DB row, and journal absence. Existing
+   `fixture_parts(Archived, Active, ...)` is the standing negative control —
+   the same setup minus the planted frame, and it prepares successfully.
+
+   New file because 8 tests from this legacy file remain and will want the same
+   home; it is `include!`d from `tests/mod.rs`.
 2. `unresolved_journal_evidence_blocks_marker_publication_before_activation` and
 3. `orphan_transition_row_blocks_marker_publication_before_activation` — both
    need a fixture with a pre-planted journal record / orphan DB row before
