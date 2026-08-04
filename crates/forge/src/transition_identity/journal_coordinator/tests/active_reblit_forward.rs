@@ -723,3 +723,61 @@ fn coordinated_active_reblit_fails_closed_on_a_parked_slot_with_a_foreign_canoni
         marker_inode
     );
 }
+
+// Ported from `active_reblit_rejects_a_slot_moved_back_to_canonical_after_triggers`
+// and `active_reblit_reversal_cannot_report_success_after_parked_slot_is_moved_back`.
+//
+// By the time either trigger runs the slot is already parked, so renaming it
+// back to the canonical name undoes a move the transition has durable evidence
+// for. Neither trigger boundary may advance over that: the parked slot is part
+// of the retained namespace, not incidental scenery, and a transition that
+// accepted the un-move would report success over a namespace it no longer
+// describes.
+#[test]
+fn coordinated_active_reblit_rejects_a_slot_moved_back_to_canonical() {
+    for boundary in ["transaction", "system"] {
+        let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+        let token = previous_slot_token(&fixture);
+        let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+        let parked = parked_slot_path(&fixture, &token, 0);
+        let marker_inode = fs::symlink_metadata(slot_marker_path(&canonical, &fixture, &token))
+            .unwrap()
+            .ino();
+        let (hook_parked, hook_canonical) = (parked.clone(), canonical.clone());
+        let unmove = move || {
+            fs::rename(&hook_parked, &hook_canonical).unwrap();
+        };
+
+        let error = match boundary {
+            "transaction" => run_active_reblit_with_transaction(&fixture, identity, authority, unmove),
+            _ => run_active_reblit_with_system(&fixture, identity, authority, unmove),
+        }
+        .err()
+        .unwrap_or_else(|| panic!("{boundary}: un-moving the parked slot must fail the transition"));
+
+        assert_eq!(
+            error.stage(),
+            if boundary == "transaction" {
+                "transaction triggers"
+            } else {
+                "system triggers"
+            },
+            "{boundary}: {error:#?}"
+        );
+        assert!(
+            format!("{error:?}").contains("PostEffectEvidence"),
+            "{boundary}: the un-move was not caught as post-effect evidence: {error:#?}"
+        );
+
+        // The un-move stands as the trigger left it — the transition refuses to
+        // advance, it does not fight the mutation.
+        assert!(!parked.exists(), "{boundary}: the parked slot reappeared");
+        assert_eq!(
+            fs::symlink_metadata(slot_marker_path(&canonical, &fixture, &token))
+                .unwrap()
+                .ino(),
+            marker_inode,
+            "{boundary}: the moved-back slot lost its marker"
+        );
+    }
+}
