@@ -1823,7 +1823,7 @@ remaining.**
 
 ## Next file: `tests/root_abi_preflight.rs` (4 sites / 4 tests)
 
-**1 of 4 ported.** `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`
+**3 of 4 ported.** `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`
 → `coordinated_root_abi_conflicts_are_refused_before_any_authority_is_taken`.
 
 **The coordinated bound is tighter than the legacy one.** Legacy asserts the
@@ -1881,23 +1881,38 @@ lease — rather than by a root-ABI-specific comparison. That guard strictly
 subsumes the root-ABI case, since replacing a root-ABI entry necessarily
 changes root metadata.
 
-**Caveat on that measurement, stated because it limits the conclusion:** the
-`present=true` arm of the probe was invalid — `install_root_abi_subset` with
-mask `0x1F` did not create `bin` (`existed_before=false`), so both arms actually
-exercised the *absent* case. #3 is covered by the above; **#2 (retained
-*present*, then replaced) is not yet measured.** It needs a fixture whose mask
-genuinely installs the link before the lease.
+**The caveat that blocked #2 was my own measurement error, now corrected.** I
+recorded that `install_root_abi_subset` with mask `0x1F` "did not create `bin`"
+because `existed_before=false`. It did create it. `bin` is a symlink to
+`usr/bin`, the fixture has no `usr/bin`, so it is a **dangling** symlink — and
+`Path::exists()` follows symlinks and reports false. Presence has to be checked
+with `symlink_metadata`. The `present` arm had been valid all along; the probe's
+readout was wrong, not the fixture.
 
 Also note the mask is asserted to be exactly five bits — `0xFF` panics in
 `root_abi_publication_support.rs:20`.
 
-**Verdicts:**
+**#2 and #3 are both ported, as one test** —
+`coordinated_root_abi_mutation_at_the_exchange_boundary_fails_closed`, over
+`retained_present ∈ {true, false}`. Both arms give the same result:
+
+    stage "/usr exchange", NotApplied
+    "installation-root metadata changed during retained active-state lease"
+    live usr inode unchanged, foreign entry preserved verbatim
+
+It is written as a **lease proof, not a root-ABI proof**, because that is what
+actually holds — the coordinated route has no root-ABI-specific pre-exchange
+comparison, and claiming one would document a guard that does not exist. The
+lease covers the whole installation root, which strictly subsumes the root-ABI
+case: a root-ABI entry cannot be replaced without changing root metadata. The
+fixture asserts `retained_present` via `symlink_metadata` so the two arms cannot
+silently collapse into one again.
+
+**Verdict on the last one:**
 
 | # | verdict |
 |---|---|
-| 2 | **UNRESOLVED** — needs a fixture that really installs the `bin` link pre-lease, then the same boundary mutation. Do not delete on the strength of #3's result. |
-| 3 | **Covered by the root-lease guard**, not by a root-ABI check. Port as a *lease* proof (exchange NotApplied, foreign preserved) or delete as subsumed — but say which and why in the commit. |
-| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` — still unsized. Its "preserves foreign entry" half plausibly maps to `rejects_foreign_eexist_at_every_publisher_index_without_replacement`; its "reverses usr" half is legacy disposition, since coordinated defers reversal to recovery. **Unverified — check both sides.** |
+| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` — **still unsized.** Its "preserves foreign entry" half plausibly maps to `rejects_foreign_eexist_at_every_publisher_index_without_replacement`; its "reverses usr" half is legacy disposition, since coordinated defers reversal to recovery. **Unverified — read both sides.** |
 
 Notes from the later ports:
 
