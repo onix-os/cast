@@ -251,8 +251,37 @@ fn journal_coordinator_new_state_synthesized_empty_exchange_applies_once_and_ret
     assert_eq!(intent_record.previous.origin, PreviousOrigin::SynthesizedEmpty);
     assert_eq!(intent_record.previous.id, None);
     let candidate = directory_identity(&fixture.candidate_path);
-    let previous = directory_identity(&fixture.installation.root.join("usr"));
-    assert_state_metadata_name_absent(&fixture.installation.root.join("usr/.stateID"));
+    let live_usr = fixture.installation.root.join("usr");
+    let previous = directory_identity(&live_usr);
+    assert_state_metadata_name_absent(&live_usr.join(".stateID"));
+
+    // The synthesized previous tree is a real marked tree, not a bare
+    // directory: preparation creates it, marks it, and leaves nothing else in
+    // it. A synthesized tree that shared the candidate's token would make the
+    // two indistinguishable to every later identity check.
+    let metadata = fs::symlink_metadata(&live_usr).unwrap();
+    assert!(metadata.file_type().is_dir());
+    assert_eq!(metadata.uid(), nix::unistd::Uid::effective().as_raw());
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o755);
+    let entries = fs::read_dir(&live_usr)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [std::ffi::OsString::from(".cast-tree-id")]);
+    assert_ne!(
+        TreeMarkerStore::open_path(&live_usr)
+            .unwrap()
+            .read_for_recovery()
+            .unwrap()
+            .token()
+            .as_str(),
+        TreeMarkerStore::open_path(&fixture.candidate_path)
+            .unwrap()
+            .read_for_recovery()
+            .unwrap()
+            .token()
+            .as_str()
+    );
     reset_retained_exchange_syscall_count();
 
     let exchanged = intent.execute_usr_exchange(authority).unwrap();

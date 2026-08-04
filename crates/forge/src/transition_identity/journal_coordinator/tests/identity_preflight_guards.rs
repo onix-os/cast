@@ -235,3 +235,59 @@ fn orphan_transition_row_blocks_marker_publication_before_activation() {
     // second transition on top of it would lose the first.
     assert_canonical_journal_absent(&fixture.installation.root);
 }
+
+fn synthesized_baseline_token(live_usr: &Path) -> String {
+    TreeMarkerStore::open_path(live_usr)
+        .unwrap()
+        .read_for_recovery()
+        .unwrap()
+        .token()
+        .as_str()
+        .to_owned()
+}
+
+fn assert_marker_only_tree(live_usr: &Path) {
+    let entries = fs::read_dir(live_usr)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [std::ffi::OsString::from(".cast-tree-id")]);
+}
+
+/// A retried first install must adopt the baseline the first attempt
+/// synthesized, not mint a fresh one.
+///
+/// The legacy test reached its second preparation by injecting a failure
+/// before the exchange; the failure was only its way of getting two
+/// preparations in a row against one installation. Doing that directly
+/// isolates the claim, which is about what the *second* preparation does with
+/// an existing marker-only `/usr` — a new token there would orphan the durable
+/// baseline the first attempt already committed to, and every later identity
+/// check would be comparing against a tree that no record describes.
+#[test]
+fn a_first_install_retry_adopts_the_exact_marker_only_synthesized_baseline() {
+    let (fixture, identity, authority) = fixture_parts(
+        CandidateKind::NewState,
+        PreviousKind::SynthesizedEmpty,
+        true,
+        false,
+    );
+    let live_usr = fixture.installation.root.join("usr");
+    let baseline = synthesized_baseline_token(&live_usr);
+    assert_marker_only_tree(&live_usr);
+    drop(identity);
+    drop(authority);
+
+    // Re-stage the candidate exactly as a retry would, then prepare again.
+    fs::remove_dir_all(fixture.installation.staging_path("usr")).unwrap();
+    let (identity, authority) = reacquire_new_state(&fixture);
+
+    assert_eq!(
+        synthesized_baseline_token(&live_usr),
+        baseline,
+        "the retry minted a new baseline token instead of adopting the durable one"
+    );
+    assert_marker_only_tree(&live_usr);
+    drop(identity);
+    drop(authority);
+}
