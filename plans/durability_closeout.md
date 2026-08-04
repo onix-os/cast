@@ -1757,13 +1757,36 @@ conclusions. Only the consumed-count told them apart.
 Note `installation.root_path(x)` resolves under `.cast/root`, **not** under the
 live root — a scan of `installation.root` for parked slots finds nothing.
 
+**#18 and #20 are duplicates too**, checked against the same file:
+`preserves_foreign_name_exhaustion`'s *second block* fills all 256
+`active_reblit_parked_slot_path` names, asserts `NotApplied`, `canonical.is_dir()`
+and byte-preservation — that is exactly #18. And
+`reports_applied_slot_after_durable_replacement` arms
+`[RootsPostSync, RootsPostSync]` and asserts the move stays Applied with the
+canonical gone — exactly #20.
+
+**#19 needed porting and is done** (`..._slot_scan_skips_every_foreign_occupant_kind`).
+Only the wrong-mode directory kind was covered coordinated
+(`keeps_wrong_wrapper_mode_untouched`); the regular-file, dangling-symlink and
+FIFO kinds were not. Two things it turned up:
+
+- The tree token cannot be recovered by re-adopting the live marker in the
+  two-link fixture — `adopt_or_create_before_journal` refuses a marker at
+  `links=2` (`UnsafeMarker`). Read it back off the slot name the fixture
+  planted instead.
+- With strangers in the indexed namespace the parking still lands correctly at
+  the first free index (4) carrying the original marker inode, but **commit
+  cleanup defers** (`CommitCleanupDeferred`) rather than finishing. Legacy
+  completed inline. Same fail-closed shift as the other dispositions; the test
+  asserts the deferral rather than pretending it completes.
+
 ### Running tally for the 25
 
-- **Ported (7 legacy → 8 coordinated tests):** #1–#6, #17, plus a clean-run
-  record proof and the rotation-boundary guard.
-- **Confirmed deletions (5):** #8–#11 (legacy rotation exchange), #13
-  (superseded by `preserves_foreign_name_exhaustion`).
-- **Remaining (13):** #7, #12, #14, #15, #16, #18–#25.
+- **Ported (9 legacy → 10 coordinated tests):** #1–#6, #17, #19, plus a
+  clean-run record proof and the rotation-boundary guard.
+- **Confirmed deletions (7):** #8–#11 (legacy rotation exchange), #13, #18, #20
+  (superseded by the reservation suite).
+- **Remaining (9):** #7, #12, #14, #15, #16, #21–#25.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
