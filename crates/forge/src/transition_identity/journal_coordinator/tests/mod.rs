@@ -116,7 +116,28 @@ pub(crate) fn fixture_parts(
         previous_kind,
         retain_exchange_authority,
         retain_previous_slot,
+        false,
         0,
+    )
+}
+
+/// An archived candidate that came *from* a real slot, as production always
+/// does: its marker is a two-link pair shared with
+/// `<candidate>/.cast-state-slot-<state>-<token>`.
+///
+/// The plain archived fixture stages its candidate directly, so the tree has
+/// `nlink=1` and no originating wrapper. That is fine for forward tests, but
+/// the rollback's `Rearchive` disposition has nowhere to return the tree, and
+/// `archived_topology` requires exactly this pair
+/// (`candidate_preserve_proof.rs:715`, `:736`).
+pub(crate) fn fixture_with_exchange_authority_and_candidate_slot()
+-> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
+    let (fixture, identity, authority) =
+        fixture_parts_with_root_abi_mask(CandidateKind::Archived, PreviousKind::Active, true, false, true, 0);
+    (
+        fixture,
+        identity,
+        authority.expect("archived-slot fixture requested pre-journal client authority"),
     )
 }
 
@@ -125,6 +146,7 @@ fn fixture_parts_with_root_abi_mask(
     previous_kind: PreviousKind,
     retain_exchange_authority: bool,
     retain_previous_slot: bool,
+    retain_candidate_slot: bool,
     root_abi_mask: u8,
 ) -> (
     CoordinatorFixture,
@@ -170,6 +192,18 @@ fn fixture_parts_with_root_abi_mask(
             )),
         )
         .unwrap();
+    }
+
+    // The wrapper must exist before the lease: creating a root entry afterwards
+    // changes the installation root's own metadata, which the retained
+    // active-state lease revalidates. The hardlink into it is added after
+    // preparation, once the candidate's marker exists — that touches the
+    // wrapper's metadata, not the root's.
+    if retain_candidate_slot {
+        assert_eq!(candidate_kind, CandidateKind::Archived);
+        let wrapper = installation.root_path(candidate_state.to_string());
+        fs::create_dir(&wrapper).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     let active_reblit = (candidate_kind == CandidateKind::ActiveReblit).then(|| database.get(candidate_state).unwrap());
@@ -237,6 +271,26 @@ fn fixture_parts_with_root_abi_mask(
             }
         }
     };
+    if retain_candidate_slot {
+        let token = TreeMarkerStore::open_path(&candidate_path)
+            .unwrap()
+            .read_for_recovery()
+            .unwrap()
+            .token()
+            .as_str()
+            .to_owned();
+        let wrapper = installation.root_path(candidate_state.to_string());
+        fs::hard_link(
+            candidate_path.join(".cast-tree-id"),
+            wrapper.join(format!(".cast-state-slot-{candidate_state}-{token}")),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::symlink_metadata(candidate_path.join(".cast-tree-id")).unwrap().nlink(),
+            2
+        );
+    }
+
     let fixture = CoordinatorFixture {
         _temporary: temporary,
         installation,

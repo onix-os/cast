@@ -612,6 +612,7 @@ fn coordinated_root_abi_mutation_at_the_exchange_boundary_fails_closed() {
             PreviousKind::Active,
             true,
             false,
+            false,
             // Bit 0 is `bin -> usr/bin`. It is a *dangling* symlink in this
             // fixture (no `usr/bin` target), so `Path::exists()` reports false
             // for it — presence must be checked with `symlink_metadata`.

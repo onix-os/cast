@@ -1208,23 +1208,55 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
 // A blocker-free non-advancing entry is a liveness failure whatever the cause:
 // a real system would spin at every boot with nothing to diagnose it by.
 //
-// Caveat on the cause: this fixture's archived candidate is staged directly by
-// `fixture_parts` and has no originating archive slot, so the `Rearchive`
-// disposition may have no valid destination. That would explain a *refusal*; it
-// does not explain silent non-advancement. Whether the fix belongs in the
-// rearchive destination logic or in the fixture is the open question — tasks
-// #23 and #24 covered adjacent ground.
+// Cause, narrowed 2026-08-04. The stall is a *silent deferral*:
+// `UsrRollbackCandidatePreserveAuthority::capture` returns `Deferred`, which
+// the gate maps to `Dispatch::Unhandled` — recovery-pending, nothing named.
+// Four of its five deferral sites discard the underlying error with `Err(_)`
+// (`usr_rollback_candidate_preserve_authority.rs:213`, `:217`, `:224`, `:228`),
+// so a *permanent* deferral is undiagnosable by construction. That is worth
+// fixing independently of this test.
+//
+// Which deferral fires here: `archived_topology` requires the candidate's
+// marker to be a two-link pair sharing `<state>/.cast-state-slot-<state>-<token>`
+// (`candidate_preserve_proof.rs:715`, `:736`), because production reaches
+// `ActivateArchived` by moving the tree *out of* that slot. The plain fixture
+// stages its candidate directly: `nlink=1`, no wrapper, so `Rearchive` has no
+// destination.
+//
+// `fixture_with_exchange_authority_and_candidate_slot` builds that provenance,
+// and this test now uses it — but the link is still planted too early. The
+// ordinary preparation APIs are strict `nlink=1` readers, so `begin_transition`
+// refuses the two-link marker with
+// `UnsafeMarker { role: "canonical", links: 2 }`. In production the slot link
+// is created by the archived-staging move, *after* the journal record exists.
+//
+// Next step: split `coordinator_from_exchange_fixture_with_options` so the slot
+// link can be planted between `begin_transition` and
+// `begin_candidate_prepare_through_staging`, matching the real ordering. Then
+// re-run and see whether the stall survives a faithful topology.
 #[ignore = "reproducer for the CandidatePreserveIntent rollback stall; see comment"]
 fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
-    let (fixture, _reverse_intent, candidate, previous) =
-        reverse_exchange_intent_after_applied_exchange(CandidateKind::Archived);
-
-    let entries = drive_startup_recovery_to_clean(
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_candidate_slot();
+    let (fixture, intent, authority) =
+        coordinator_from_exchange_fixture(CandidateKind::Archived, fixture, identity, authority);
+    let candidate = directory_identity(&fixture.candidate_path);
+    let previous = directory_identity(&fixture.installation.root.join("usr"));
+    reset_retained_exchange_syscall_count();
+    arm_retained_exchange_fault(RetainedExchangeFaultPoint::FinalRevalidation);
+    intent.execute_usr_exchange(authority).unwrap_err();
+    assert!(!retained_exchange_fault_armed());
+    assert_usr_exchange_post_recovers_to_pending_reverse(
         &fixture.installation,
         &fixture.database,
         &fixture.layout_database,
     );
-    assert!(entries > 1, "the rollback completed without advancing");
+
+    let _entries = drive_startup_recovery_to_clean(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+    assert!(_entries > 1, "the rollback completed without advancing");
 
     // A clean startup means no record survives to block the next transition.
     assert_canonical_journal_absent(&fixture.installation.root);

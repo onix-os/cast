@@ -60,7 +60,7 @@ fn fixture_with_exchange_authority_and_root_abi_mask(
     mask: u8,
 ) -> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
     let (fixture, identity, authority) =
-        fixture_parts_with_root_abi_mask(candidate_kind, previous_kind, true, false, mask);
+        fixture_parts_with_root_abi_mask(candidate_kind, previous_kind, true, false, false, mask);
     (
         fixture,
         identity,
