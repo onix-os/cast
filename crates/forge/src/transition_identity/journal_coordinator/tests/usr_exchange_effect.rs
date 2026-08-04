@@ -1017,6 +1017,13 @@ fn reverse_exchange_intent_after_applied_exchange(
         }
     ));
     assert_eq!(retained_exchange_syscall_count(), 1);
+    // The fault must have been consumed, not merely armed. A fault point that
+    // is never reached produces the same green result as one that is survived,
+    // and the two mean opposite things — see the note in `fault_injection.rs`.
+    assert!(
+        !retained_exchange_fault_armed(),
+        "the forward exchange never reached its durability fault point"
+    );
 
     assert_usr_exchange_post_recovers_to_pending_reverse(
         &fixture.installation,
@@ -1180,3 +1187,4 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
     assert_eq!(directory_identity(&fixture.candidate_path), candidate);
     assert_eq!(read_canonical(&fixture.installation.root), intent_record);
 }
+

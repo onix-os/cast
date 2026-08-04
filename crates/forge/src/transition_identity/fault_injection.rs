@@ -89,6 +89,17 @@ pub(crate) fn arm_retained_exchange_syscall_fault(fault: RetainedExchangeSyscall
     reset_retained_exchange_syscall_count();
 }
 
+/// Whether an armed exchange fault is still waiting to fire.
+///
+/// A clean run with an armed fault is ambiguous: the code may have survived the
+/// fault, or may never have reached the fault point at all. Those are opposite
+/// conclusions from an identical green result, so tests that arm a fault and
+/// then observe success must check this to tell them apart.
+#[cfg(test)]
+pub(crate) fn retained_exchange_fault_armed() -> bool {
+    RETAINED_EXCHANGE_FAULT.with(|slot| slot.borrow().is_some())
+}
+
 #[cfg(test)]
 pub(crate) fn reset_retained_exchange_syscall_count() {
     RETAINED_EXCHANGE_SYSCALL_COUNT.with(|count| count.set(0));

@@ -162,7 +162,7 @@ pub(crate) use fault_injection::{
     arm_before_previous_slot_retirement_rename, arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename,
     arm_before_retained_previous_move_rename, arm_retained_exchange_fault,
     arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
-    reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
+    reset_retained_exchange_syscall_count, retained_exchange_fault_armed, retained_exchange_syscall_count,
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;

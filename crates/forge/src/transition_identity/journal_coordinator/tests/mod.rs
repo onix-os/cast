@@ -37,7 +37,8 @@ use crate::transition_identity::StatefulTreeIdentity;
 use crate::transition_identity::{
     RetainedExchangeFaultPoint, RetainedExchangeOutcome, RetainedExchangeSyscallFault,
     arm_after_retained_exchange_rename, arm_before_retained_exchange_rename, arm_retained_exchange_fault,
-    arm_retained_exchange_syscall_fault, reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
+    arm_retained_exchange_syscall_fault, reset_retained_exchange_syscall_count, retained_exchange_fault_armed,
+    retained_exchange_syscall_count,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
