@@ -486,3 +486,79 @@ fn coordinated_active_reblit_resumes_every_previous_slot_parking_fault_without_a
         );
     }
 }
+
+// Ported from `active_previous_slot_scan_skips_every_foreign_occupant_kind`.
+//
+// The parking scan walks indexed names looking for a free one. Every occupant
+// kind must be stepped over without being opened, followed, or replaced — a
+// scan that stat'd through the symlink or tried to reuse the directory would
+// either escape the roots or adopt a stranger's wrapper as its own slot.
+// `keeps_wrong_wrapper_mode_untouched` covers a wrong-mode directory; the file,
+// symlink and FIFO kinds are only covered here.
+#[test]
+fn coordinated_active_reblit_slot_scan_skips_every_foreign_occupant_kind() {
+    use std::os::unix::fs::FileTypeExt as _;
+
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+    let marker_inode = fs::symlink_metadata(fixture.installation.root.join("usr/.cast-tree-id"))
+        .unwrap()
+        .ino();
+
+    // The token is only reachable through the transition record, and the live
+    // marker cannot be re-adopted to recover it (this fixture has already
+    // hardlinked it, so `adopt_or_create_before_journal` refuses the two-link
+    // marker). Read it back off the slot name the fixture itself created.
+    let token = fs::read_dir(&canonical)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .find_map(|name| {
+            name.strip_prefix(&format!(".cast-state-slot-{}-", fixture.previous_state))
+                .map(str::to_owned)
+        })
+        .expect("the two-link fixture planted a canonical previous slot");
+    let parking = |index: usize| {
+        fixture.installation.root_path(format!(
+            ".archived-candidate-slot-{}-{token}-{index}",
+            fixture.previous_state
+        ))
+    };
+
+    write_canonical_file(&parking(0), b"regular occupant");
+    std::os::unix::fs::symlink("missing-target", parking(1)).unwrap();
+    nix::unistd::mkfifo(&parking(2), nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+    create_canonical_directory(&parking(3));
+
+    let completion = run_active_reblit(&fixture, identity, authority)
+        .expect("forward prefix steps over foreign occupants")
+        .complete_active_reblit_without_boot();
+
+    // The parking itself succeeds; only the *commit cleanup* declines to finish
+    // with strangers sitting in the indexed namespace, deferring to recovery
+    // rather than acting on entries it cannot account for. The legacy route
+    // completed inline here — this is the same fail-closed shift seen at the
+    // other dispositions, not a parking failure.
+    let deferred = format!("{completion:?}");
+    assert!(
+        deferred.contains("CommitCleanupDeferred"),
+        "expected cleanup to defer over foreign occupants, got: {deferred}"
+    );
+
+    // Every occupant is exactly as it was left.
+    assert_eq!(fs::read(parking(0)).unwrap(), b"regular occupant");
+    assert!(fs::symlink_metadata(parking(1)).unwrap().file_type().is_symlink());
+    assert!(fs::symlink_metadata(parking(2)).unwrap().file_type().is_fifo());
+    assert_eq!(
+        fs::symlink_metadata(parking(3)).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+
+    // The slot landed at the first free index, carrying the original marker.
+    assert!(!canonical.exists(), "the canonical slot was left behind");
+    assert_eq!(
+        fs::symlink_metadata(parking(4).join(format!(".cast-state-slot-{}-{token}", fixture.previous_state)))
+            .unwrap()
+            .ino(),
+        marker_inode
+    );
+}
