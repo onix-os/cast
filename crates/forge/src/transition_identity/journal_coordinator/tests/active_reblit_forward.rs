@@ -822,3 +822,53 @@ fn coordinated_active_reblit_wrapper_scan_skips_foreign_types_and_uses_next_inde
         "the wrapper was not reserved at the first free index"
     );
 }
+
+// Ported from
+// `staging_wrapper_pre_retention_substitution_uses_marker_authenticated_fallback`.
+//
+// The reserved wrapper is created and then reopened to retain it. A stranger
+// that swaps the directory for a file in that window must not be retained as
+// this transition's wrapper — the reopen authenticates what it finds rather
+// than trusting the name it just created.
+#[test]
+fn coordinated_active_reblit_refuses_a_substituted_wrapper_before_retention() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let quarantine = fixture.installation.state_quarantine_dir();
+    let observed = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let hook_observed = std::rc::Rc::clone(&observed);
+
+    crate::transition_identity::arm_before_quarantine_slot_reopen(move || {
+        let Some(created) = fs::read_dir(&quarantine)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("replaced-active-reblit-wrapper-")
+            })
+        else {
+            return;
+        };
+        let displaced = created.with_extension("created");
+        fs::rename(&created, &displaced).unwrap();
+        fs::write(&created, b"racing foreign occupant").unwrap();
+        hook_observed.replace(Some((created, displaced)));
+    });
+
+    let error = run_active_reblit(&fixture, identity, authority)
+        .err()
+        .expect("a substituted wrapper must fail the reservation");
+
+    // The hook firing is the precondition for this test meaning anything.
+    let (foreign, displaced) = observed
+        .borrow()
+        .clone()
+        .expect("the quarantine reopen hook never fired — this run proves nothing");
+
+    assert_eq!(error.stage(), "ActiveReblit reservation", "{error:#?}");
+    // The stranger is left exactly as planted, and the real reserved wrapper is
+    // still the empty directory it was.
+    assert_eq!(fs::read(foreign).unwrap(), b"racing foreign occupant");
+    assert_eq!(fs::read_dir(displaced).unwrap().count(), 0);
+}
