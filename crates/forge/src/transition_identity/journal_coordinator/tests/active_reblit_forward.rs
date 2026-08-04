@@ -872,3 +872,100 @@ fn coordinated_active_reblit_refuses_a_substituted_wrapper_before_retention() {
     assert_eq!(fs::read(foreign).unwrap(), b"racing foreign occupant");
     assert_eq!(fs::read_dir(displaced).unwrap().count(), 0);
 }
+
+/// Boot-sync driver: the forward prefix with `run_boot_sync: true`, which is
+/// the only option under which the ActiveReblit boot handoff is mintable.
+fn run_active_reblit_for_boot(
+    fixture: &CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    system: impl FnOnce(),
+) -> Result<SystemTriggersCompleteCoordinator, ActiveReblitForwardError> {
+    execute_active_reblit_forward(
+        identity,
+        authority,
+        fixture.candidate_state,
+        true,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| {
+            system();
+            Ok::<(), TriggerEffectError>(())
+        },
+    )
+}
+
+// Ported from
+// `active_reblit_pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot`.
+//
+// The legacy route exposed a `BeforeCandidateBootSynchronization` checkpoint.
+// The coordinated equivalent is the boot handoff itself: minting
+// `CoordinatorActiveReblitBootSyncHandoff` re-runs the same-store evidence over
+// the retained state ID, so a mutation is refused *before* any boot effect
+// rather than after the bootloader has been touched.
+//
+// This is why the test needs no BLS publication plan. Staging boot sync from a
+// handoff does require one — topology, attempts, stones, roots, all built by
+// `RenderFixture` over in `client/boot/` — but the rejection under test happens
+// strictly earlier, in the handoff preflight, so that machinery is never
+// reached and does not have to be married to `CoordinatorFixture` here.
+//
+// The baseline arm is not decoration: without it a handoff failing for some
+// unrelated reason would satisfy the mutated arm and prove nothing.
+#[test]
+fn coordinated_active_reblit_rejects_a_pre_boot_state_id_mutation() {
+    {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+        let complete =
+            run_active_reblit_for_boot(&fixture, identity, authority, || {}).expect("clean boot-sync forward prefix");
+        assert!(
+            complete.record().options.run_boot_sync,
+            "the boot driver did not request boot sync"
+        );
+        assert_record_prefix(
+            complete.record(),
+            Operation::ActiveReblit,
+            Phase::SystemTriggersComplete,
+            10,
+        );
+        complete
+            .into_active_reblit_boot_sync_handoff()
+            .unwrap_or_else(|error| panic!("a clean run must mint the boot handoff: {error:#?}"));
+    }
+
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+    let live = fixture.installation.root.join("usr/.stateID");
+    let complete = run_active_reblit_for_boot(&fixture, identity, authority, || {}).expect("boot-sync forward prefix");
+
+    fs::write(&live, b"9").unwrap();
+
+    let error = complete
+        .into_active_reblit_boot_sync_handoff()
+        .err()
+        .expect("a mutated live state ID must not reach boot");
+
+    assert!(
+        matches!(error, ActiveReblitBootSyncHandoffFailure::Preflight { .. }),
+        "the mutation was not caught by the handoff preflight: {error:#?}"
+    );
+    assert!(
+        format!("{error:?}").contains("revalidate retained state ID"),
+        "the refusal did not come from retained state-ID revalidation: {error:#?}"
+    );
+    // The journal never advanced past SystemTriggersComplete, so nothing
+    // boot-shaped was recorded over the mutation.
+    assert_record_prefix(
+        &read_canonical(&fixture.installation.root),
+        Operation::ActiveReblit,
+        Phase::SystemTriggersComplete,
+        10,
+    );
+}
