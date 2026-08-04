@@ -12,6 +12,51 @@ use super::{
     startup_gate::{self, CleanSystemStartup},
 };
 
+/// Re-enter the real mutable startup gate until it admits the system, and
+/// return how many entries that took.
+///
+/// The other helpers here each advance recovery by one phase, which is what a
+/// test pinning an exact chain wants. A test that only needs the installation
+/// to be *usable again* needs the whole chain run to terminal, and asserting
+/// every intermediate phase would couple it to a chain it is not testing.
+///
+/// Every intermediate entry must still be blocker-free: a recovery that stalls
+/// is a different outcome from one that completes, and silently looping past a
+/// stall would turn this into an infinite retry.
+pub(crate) fn drive_startup_recovery_to_clean(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+) -> usize {
+    const BOUND: usize = 32;
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let mut visited = Vec::new();
+    for entries in 1..=BOUND {
+        match CleanSystemStartup::enter(&system, &reservation) {
+            Ok(_) => return entries,
+            Err(startup_gate::Error::RecoveryPending(pending)) => {
+                assert!(
+                    pending.blockers().is_empty(),
+                    "recovery stalled at {:?} with blockers: {:?}",
+                    pending.phase(),
+                    pending.blockers()
+                );
+                visited.push(pending.phase());
+            }
+            Err(other) => panic!("recovery failed instead of advancing: {other:?} after {visited:?}"),
+        }
+    }
+    // The phase trail distinguishes a chain that is merely longer than the
+    // bound from one that is looping, which is the failure worth naming.
+    panic!("recovery did not reach a clean startup within {BOUND} entries; visited {visited:?}");
+}
+
 /// Enter the real mutable startup gate at a reverse-exchange intent and
 /// require that it does **not** reach `UsrRestored`, returning a rendering of
 /// why it declined.

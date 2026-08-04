@@ -1188,3 +1188,52 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
     assert_eq!(read_canonical(&fixture.installation.root), intent_record);
 }
 
+
+// Ported from `fresh_identity_can_archive_after_a_complete_compensating_recovery`.
+//
+// Every other coordinated cross-transition test starts from a *successful*
+// prior transition. This one starts from a rolled-back one: the claim is that a
+// completed compensating recovery leaves the installation genuinely reusable,
+// not merely consistent. A rollback that left residue — a half-retired slot, a
+// stale journal, an unreleased reservation — would satisfy every single-
+// transition assertion and still make the next transition impossible.
+#[test]
+// IGNORED — a reproducer, not a passing port. Measured 2026-08-04: the
+// ActivateArchived rollback reaches `CandidatePreserveIntent` and then neither
+// advances nor names a blocker. `drive_startup_recovery_to_clean` records the
+// trail `[UsrRestored, CandidatePreserveIntent x31]`, every entry blocker-free.
+// Confirmed independently by `reverse_exchange_intent_refusal_reason`, which
+// trips its own "stalled without naming a blocker" assertion at that phase.
+//
+// A blocker-free non-advancing entry is a liveness failure whatever the cause:
+// a real system would spin at every boot with nothing to diagnose it by.
+//
+// Caveat on the cause: this fixture's archived candidate is staged directly by
+// `fixture_parts` and has no originating archive slot, so the `Rearchive`
+// disposition may have no valid destination. That would explain a *refusal*; it
+// does not explain silent non-advancement. Whether the fix belongs in the
+// rearchive destination logic or in the fixture is the open question — tasks
+// #23 and #24 covered adjacent ground.
+#[ignore = "reproducer for the CandidatePreserveIntent rollback stall; see comment"]
+fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
+    let (fixture, _reverse_intent, candidate, previous) =
+        reverse_exchange_intent_after_applied_exchange(CandidateKind::Archived);
+
+    let entries = drive_startup_recovery_to_clean(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+    assert!(entries > 1, "the rollback completed without advancing");
+
+    // A clean startup means no record survives to block the next transition.
+    assert_canonical_journal_absent(&fixture.installation.root);
+    assert_exchange_layout(&fixture, false, candidate, previous);
+
+    // The installation must now accept a fresh transition that archives the
+    // same previous state the rollback just restored.
+    fs::remove_dir_all(fixture.installation.staging_path("usr")).unwrap();
+    let (identity, authority) = reacquire_new_state(&fixture);
+    drop(identity);
+    drop(authority);
+}

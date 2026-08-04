@@ -201,7 +201,8 @@ pub(crate) use startup_recovery_forward_origin_test_support::{
     assert_reverse_exchange_intent_recovers_to_usr_restored,
     assert_root_links_complete_restart_persists_rollback_decision,
     assert_usr_exchange_post_recovers_to_pending_reverse, assert_usr_restored_routes_to_candidate_preserve_intent,
-    assert_usr_rollback_decision_routes_to_reverse_exchange_intent, reverse_exchange_intent_refusal_reason,
+    assert_usr_rollback_decision_routes_to_reverse_exchange_intent, drive_startup_recovery_to_clean,
+    reverse_exchange_intent_refusal_reason,
     snapshot_startup_recovery_namespace, snapshot_startup_recovery_namespace_without_root_abi,
 };
 mod sync;
