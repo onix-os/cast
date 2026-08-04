@@ -412,3 +412,77 @@ fn coordinated_active_reblit_never_reaches_the_legacy_rotation_exchange() {
     );
     assert!(!exchanged.get(), "the legacy before-exchange hook fired");
 }
+
+/// The parked previous slot, located by scanning rather than by reconstructing
+/// the tree token (which is only reachable through the transition record).
+fn parked_previous_slots(fixture: &CoordinatorFixture) -> Vec<PathBuf> {
+    let prefix = format!(".archived-candidate-slot-{}-", fixture.previous_state);
+    // `root_path` resolves under `.cast/root`, not under the live root.
+    let mut paths = fs::read_dir(fixture.installation.root_path(""))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(&prefix))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+// Ported from
+// `every_single_active_previous_slot_parking_fault_resumes_without_a_second_move`.
+//
+// Unlike the staging-wrapper rotation, the previous-slot parking *is* on the
+// coordinated path: every one of the nine fault points is reached, and the
+// transition resumes through each of them to completion. The `fired` assertion
+// is the load-bearing one — without it a green run would be indistinguishable
+// from the parking code never running, which is exactly how the wrapper-rotation
+// faults looked before they were checked.
+//
+// "Without a second move" is asserted structurally: exactly one parked slot at
+// index 0, holding exactly one entry. A retry that re-applied the move would
+// leave a second slot at index 1 or a second marker beside the first.
+#[test]
+fn coordinated_active_reblit_resumes_every_previous_slot_parking_fault_without_a_second_move() {
+    use crate::transition_identity::RetainedActivePreviousSlotParkingFaultPoint as SlotPoint;
+    let points = [
+        SlotPoint::MarkerPreSync,
+        SlotPoint::WrapperPreSync,
+        SlotPoint::RootsPreSync,
+        SlotPoint::BeforeRename,
+        SlotPoint::AfterRename,
+        SlotPoint::MarkerPostSync,
+        SlotPoint::WrapperPostSync,
+        SlotPoint::RootsPostSync,
+        SlotPoint::FinalRevalidation,
+    ];
+
+    for point in points {
+        let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+        let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+        let marker_inode = fs::symlink_metadata(fixture.installation.root.join("usr/.cast-tree-id"))
+            .unwrap()
+            .ino();
+
+        arm_active_previous_slot_parking_faults([point]);
+        let completed = run_active_reblit(&fixture, identity, authority)
+            .unwrap_or_else(|error| panic!("{point:?} was not resumed in the forward prefix: {error:#?}"))
+            .complete_active_reblit_without_boot();
+        let remaining = crate::transition_identity::active_previous_slot_parking_faults_remaining();
+        arm_active_previous_slot_parking_faults([]);
+
+        assert_eq!(remaining, 0, "{point:?} was never reached — this run proves nothing");
+        completed.unwrap_or_else(|error| panic!("{point:?} was not resumed at completion: {error:#?}"));
+
+        // The slot moved exactly once: canonical gone, one parked slot, one
+        // entry inside it, and that entry is the original marker inode.
+        assert!(!canonical.exists(), "{point:?} left the canonical slot behind");
+        let parked = parked_previous_slots(&fixture);
+        assert_eq!(parked.len(), 1, "{point:?} parked the slot more than once: {parked:?}");
+        let entries = fs::read_dir(&parked[0]).unwrap().collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1, "{point:?} left extra entries in the parked slot");
+        assert_eq!(
+            fs::symlink_metadata(entries[0].as_ref().unwrap().path()).unwrap().ino(),
+            marker_inode,
+            "{point:?} parked a different marker inode"
+        );
+    }
+}

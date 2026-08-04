@@ -694,6 +694,16 @@ pub(crate) fn arm_active_previous_slot_parking_faults(
     FAULT.with(|fault| *fault.borrow_mut() = points);
 }
 
+/// How many armed parking faults have *not* been consumed.
+///
+/// Same purpose as its staging-wrapper counterpart: a test cannot otherwise
+/// tell "the parking survived the fault" from "the fault point was never
+/// reached", and those read a passing run in opposite directions.
+#[cfg(test)]
+pub(crate) fn active_previous_slot_parking_faults_remaining() -> usize {
+    FAULT.with(|fault| fault.borrow().len())
+}
+
 #[cfg(test)]
 pub(crate) fn arm_before_active_previous_slot_parking_rename(hook: impl FnOnce() + 'static) {
     BEFORE_RENAME.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));

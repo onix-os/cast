@@ -120,8 +120,8 @@ pub(crate) use prejournal_inventory::{
 
 #[cfg(test)]
 pub(crate) use active_previous_slot_parking::{
-    RetainedActivePreviousSlotParkingFaultPoint, arm_active_previous_slot_parking_faults,
-    arm_before_active_previous_slot_parking_rename,
+    RetainedActivePreviousSlotParkingFaultPoint, active_previous_slot_parking_faults_remaining,
+    arm_active_previous_slot_parking_faults, arm_before_active_previous_slot_parking_rename,
 };
 pub(crate) use archived_candidate::{
     ArchivedCandidateError, RetainedArchivedCandidateMoveFailure, RetainedArchivedCandidateMoveOutcome,
