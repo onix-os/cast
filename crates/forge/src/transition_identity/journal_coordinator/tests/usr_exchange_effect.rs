@@ -1273,11 +1273,30 @@ fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous(
 // stalls identically: `[ReverseExchangeIntent, UsrRestored,
 // CandidatePreserveIntent x30]`.
 //
-// Unverified remaining possibility: something between `UsrExchanged` and
-// `CandidatePreserveIntent` creates the second link. It cannot be the rearchive
-// effect itself, which is gated behind exactly this check. Confirming or ruling
-// that out is the next step, and it decides whether the fix is in the topology
-// predicate or in whatever should have been creating the link.
+// Resolved 2026-08-04: nothing creates the second link, anywhere. Every
+// non-test reference to `.cast-state-slot-` in the crate is a read
+// (`starts_with`, `strip_prefix`, inspection, error text) or a doc comment;
+// no product code constructs that name or calls `hard_link`/`linkat` for it.
+// The only creators in the tree are test fixtures.
+//
+// And `archived_topology` is the only one of the three that wants two links:
+//
+//   new_state_topology     marker_links() != 1 -> reject  (:673)
+//   active_reblit_topology marker_links() != 1 -> reject  (:773)
+//   archived_topology      marker_links() != 2 -> reject  (:715)
+//
+// So the `== 2` requirement is unsatisfiable by any real ActivateArchived
+// candidate, and every such rollback defers forever at CandidatePreserveIntent
+// — silently, because the deferral discards its reason. That is consistent with
+// the guest-side CandidatePreserveIntent deferrals behind tasks #18/#26/#27.
+//
+// The fix is almost certainly in the predicate (expect 1, like its two
+// siblings), but that is a product change and wants its own task, so this
+// stays ignored rather than being made to pass.
+//
+// Caveat: verified that no code constructs the slot-link *name*. Not
+// exhaustively traced whether such a link could arise another way — e.g. a
+// directory rename carrying a link created under an older format.
 #[ignore = "reproducer for the CandidatePreserveIntent rollback stall; see comment"]
 fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
     let (fixture, identity, authority) = fixture_with_exchange_authority_and_candidate_slot();
