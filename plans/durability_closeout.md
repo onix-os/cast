@@ -2354,6 +2354,18 @@ deletions.**
 
 ### `stateful_journal_and_identity_preflight.rs` (9, 5 resolved / 4 left) — sized 2026-08-04
 
+**CLOSED 2026-08-04.** All 9 ported or resolved and deleted (commit
+`49afdd14`); the file survives with its other 8 tests. Full suite after the
+deletions: **2781 passed, 0 failed** (= 2790 − 9). No helper was orphaned.
+
+One full run before that showed a single
+`coordinated_active_reblit_wrapper_scan_skips_foreign_types_and_uses_next_index`
+failure — a journal-lock `WouldBlock` inside `fixture_parts`. It did not
+reproduce: the test passes in isolation, the pre-deletion baseline ran clean,
+and the repeat run with the deletions applied ran clean. Nondeterministic
+contention, not a consequence of the deletions. It belongs with the known
+full-suite-only cluster and is still unexplained — do not treat it as settled.
+
 **Correction 2026-08-04 — do NOT delete this file.** An earlier note here said
 the whole file gets deleted once the 9 resolve. That is wrong: the file holds
 **17** tests, not 9, and they span three route families.
