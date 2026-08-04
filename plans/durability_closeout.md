@@ -2577,3 +2577,65 @@ these need coordinated tests, not deletion.
    bare fixture *does* prepare and *does* publish both markers, all of them
    could pass vacuously on some unrelated fixture failure. This is cheap and
    should be the default shape for any future guard port in this file.
+
+### `stateful_previous_tree_recovery.rs` (5 of 26) — sized 2026-08-04
+
+Verified by entry point, not by name: only 6 call sites in the file touch the
+legacy route (`apply_stateful_blit_with_checkpoint` at 440, 482, 580, 891, 920
+and `commit_stateful_staging` at 613), and they fall inside exactly the 5 tests
+the earlier scan named. **The other 21 drive `RetainedPreviousMove` /
+`RetainedExchange` primitives directly** — shared, route-independent, and
+untouched by the deletion. As with the preflight file, do not delete the file.
+
+| test | verdict |
+|---|---|
+| `retained_exchange_post_move_faults_run_the_swapped_recovery_path` | **DELETE — already covered** |
+| `retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange` | **PORT** |
+| `previous_archive_abort_retirement_faults_resume_in_production_recovery` | **PORT (reduced)** |
+| `applied_previous_archive_and_restore_faults_use_full_client_suffix_routing` | **PORT (reduced)** |
+| `fresh_identity_can_archive_after_a_complete_compensating_recovery` | **PORT** |
+
+**Already covered.** `retained_exchange_post_move_faults_run_the_swapped_recovery_path`
+faults the forward exchange at `StagingParentSync` / `InstallationRootSync` /
+`FinalRevalidation` and expects recovery to `UsrRestored`.
+`journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored`
+does the same three points across **all three** candidate kinds and drives real
+startup recovery through the full chain. A strict superset; its remaining
+assertions are the `StatefulCandidatePreserved` disposition.
+
+**The reverse-exchange gap.** Both coordinated durability tests arm their fault
+before the *forward* exchange and then let the reverse run clean; their
+`retained_exchange_syscall_count() == 2` assertions prove no *extra* exchange
+under a clean reverse. Neither faults *during* the reverse. So
+`retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange`
+— a durability fault inside the reverse still completes, without a second
+syscall — has no counterpart. Arm the fault immediately before
+`assert_reverse_exchange_intent_recovers_to_usr_restored`, then require the
+resumed reverse to finish with the count still at 2.
+
+**Why two are "reduced".** All four slot-retirement fault points
+(`BeforeSlotRetire`, `AfterSlotRetire`, `RootsAfterSlotRetireSync`,
+`FinalSlotRetirementRevalidation`) appear **only** in this file — but lines
+313–348 are `retained_previous_restore_retirement_faults_resume_without_a_second_rename`,
+one of the 21 **surviving** primitive tests. So deleting the legacy 5 does not
+strand those points; the primitive keeps them. What the two legacy tests add is
+route-level resumption — that the *dispatcher* resumes a retirement fault, not
+just that the primitive can. `recovery_sealed_restore_resumes_its_durability_suffix_under_a_retained_journal`
+covers dispatcher resumption for the restore suffix, but only at the **move**
+points (`SourceParentSync`, `DestinationParentSync`, `FinalRevalidation`), never
+the retirement ones. Port that narrow claim; do not re-port the fault-point
+matrix.
+
+**The cross-transition claim.**
+`fresh_identity_can_archive_after_a_complete_compensating_recovery` requires an
+installation to be reusable *after* a completed compensating recovery — a new
+transition can still archive the same previous state. Coordinated
+cross-transition tests exist (`active_reblit_forward.rs:1024`, `:1103`, and the
+new `identity_preflight_guards.rs:283`) but every one of them starts from a
+**successful** prior transition, never from a completed rollback. Genuine port:
+drive a rollback to terminal, then `reacquire_new_state` and archive.
+
+**Order to work in:** the reverse-exchange fault first (self-contained, and the
+`arm_retained_exchange_fault` seam is already proven), then the cross-transition
+one, then the two reduced retirement claims — which likely collapse into a
+single test, since both are "the dispatcher resumes a retirement fault".
