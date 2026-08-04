@@ -2354,8 +2354,21 @@ deletions.**
 
 ### `stateful_journal_and_identity_preflight.rs` (9, 3 ported / 6 left) — sized 2026-08-04
 
-The legacy tests are left in place as each port lands; the whole file is deleted
-in one commit once all 9 are resolved, rather than gutting it incrementally.
+**Correction 2026-08-04 — do NOT delete this file.** An earlier note here said
+the whole file gets deleted once the 9 resolve. That is wrong: the file holds
+**17** tests, not 9, and they span three route families.
+
+| tests | entry point | fate |
+|---|---|---|
+| the 9 sized below | `apply_stateful_blit_with_checkpoint` | port, then delete individually |
+| 5 (`candidate_pre_journal_namespace_substitution…`, the four `first_install_rejects_*`/`first_install_marker_retry_*`) | `prepare_stateful_tree_identity` | **keep** — shared guard via a thin client helper |
+| `candidate_pre_journal_legacy_hardlinked_archived_payload…`, `archived_live_root_abi_conflict…` | `activate_state{,_with_checkpoint}` | **keep** unless that API is itself legacy — verify |
+| `ephemeral_root_and_isolation_root_abi_conflicts…` | `apply_ephemeral_candidate` | **keep** — ephemeral path, unrelated route |
+
+So the 9 legacy tests get deleted one at a time as each port lands, and the file
+survives with 8. This is the third time a deletion list has been wrong; the
+standing rule holds — **re-verify every deletion target against the tree, and
+check what else lives in a file before deleting the file.**
 
 Scanned by asserted error type. Unlike `stateful_activation_recovery.rs`, this
 file splits into **two distinct groups**, and only one of them is disposition:
