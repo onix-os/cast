@@ -2901,3 +2901,55 @@ minutes.
 is **pre-existing and not caused by this change** — a stashed baseline fails
 with the identical count, and the test passes 3/3 in isolation. It belongs with
 the known full-suite-only nondeterministic cluster, still unexplained.
+
+## Retirement ports done — the test side of #10 is COMPLETE (2026-08-05)
+
+Both legacy tests reduce to one claim — *the dispatcher resumes a slot-retirement
+fault* — so they collapsed into
+`recovery_sealed_restore_resumes_its_slot_retirement_suffix`, plus one sibling
+for the point that behaves differently.
+
+**Reachability was settled before any assertion was written**, per the standing
+rule. Result, and it contradicts what the legacy test names imply:
+
+| point | consumed during `archive_previous_tree` | consumed during the restore | restore outcome |
+|---|---|---|---|
+| `BeforeSlotRetire` | no | yes | fails, `Applied` |
+| `RootsAfterSlotRetireSync` | no | yes | fails, `Applied` |
+| `FinalSlotRetirementRevalidation` | no | yes | fails, `Applied` |
+| `AfterSlotRetire` | no | yes | **succeeds** |
+
+**The retirement suffix belongs to the restore, not the archive.**
+`archive_previous_tree` completes with the fault still armed at every one of the
+four points. The legacy names
+(`previous_archive_abort_retirement_faults_...`) point at the archive and are
+misleading.
+
+`AfterSlotRetire` is the one a restore survives: by then the retiring rename is
+durable, so the remaining work is re-derivable and the fault has nothing left to
+invalidate. It gets its own test —
+`recovery_sealed_restore_survives_a_fault_after_the_retiring_rename` — which
+asserts the fault *was consumed*, so "tolerated" cannot be confused with "never
+reached". Folding it into the loop would have forced an `expect_err` that does
+not hold.
+
+New accessor `retained_previous_move_faults_remaining()`
+(`transition_identity/fault_injection.rs`), the previous-move counterpart of
+`retained_exchange_fault_armed()`. **Fourth time the armed-versus-consumed
+distinction has decided a verdict** (staging-wrapper rotation, previous-slot
+parking, reverse exchange, now this).
+
+**No test in the crate calls the legacy route any more.** Every remaining
+`apply_stateful_blit_with_checkpoint` / `commit_stateful_staging` site is
+product code:
+
+- `client/core/stateful_transition.rs` (the definitions)
+- `client/core/state_metadata.rs`
+- `client/core/state_planning.rs`
+- `client/new_state_boot_transition.rs`
+- `transition_identity/journal_coordinator/new_state_forward.rs` (2)
+
+Suite **2735 passed, 0 failed, 6 ignored**; 6x163 stress-clean on the
+coordinator module.
+
+**#10 reduces to one step: excise the route from those five files.**
