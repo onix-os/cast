@@ -1959,17 +1959,32 @@ legacy route. The other 21 drive `transition_identity` primitives directly and
 survive the deletion untouched. Sizing that file by its length would have
 overstated it fivefold.
 
-**Starting points for those 5 (NOT verdicts — read both sides first):** two of
-them arm fault surfaces that the coordinated suite also exercises —
-`arm_retained_previous_move_fault` (legacy line 490) is armed by
-`journal_coordinator/tests/new_state_forward.rs:201`, and
-`arm_retained_exchange_fault` (legacy line 887) by
-`journal_coordinator/tests/usr_exchange_effect.rs:414`. Shared hook, unknown
-whether the same claim. The other three
+#### `retained_exchange_post_move_faults_run_the_swapped_recovery_path` — DELETE (verified)
+
+Both sides read. Same seam, same fault points
+(`StagingParentSync`, `InstallationRootSync`, `FinalRevalidation`), and the
+coordinated version in `usr_exchange_effect.rs` is **strictly stronger** on the
+physical claims: it asserts `retained_exchange_syscall_count() == 1` (the move
+happened exactly once), the exact post-exchange layout, that the journal record
+is unchanged, and that root links are absent. The legacy test asserts only that
+an error came back.
+
+Legacy's unique content is the *disposition* — `StatefulTransitionUsrRestored`
+plus candidate quarantine-and-invalidate, i.e. inline reversal. That is legacy
+behaviour by design; the coordinated route reports
+`UsrExchangeEffectFailure::Exchange { outcome: Applied }` and leaves reversal to
+recovery. Nothing portable remains.
+
+#### The other four — starting points, NOT verdicts
+
+`applied_previous_archive_and_restore_faults_use_full_client_suffix_routing`
+(legacy line 490) arms `arm_retained_previous_move_fault`, which
+`journal_coordinator/tests/new_state_forward.rs:201` also arms — shared hook,
+same-claim unverified. The remaining three
 (`fresh_identity_can_archive_after_a_complete_compensating_recovery`,
 `previous_archive_abort_retirement_faults_resume_in_production_recovery`,
 `retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange`)
-show no hook in their first lines and need reading in full.
+show no fault hook in their opening lines and need reading in full.
 
 ### Environment: `$TMPDIR` must be 0700
 
