@@ -2315,3 +2315,39 @@ reading in full.
 (delete) from the namespace assertion (check against
 `previous_tree_move` suffix tests and `usr_rollback_candidate_preserve_authority`,
 then port whatever is uncovered).
+
+#### The three namespace claims — resolved 2026-08-04
+
+| legacy test | outcome |
+|---|---|
+| `previous_archive_never_replaces_a_racing_empty_destination` | **PORTED** — `coordinated_previous_archive_never_replaces_a_racing_empty_destination` |
+| `previous_restore_never_replaces_a_racing_empty_staging_destination` | **PORTED** — `coordinated_previous_restore_never_replaces_a_racing_empty_staging_destination` |
+| `two_failed_active_state_reblits_use_unique_non_state_quarantines` | **DELETE** — see below |
+
+The two racing-destination proofs are mirrors of each other: the archive moves
+`live → <state>/usr`, the restore moves it back to `staging/usr`, and **both
+directions** must refuse rather than replace an empty directory raced into the
+destination. An empty dir is the shape most likely to look safe to overwrite.
+Each asserts the occupant by inode *and* that it is still empty — a replacing
+rename and an unlink-then-recreate would each pass a weaker check.
+
+Only the no-replace half was ported. Both legacy tests also assert inline
+reversal (`StatefulTransitionUsrRestored` / `StatefulTransitionRecoveryFailed`),
+which the coordinated route does not do.
+
+**The restore returns `Ambiguous`, not `NotApplied`** — with the destination
+occupied it cannot distinguish "my rename never happened" from "it happened and
+something recreated the source", so it declines to claim either. That is the
+honest outcome; the physical assertions are what pin the guarantee. Asserting
+`NotApplied` there (my first attempt) fails.
+
+**Why the third is a deletion:** its uniqueness claim is about *failed-candidate
+quarantines*, and quarantine-on-failure is legacy-only — `quarantine_candidate`
+is gated behind `require_no_journal`, so no coordinated transition reaches it,
+and `failed-active-reblit-` appears nowhere outside the legacy tests. The
+uniqueness property that *does* survive is the wrapper-slot one on the success
+path, already covered by
+`coordinated_two_successive_active_reblits_use_distinct_wrapper_slots`.
+
+**`stateful_activation_recovery.rs` is now fully accounted for: 2 ported, 5
+deletions.**
