@@ -2731,3 +2731,23 @@ cause.
 **Caveat.** Verified that no code constructs the slot-link *name*. Not
 exhaustively traced whether such a link could arise another way — e.g. a
 directory rename carrying a link created under an older format.
+
+## Deletion pass — started 2026-08-04
+
+**Done:** `tests/root_abi_preflight.rs` deleted whole (4 tests, all previously
+ported; file held no shared helpers) plus its `mod` line. Suite after:
+**2777 passed, 0 failed, 7 ignored.**
+
+**Remaining, and two are not what the count implies.** Re-checking each target
+before deleting caught this — the standing rule keeps paying:
+
+| file | targets | note |
+|---|---|---|
+| `stateful_activation_recovery.rs` | 7 of 8 | 8th (`archived_state_activation_carries_each_generated_snapshot_with_its_usr_tree`) has no legacy call site — verify before touching the file |
+| `stateful_previous_tree_recovery.rs` | 2 of 5 | only the two settled deletions; 3 are still open ports, one blocked on task #29 |
+| `active_reblit_tests.rs` | 1 test + 1 helper | `:561` is a ported test; **`:67` is inside `fn run(...)`, a shared helper** — its callers decide its fate, it is not a straight removal |
+| `stateful_candidate_metadata.rs` | 0 tests + 1 helper | **`:408` is inside `fn apply_fresh_candidate(...)`, a helper**, not a test at all |
+
+So the honest remaining count is **10 legacy-route tests**, not 19: 7 + 2 + 1,
+plus two helper call sites that die only when their last legacy caller does.
+The earlier "~19" counted call sites and assumed one test each.
