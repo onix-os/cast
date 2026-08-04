@@ -781,3 +781,44 @@ fn coordinated_active_reblit_rejects_a_slot_moved_back_to_canonical() {
         );
     }
 }
+
+// Ported from `staging_wrapper_scan_skips_foreign_types_and_uses_next_index`.
+//
+// The wrapper-quarantine counterpart of the slot scan above. Reached through
+// the reservation, which *is* on the coordinated path — unlike the rotation
+// exchange these names eventually feed. `keeps_wrong_wrapper_mode_untouched`
+// covers a wrong-mode directory only; file, dangling symlink and FIFO occupants
+// are covered here.
+#[test]
+fn coordinated_active_reblit_wrapper_scan_skips_foreign_types_and_uses_next_index() {
+    use std::os::unix::fs::FileTypeExt as _;
+
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let token = previous_slot_token(&fixture);
+    let quarantine = fixture.installation.state_quarantine_dir();
+    let name = |index: usize| {
+        quarantine.join(format!(
+            "replaced-active-reblit-wrapper-{}-{token}-{index}",
+            fixture.candidate_state
+        ))
+    };
+
+    write_canonical_file(&name(0), b"file");
+    std::os::unix::fs::symlink("missing-target", name(1)).unwrap();
+    create_canonical_directory(&name(2));
+    nix::unistd::mkfifo(&name(3), nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+
+    run_active_reblit(&fixture, identity, authority).expect("the scan steps over foreign wrapper occupants");
+
+    // Each occupant kept its kind and contents.
+    assert_eq!(fs::read(name(0)).unwrap(), b"file");
+    assert!(fs::symlink_metadata(name(1)).unwrap().file_type().is_symlink());
+    assert!(fs::symlink_metadata(name(2)).unwrap().file_type().is_dir());
+    assert!(fs::symlink_metadata(name(3)).unwrap().file_type().is_fifo());
+
+    // The reservation took the first free index rather than reusing any of them.
+    assert!(
+        fs::symlink_metadata(name(4)).unwrap().file_type().is_dir(),
+        "the wrapper was not reserved at the first free index"
+    );
+}
