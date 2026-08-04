@@ -2590,7 +2590,7 @@ untouched by the deletion. As with the preflight file, do not delete the file.
 | test | verdict |
 |---|---|
 | `retained_exchange_post_move_faults_run_the_swapped_recovery_path` | **DELETE — already covered** |
-| `retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange` | **PORT** |
+| `retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange` | **DELETE — already covered** (sizing corrected) |
 | `previous_archive_abort_retirement_faults_resume_in_production_recovery` | **PORT (reduced)** |
 | `applied_previous_archive_and_restore_faults_use_full_client_suffix_routing` | **PORT (reduced)** |
 | `fresh_identity_can_archive_after_a_complete_compensating_recovery` | **PORT** |
@@ -2603,15 +2603,42 @@ does the same three points across **all three** candidate kinds and drives real
 startup recovery through the full chain. A strict superset; its remaining
 assertions are the `StatefulCandidatePreserved` disposition.
 
-**The reverse-exchange gap.** Both coordinated durability tests arm their fault
-before the *forward* exchange and then let the reverse run clean; their
-`retained_exchange_syscall_count() == 2` assertions prove no *extra* exchange
-under a clean reverse. Neither faults *during* the reverse. So
-`retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange`
-— a durability fault inside the reverse still completes, without a second
-syscall — has no counterpart. Arm the fault immediately before
-`assert_reverse_exchange_intent_recovers_to_usr_restored`, then require the
-resumed reverse to finish with the count still at 2.
+**The "reverse-exchange gap" was a sizing error — corrected 2026-08-04, and it
+is a DELETE, not a port.**
+
+The sizing above said no coordinated test faults *during* the reverse exchange.
+Attempting the port disproved it. Arming
+`RetainedExchangeFaultPoint::StagingParentSync` before the reverse and entering
+startup produced a **clean pass** — which would have been reported as "the
+coordinated route survives reverse-exchange durability faults". The new
+`retained_exchange_fault_armed()` accessor showed the truth:
+`still_armed=true, syscalls=2`. The reverse rename ran and **the fault point
+was never reached**.
+
+The cause: `exchange_reverse` and `finish_applied_reverse`
+(`tree_lifecycle.rs:668`, `:683`) both take
+`ExchangeJournalGuard::LegacyNoJournal` — they are the *legacy* reverse. The
+coordinated recovery route does not call them. Its reverse durability suffix
+lives in `client/startup_recovery/usr_exchange_parent_durability/` with its own
+fault type, **`UsrExchangeParentDurabilityFaultPoint`** — same variant names
+(`StagingParentSync`, `InstallationRootSync`), different type. **Fifth
+same-name-different-type instance.** This time it inverted a sizing verdict
+rather than a coverage claim, because I searched for coverage *by fault-point
+type* and found none.
+
+The claim is already covered, exactly, by
+`startup_usr_exchange_parent_durability_retry_is_idempotent_and_never_reexchanges`:
+it faults the parent-sync suffix and re-enters startup three times, asserting
+`retained_exchange_syscall_count() == 0` at every step — a stronger form of
+"finish without a second exchange" than the legacy test's.
+
+**Kept from the attempt:** `retained_exchange_fault_armed()`
+(`transition_identity/fault_injection.rs`), now asserted in
+`reverse_exchange_intent_after_applied_exchange` so the forward durability
+tests prove their fault *fired* rather than merely that they stayed green. This
+is the third time the armed-versus-consumed distinction has changed a verdict
+(staging-wrapper rotation, previous-slot parking, and now this). **Any test
+that arms a fault and then observes success must check consumption.**
 
 **Why two are "reduced".** All four slot-retirement fault points
 (`BeforeSlotRetire`, `AfterSlotRetire`, `RootsAfterSlotRetireSync`,
@@ -2635,7 +2662,15 @@ new `identity_preflight_guards.rs:283`) but every one of them starts from a
 **successful** prior transition, never from a completed rollback. Genuine port:
 drive a rollback to terminal, then `reacquire_new_state` and archive.
 
-**Order to work in:** the reverse-exchange fault first (self-contained, and the
-`arm_retained_exchange_fault` seam is already proven), then the cross-transition
-one, then the two reduced retirement claims — which likely collapse into a
-single test, since both are "the dispatcher resumes a retirement fault".
+**Order to work in (revised 2026-08-04):** two deletions are now settled
+(`retained_exchange_post_move_faults_*` and
+`retained_reverse_exchange_post_move_faults_*`), leaving **2 real ports**:
+the cross-transition one first, then the reduced retirement claim — which the
+two remaining tests likely collapse into a single test, since both reduce to
+"the dispatcher resumes a retirement fault".
+
+**Before sizing anything else against a fault-injection seam, check which
+*type* of fault point the coordinated route uses.** There are at least two
+parallel families (`RetainedExchangeFaultPoint` on the legacy exchange,
+`UsrExchangeParentDurabilityFaultPoint` on the coordinated recovery suffix)
+with overlapping variant names. Grepping a variant name proves nothing.
