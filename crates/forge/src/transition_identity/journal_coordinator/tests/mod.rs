@@ -490,6 +490,7 @@ include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
 include!("candidate_metadata_escapes.rs");
+include!("identity_preflight_guards.rs");
 include!("active_reblit_forward.rs");
 include!("usr_exchange_intent.rs");
 include!("usr_exchange_effect.rs");
