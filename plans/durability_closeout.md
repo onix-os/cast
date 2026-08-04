@@ -2396,3 +2396,32 @@ The isolation-root-ABI one is a likely sibling of the already-ported
 asserts no error and needs reading in full. First-install is the D1.5 path that
 opens this plan, so check whether the coordinated first-install work already
 covers it.
+
+#### Group A: the apparent coverage is a same-name-different-type false match
+
+`DuplicateTreeToken` appears in `active_reblit_boot_state_roots_tests/runtime_and_identity.rs:28`
+— but as **`ActiveReblitBootStateRootsError::DuplicateTreeToken`**, a different
+type from the `transition_identity::Error::DuplicateTreeToken` the legacy test
+asserts (`stateful_journal_and_identity_preflight.rs:508`). It is not coverage
+of the same guard.
+
+**That is the third same-name-different-type false match in this file's sizing**,
+after `preserve_failed_candidate` (`Client::` vs `ArchivedStateRepairIdentity::`)
+and the two `FinalRevalidation` fault-point enums. When a grep "confirms"
+coverage, check the *type*, not just the identifier.
+
+So Group A is **not** covered by that hit and is most likely three genuine
+ports. The guards fire in `StatefulTreeIdentity::prepare*`, which the
+coordinated route calls, so the code under test survives the route deletion —
+these need coordinated tests, not deletion.
+
+**Next step for Group A**, in order:
+1. `duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees` —
+   drive two `fixture_parts` identities sharing a token; assert
+   `transition_identity::Error::DuplicateTreeToken` and that **both** trees are
+   retained (that retention claim is the substance, not the error).
+2. `unresolved_journal_evidence_blocks_marker_publication_before_activation` and
+3. `orphan_transition_row_blocks_marker_publication_before_activation` — both
+   need a fixture with a pre-planted journal record / orphan DB row before
+   `prepare*` is called, the same "plant before the lease" shape that
+   `prejournal_authority_over_root_entry` needed for root-ABI.
