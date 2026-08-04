@@ -1823,7 +1823,7 @@ remaining.**
 
 ## Next file: `tests/root_abi_preflight.rs` (4 sites / 4 tests)
 
-**3 of 4 ported.** `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`
+**All 4 ported.** `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`
 → `coordinated_root_abi_conflicts_are_refused_before_any_authority_is_taken`.
 
 **The coordinated bound is tighter than the legacy one.** Legacy asserts the
@@ -1908,11 +1908,38 @@ case: a root-ABI entry cannot be replaced without changing root metadata. The
 fixture asserts `retained_present` via `symlink_metadata` so the two arms cannot
 silently collapse into one again.
 
-**Verdict on the last one:**
+### #4 sized and ported — the guessed counterpart was close but not equal
 
-| # | verdict |
-|---|---|
-| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` — **still unsized.** Its "preserves foreign entry" half plausibly maps to `rejects_foreign_eexist_at_every_publisher_index_without_replacement`; its "reverses usr" half is legacy disposition, since coordinated defers reversal to recovery. **Unverified — read both sides.** |
+`rejects_foreign_eexist_at_every_publisher_index_without_replacement` was the
+right neighbourhood and still not the same test. It races a **symlink**, which
+the no-replace link syscall reports as EEXIST. Legacy #4 races a **regular
+file** — the name is occupied by something that is not a link at all, so the
+conflict is one of *type*, not of existence, and legacy reports
+`RootAbiLinkTypeConflict`.
+
+Checked every publication race in the coordinated suite: all plant a symlink
+(the journal-namespace races plant a directory, but at a different seam).
+**Nothing raced a non-symlink at a publisher index.** That was #4's unique
+coverage, now ported as
+`journal_coordinator_root_links_complete_rejects_a_regular_file_at_every_publisher_index`
+— all five indices, asserting the file is preserved by inode and never replaced
+by a link, and that the namespace outside the root-ABI names is untouched.
+
+**The "reverses usr" half is deliberately not ported.** Legacy reversed the
+exchange inline and reported `StatefulTransitionUsrRestored`. The coordinated
+route leaves the record at `UsrExchanged` and hands reversal to recovery; the
+test asserts that instead via `assert_usr_exchanged_source`. Porting the legacy
+error shape would have asserted a disposition the coordinated route does not
+have.
+
+**`tests/root_abi_preflight.rs` is fully accounted for: 4 ported, 0 deletions,
+0 remaining.**
+
+Pattern across both files sized so far: name-level mapping has now been wrong
+**four** times — reservation pass (1 of 4 real), staging wrapper (verdict
+reversed entirely), root-ABI #2/#3 (wrong side of the exchange), root-ABI #4
+(wrong conflict kind). It has not once been right without checking. Treat a
+matching name as a place to start reading, never as a verdict.
 
 Notes from the later ports:
 
