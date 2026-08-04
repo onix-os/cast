@@ -736,3 +736,82 @@ fn coordinated_previous_archive_never_replaces_a_racing_empty_destination() {
         "the previous tree was moved into the racing destination: {error:#?}"
     );
 }
+
+// Ported from `previous_restore_never_replaces_a_racing_empty_staging_destination`.
+//
+// The mirror of the archive proof above, at the compensating seam: the restore
+// moves the archived predecessor back to `staging/usr`, so a racing empty
+// directory at *that* destination must not be replaced either. Both directions
+// of the same rename need the guarantee — a restore that overwrote its
+// destination would destroy the racer's tree while "recovering".
+//
+// Driven through the recovery seal, since the journal is retained at
+// `PreviousArchived` and the unsealed restore refuses there by design.
+#[test]
+fn coordinated_previous_restore_never_replaces_a_racing_empty_staging_destination() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let staged = fixture.installation.staging_path("usr");
+
+    let (complete, _allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "racing restore destination slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect("forward prefix reaches system-triggers complete");
+
+    let archived = complete
+        .archive_previous_tree()
+        .expect("archive_previous advances through PreviousArchived");
+    let installation = archived.installation();
+    let tree_identity = archived.tree_identity();
+    let previous_id = archived
+        .record()
+        .previous
+        .id
+        .map(crate::state::Id::from)
+        .expect("archived record has a predecessor");
+
+    // The exchange consumed `staging/usr`; race an empty one back in before
+    // the restore tries to move the predecessor there.
+    fs::create_dir_all(&staged).unwrap();
+    let occupant = fs::symlink_metadata(&staged).unwrap().ino();
+
+    let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+    let failure = tree_identity
+        .restore_previous_with_journal(installation, previous_id, &seal)
+        .err()
+        .expect("restoring over a racing destination must refuse");
+
+    // `Ambiguous`, not `NotApplied`: with the destination occupied the restore
+    // cannot distinguish "my rename never happened" from "it happened and
+    // something recreated the source", so it declines to claim either. That is
+    // the honest outcome, and the physical assertions below are what actually
+    // pin the no-replace guarantee.
+    assert_eq!(
+        failure.outcome(),
+        crate::transition_identity::RetainedPreviousMoveOutcome::Ambiguous,
+    );
+    assert_eq!(
+        fs::symlink_metadata(&staged).unwrap().ino(),
+        occupant,
+        "the racing staging destination was replaced"
+    );
+    assert_eq!(
+        fs::read_dir(&staged).unwrap().count(),
+        0,
+        "the predecessor was moved into the racing destination"
+    );
+}

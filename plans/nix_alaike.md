@@ -78,19 +78,38 @@ build_inputs = {
 ### Pillar 3: Development Shell Engine (`cast develop`)
 Introduce `cast develop` (or `onix develop`) in the `cast` CLI:
 - Evaluates `stone.lua` / `stone.glu` / `dev.lua`.
-- Realizes required dependency store paths in `/onix/store/`.
+- Realizes required dependency store paths in the resolved store location.
 - Constructs environment variables (`PATH`, `PKG_CONFIG_PATH`, `LD_LIBRARY_PATH`, `CPATH`, `CMAKE_PREFIX_PATH`).
 - Launches the interactive subshell with `shell_hook` execution.
+
+### Pillar 4: Configurable `ONIX_PATH` & Local Store Resolution ($PWD/.onix)
+To support non-root environments, CI/CD runners, and per-project isolated stores, the store location is **dynamically configurable and relocatable**:
+
+```text
+Store Path Resolution Priority Hierarchy:
+
+1. CLI Argument:          cast develop --store <path> / --onix-path <path>
+2. Environment Variable:  $ONIX_PATH (e.g. ONIX_PATH=$PWD/.onix)
+3. Local Project Store:   $PWD/.onix/store  (if .onix/ directory exists in project root)
+4. User-Local Store:      $XDG_DATA_HOME/onix/store  (e.g. ~/.onix/store)
+5. System-Wide Store:     /onix/store
+```
+
+#### Why $PWD/.onix/ is Powerful:
+* **Rootless / User Space**: Developers without `sudo` access can run `cast develop` seamlessly using `$PWD/.onix/store` or `~/.onix/store`.
+* **Project Hermeticity**: Teams can isolate project artifacts inside `$PWD/.onix/` for clean teardowns or container mounts.
+* **Asset Deduplication**: Files inside `$PWD/.onix/store/<hash>-<name>/` are still hardlinked from the local or user asset pool, ensuring zero storage duplication!
 
 ---
 
 ## 4. Phase-by-Phase Implementation Roadmap
 
-### Phase 1 — Store Path Abstraction (`crates/forge/src/store.rs`)
-- Implement `StorePath` and `StoreManager` in `forge`.
-- Add `materialize_package_to_store(installation, package_meta, derivation_id)`:
-  - Creates `/onix/store/<derivation_id>-<pname>-<version>/`.
-  - Hardlinks individual files from `/var/lib/cast/assets/v2/<content_hash>`.
+### Phase 1 — Store Path & `ONIX_PATH` Abstraction (`crates/forge/src/store.rs`)
+- Implement `StorePath`, `StoreManager`, and `OnixPathResolver` in `forge`.
+- Add resolution logic for `ONIX_PATH` / `$PWD/.onix/store` / `~/.onix/store` / `/onix/store`.
+- Add `materialize_package_to_store(installation, store_root, package_meta, derivation_id)`:
+  - Creates `<resolved_store_root>/<derivation_id>-<pname>-<version>/`.
+  - Hardlinks individual files from asset pool.
 
 ### Phase 2 — Hashed Dependency Provenance in `.stone` Manifests
 - Update `crates/mason/src/package/emit/manifest.rs` to record dependency `derivation_id` entries alongside provider relations (`binary`, `soname`, `pkgconfig`).
@@ -119,20 +138,22 @@ return {
 ```
 
 ### Phase 4 — `cast develop` Subcommand (`bin/cast`, `crates/forge`)
-- Add CLI subcommands for `cast develop` (`--file`, `--command`, `--export-env`).
+- Add CLI subcommands for `cast develop` (`--file`, `--command`, `--export-env`, `--store`).
 - Environment Vector Builder:
-  - `PATH`: prepends `/onix/store/<drv_id>-<name>/bin`
-  - `PKG_CONFIG_PATH`: prepends `/onix/store/<drv_id>-<name>/lib/pkgconfig`
-  - `CPATH` / `C_INCLUDE_PATH`: prepends `/onix/store/<drv_id>-<name>/include`
-  - `LIBRARY_PATH` / `LD_LIBRARY_PATH`: prepends `/onix/store/<drv_id>-<name>/lib`
-  - `CMAKE_PREFIX_PATH`: prepends `/onix/store/<drv_id>-<name>`
+  - Resolves active store root `S = resolve_onix_path()`.
+  - `PATH`: prepends `S/<drv_id>-<name>/bin`
+  - `PKG_CONFIG_PATH`: prepends `S/<drv_id>-<name>/lib/pkgconfig`
+  - `CPATH` / `C_INCLUDE_PATH`: prepends `S/<drv_id>-<name>/include`
+  - `LIBRARY_PATH` / `LD_LIBRARY_PATH`: prepends `S/<drv_id>-<name>/lib`
+  - `CMAKE_PREFIX_PATH`: prepends `S/<drv_id>-<name>`
 - Spawns target shell (`$SHELL` or `/bin/bash`) executing declared `shell_hook`.
 
 ### Phase 5 — FHS Mount Namespace Isolation (Optional Sandbox Mode)
 - Support `--sandbox` / `--fhs` flag for `cast develop`:
-  - Uses unprivileged Linux user mount namespaces (`unshare -m -U`) to mount an ephemeral `/usr` tree (via OverlayFS / tmpfs) populated only with the project's declared dev dependencies.
+  - Uses unprivileged Linux user mount namespaces (`unshare -m -U`) to mount an ephemeral `/usr` tree (via OverlayFS / tmpfs) populated only with the project's declared dev dependencies from `S/`.
   - Allows standard compilers and tools (`gcc`, `clang`, `cargo`, `npm`) to work natively in `/usr` inside the shell without needing `patchelf` or RPATH modifications!
 
 ### Phase 6 — Garbage Collection & Shell Tooling
-- `cast store gc`: Extends `forge/src/client/prune.rs` to sweep unreferenced `/onix/store/` paths while preserving pinned system states and active dev shell roots.
+- `cast store gc`: Extends `forge/src/client/prune.rs` to sweep unreferenced store paths across configured `ONIX_PATH` locations while preserving pinned system states and active dev shell roots.
 - `cast direnv dump`: Generates `.envrc` compatible environment exports for seamless IDE integration.
+
