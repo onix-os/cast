@@ -2283,3 +2283,35 @@ files nothing in this epic touched, such as `fixed_staging.rs`. Running
 carry some of that churn in `transition_identity`. Either run `cargo fmt` once
 across the crate as its own commit, or stop formatting whole files by hand;
 doing neither means every future diff mixes real changes with reflow.
+
+### `stateful_activation_recovery.rs` (7) — sized 2026-08-04
+
+Every one of the seven asserts a **legacy-only inline disposition**, not a
+coordinated outcome:
+
+| assertion | tests | status on the coordinated route |
+|---|---|---|
+| `Error::StatefulTransitionUsrRestored` | `new_stateful_post_swap_failure_*`, `previous_archive_never_replaces_a_racing_empty_destination` | does not exist — the route parks at its phase and recovery reverses |
+| `Error::StatefulCandidatePreserved` | `new_stateful_pre_swap_failure_*` | does not exist — no inline quarantine |
+| `Error::StatefulTransitionRecoveryFailed` | `incomplete_fresh_reverse_*`, `incomplete_previous_restore_*` | does not exist — legacy recovery's own failure type |
+| `assert_fresh_candidate_quarantined_and_invalidated` | both `new_stateful_*_swap_failure_*` | quarantine-on-failure is legacy-only (`quarantine_candidate` is gated behind `require_no_journal`) |
+
+So the *disposition* half of all seven dies with the route, exactly as it did in
+`stateful_quarantine_recovery.rs`.
+
+**But do not delete on that alone.** Several carry a *physical namespace* claim
+that is independent of the disposition and may have no coordinated equivalent:
+
+- `previous_archive_never_replaces_a_racing_empty_destination`
+- `previous_restore_never_replaces_a_racing_empty_staging_destination`
+- `two_failed_active_state_reblits_use_unique_non_state_quarantines`
+
+"Never replaces a racing empty destination" is a no-replace rename property, not
+a disposition — the same class of claim that made root-ABI #4 a real port rather
+than a duplicate. The last two produced no error-marker in the scan and need
+reading in full.
+
+**Next step:** for each of those three, separate the disposition assertion
+(delete) from the namespace assertion (check against
+`previous_tree_move` suffix tests and `usr_rollback_candidate_preserve_authority`,
+then port whatever is uncovered).
