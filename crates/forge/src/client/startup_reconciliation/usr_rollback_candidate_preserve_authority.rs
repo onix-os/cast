@@ -239,6 +239,17 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             ));
         }
         if !crate::transition_journal::rollback_evidence_is_on_chain(record) {
+            // Logged, unlike the phase-mismatch `NotApplicable` above. Reaching
+            // here means the record *is* at CandidatePreserveIntent but its
+            // rollback evidence does not sit on the chain, so candidate
+            // preservation silently declines a record that named it — which is
+            // indistinguishable from a stall at the gate.
+            tracing::warn!(
+                operation = ?record.operation,
+                phase = ?record.phase,
+                transition = %record.transition_id.as_str(),
+                "candidate preservation not applicable: rollback evidence is off-chain"
+            );
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
 

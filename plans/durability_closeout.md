@@ -3110,3 +3110,31 @@ ssh matches the ssh command string itself and kills the shell before it acts.
 That silently produced two stale-log readings here, and I drew a conclusion from
 one of them before noticing the output was byte-identical across "different"
 runs.
+
+### ActiveReblit stall LOCALIZED — the gate is never reached (2026-08-05)
+
+Fourth reproduction, distinct transition id. Two instrumented paths inside
+`UsrRollbackCandidatePreserveAuthority::capture` were checked and **both stay
+silent**:
+
+- all five `Deferred` variants (#30 instrumentation)
+- the off-chain `NotApplicable`
+  (`usr_rollback_candidate_preserve_authority.rs:199`), newly instrumented
+
+**The instrument was calibrated before the negative was trusted** —
+`/tmp/cast --log warn list installed -D /tmp/nonexistent-root` emits a
+tracing-formatted line on stderr, and the driver captures stderr into the string
+the STALL block prints. A warn would have shown. This matters: the same session
+had already been misled four times by uncalibrated instruments, so a silent
+result was not accepted as evidence until silence was shown to be meaningful.
+
+**Therefore `capture` is never called.** The
+`usr_rollback_active_reblit.rs:160` `CandidatePreserveIntent` arm is not
+reached; something upstream in the startup-gate chain claims or drops the
+ActiveReblit record first. `usr_rollback_resume_route.rs` also references this
+phase and is the prime suspect.
+
+**Next step:** warn at each dispatcher's entry with operation+phase, run the
+cell once, and read which handler sees the record first. The ActivateArchived
+chain reaches its gate and completes for the same phase, so diffing the two
+routings should isolate it immediately.
