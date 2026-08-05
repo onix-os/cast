@@ -241,8 +241,16 @@ stage_and_reblit() {
         echo "CELL-FAIL no package file to damage under /mnt/root/usr/share"
         return 1
     fi
-    echo "DAMAGED $victim"
+    echo "DAMAGE-TARGET $victim"
     rm -f "$victim"
+    # Prove the damage landed. A silent no-op here scores NOT-ON-CHAIN, which
+    # reads like a verdict about the phase when it is a statement about setup.
+    if [ -e "$victim" ]; then
+        echo "DAMAGE-FAILED $victim still present"
+    else
+        echo "DAMAGE-OK $victim removed"
+    fi
+    echo "DAMAGE-LIVE-TREE $(ls -d /mnt/root/usr 2>&1); usr-share-count=$(find /mnt/root/usr/share -type f 2>/dev/null | wc -l)"
     # Unpiped: this is the command that parks. See the note in stage_and_activate.
     cast -D /mnt/root -y state verify 2>&1
 }

@@ -3034,3 +3034,42 @@ failure mode — a setup no-op scoring as a verdict — is the same one
 
 **Archived repair** has no cell yet; `verify` handles archived states in the
 same pass, so the same damage vector likely unblocks both.
+
+### ActiveReblit cell — DEFECT FOUND 2026-08-05 (task #31)
+
+The damage vector was never the problem. Two "identical" `No issues found`
+results were **stale logs**: `pkill -f crash-matrix-run.sh` issued over ssh
+matches the ssh command string itself, so it killed its own shell before
+`nohup` launched, and I then read the previous run's log twice and drew a
+conclusion from it. Byte-identical output including the same asset hashes was
+the tell, and I explained it away as determinism. **Kill patterns must exclude
+self — use `pgrep -f "[c]rash-matrix-run"`.**
+
+With a genuinely fresh run:
+
+    reblit  phase:ActiveReblit.CandidatePrepared
+            recovery=PENDING driver=stalled-at-CandidatePreserveIntent state=absent
+    PHASE-1: CandidatePreserveIntent
+    STALL: ... at CandidatePreserveIntent requires ResumeRollback{...};
+           recovery effects remain blocked by []
+
+**ActiveReblit rollback advances once and stops.** `state=absent` — the package
+never returns. This is a real durability failure, not slow-but-converging
+recovery: the driver retries to its cap and the phase stops changing, which is
+this plan's own criterion for a genuine stall.
+
+**It is ActiveReblit-specific.** The ActivateArchived cell at the same phase
+walks `CandidatePreserveIntent -> CandidatePreserved -> RollbackComplete` and
+reaches `state=installed`.
+
+`blocked by []` is an empty blocker list — the silent-deferral signature #30
+addressed. The staged guest binary already contains #30, so the deferral now
+carries a reason; it is simply not printed without tracing on. **Next step:
+export `RUST_LOG=warn` in the guest init and read the `candidate preservation
+deferred` line, which names which of the five deferral variants fires.** That is
+precisely what #30 was built for, and it should identify the guard in one run.
+
+The package *does* install under `/usr/share/bash-completion/` (verified by
+extracting `pkg.stone` on the VM — note `cast extract` needs its parent at
+0700), so `find /mnt/root/usr/share -type f | head -1` is a valid target and the
+cell's damage instrumentation (`DAMAGE-TARGET` / `DAMAGE-OK`) can stay.
