@@ -217,14 +217,22 @@ stage_and_activate() {
     # leave its displaced /usr placeholder in fixed staging, so the next stateful
     # operation refused with "fixed staging contains crash or foreign evidence".
     cast -D /mnt/root -y remove bash-completion 2>&1 | tail -2
-    cast -D /mnt/root -y state activate 1 2>&1 | tail -2
+    # Unpiped. `tail` holds its whole input until EOF, and a phase-targeted
+    # `cast` never reaches EOF — parking is the point. So `| tail -2` swallowed
+    # `CAST-AT-PHASE` for exactly the command the marker exists to observe.
+    # Same family as the `>/dev/null 2>&1` bug recorded above and the BusyBox
+    # `grep` bug below: three separate ways this harness has hidden the marker
+    # from itself. Any command that can park must write straight to the console.
+    cast -D /mnt/root -y state activate 1 2>&1
 }
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
     cast index /mnt/repo 2>&1 | tail -1
     cast -D /mnt/root -y repo add local file:///mnt/repo/stone.index 2>&1 | tail -1
-    cast -D /mnt/root -y install bash-completion 2>&1 | tail -2
+    # Unpiped for the same reason as the activate below: a NewState phase cut
+    # parks inside this install, and `tail` would hold the marker forever.
+    cast -D /mnt/root -y install bash-completion 2>&1
 }
 MODE=$(sed -n 's/.*cell_mode=\([a-z]*\).*/\1/p' /proc/cmdline)
 OP=$(sed -n 's/.*cell_op=\([a-zA-Z0-9_./-]*\).*/\1/p' /proc/cmdline | tr '_' ' ')
