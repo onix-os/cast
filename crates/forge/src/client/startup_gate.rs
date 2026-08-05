@@ -641,6 +641,18 @@ impl CleanSystemStartup {
                 }
             };
 
+            // Diagnostic for the ActiveReblit CandidatePreserveIntent stall
+            // (task #31). Measured 2026-08-05: this line never prints for a
+            // stalled reblit record, proving control returns *before* the
+            // active-reblit dispatcher and that the claimant is upstream.
+            // Scoped to ActiveReblit so a normal rollback does not log.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(
+                    phase = ?record.phase,
+                    transition = %record.transition_id.as_str(),
+                    "startup gate: reached the active-reblit rollback dispatcher"
+                );
+            }
             let (journal, record) = match usr_rollback_active_reblit::dispatch(
                 installation,
                 state_db,
