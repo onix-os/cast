@@ -3138,3 +3138,41 @@ phase and is the prime suspect.
 cell once, and read which handler sees the record first. The ActivateArchived
 chain reaches its gate and completes for the same phase, so diffing the two
 routings should isolate it immediately.
+
+### ActiveReblit stall: the claimant is upstream of the reblit dispatcher (2026-08-05)
+
+Fifth reproduction. An **unconditional** `tracing::warn!` placed immediately
+before `usr_rollback_active_reblit::dispatch` (`startup_gate.rs:644`) — no
+predicate at all, it fires whenever control reaches the line — **did not
+print**.
+
+So `CleanSystemStartup::enter` returns before line 644. Combined with the
+earlier negatives, the picture is now:
+
+| checked | result |
+|---|---|
+| all five `Deferred` variants in `capture` | silent |
+| off-chain `NotApplicable` in `capture` | silent |
+| unconditional probe before the reblit dispatcher | **silent** |
+| log path itself (positive control) | **works** — `cast --log warn` emits on stderr, driver captures it |
+
+The claimant is therefore one of the stages *above* `startup_gate.rs:644`:
+the ActiveReblit boot-sync chain (`:276`, `:303`, `:329`, `:355`, `:381`),
+`dispatch_usr_rollback_previous_restore_and_reopen` (`:570`),
+`dispatch_usr_rollback_reverse_and_reopen` (`:605`), or
+`usr_rollback_activate_archived::dispatch` (`:626`).
+
+Note the shape: every one of those returns `Err(Error::RecoveryPending(...))`
+on `Handled`, which is exactly the error the guest reports. A stage that
+*recognises* the record and hands back `RecoveryPending` without advancing it
+produces precisely this stall — the record's phase never changes, so the driver
+sees the same error forever.
+
+**Next step:** bisect with the same probe. Put an ActiveReblit-scoped warn
+before each of those call sites and run the cell once; the last one that prints
+is the claimant. The probe is already committed and scoped to
+`Operation::ActiveReblit`, so it is safe to leave in place while bisecting.
+
+**Method note:** the positive control is what makes each silence load-bearing.
+Without it every one of these negatives would be the same uncalibrated-
+instrument trap this epic hit four times.
