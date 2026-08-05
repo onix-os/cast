@@ -195,6 +195,12 @@ export LD_LIBRARY_PATH=/bin
 # No session manager in this guest, so nothing can interrupt a transaction and
 # forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
 export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
+# A rollback that defers carries a reason but only logs it at `warn`
+# (`usr_rollback_candidate_preserve_authority.rs`). Without this, a stall prints
+# `blocked by []` and names nothing — which is exactly how the ActiveReblit
+# stall (#31) was found but not diagnosed. Set before the mode branch so the
+# verdict boot's driver invocations get it too; that is where stalls surface.
+export RUST_LOG=${RUST_LOG:-warn}
 CRASH_PHASE=$(sed -n 's/.*cell_phase=\([A-Za-z.]*\).*/\1/p' /proc/cmdline | tr '.' ':')
 if [ -n "$CRASH_PHASE" ]; then
     export CAST_CRASH_AT_PHASE="$CRASH_PHASE"
@@ -326,7 +332,11 @@ else
     # changing across several attempts.
     PREV_PHASE=""; STALL=0
     for attempt in $(seq 1 60); do
-        if DRV=$(cast -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
+        # `--log warn`, not RUST_LOG: cast configures tracing from this flag
+        # (`tracing_common::logging::init_log`) and ignores the env var. Without
+        # it a deferral prints `blocked by []` and names nothing, which is how
+        # the ActiveReblit stall (#31) was found but not diagnosed.
+        if DRV=$(cast --log warn -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
         # "no package found" means the cut landed before the repo was indexed,
         # so there is nothing to install and nothing to recover. That is not a
         # durability outcome and must not be reported as a stall.
