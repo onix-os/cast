@@ -3073,3 +3073,40 @@ The package *does* install under `/usr/share/bash-completion/` (verified by
 extracting `pkg.stone` on the VM — note `cast extract` needs its parent at
 0700), so `find /mnt/root/usr/share -type f | head -1` is a valid target and the
 cell's damage instrumentation (`DAMAGE-TARGET` / `DAMAGE-OK`) can stay.
+
+### ActiveReblit stall narrowed — 2026-08-05 (task #31)
+
+Reproduced on **three** independent runs (distinct transition ids each time), so
+it is not the stale-log artefact that muddied the first attempts.
+
+`RUST_LOG=warn` was a false start: cast configures tracing from `--log`
+(`tracing_common::logging::init_log`) and ignores the env var. The driver
+invocation now passes `cast --log warn`.
+
+**The #30 deferral warn did not appear — and that is informative.**
+`usr_rollback_active_reblit.rs:155` handles `Operation::ActiveReblit`, `:160`
+handles `Phase::CandidatePreserveIntent`, and its `Deferred` arm is
+instrumented. Silence means `capture` did **not** return `Deferred`. Two
+candidates remain:
+
+1. `capture` returns `NotApplicable` via `!rollback_evidence_is_on_chain(record)`
+   (`usr_rollback_candidate_preserve_authority.rs:199`). `NotApplicable` is
+   deliberately un-instrumented because it normally means "not my case" — but
+   the record here *is* ActiveReblit at `CandidatePreserveIntent`, so on-chain
+   evidence failing is itself the defect.
+2. The chain never reaches this gate; another dispatcher claims or drops the
+   record first (`usr_rollback_resume_route.rs` also names this phase).
+
+One run separates them: log the `NotApplicable` branch and repeat the cell.
+
+**#30 is validated by this even though it did not name the cause.** It converted
+"stalls, reason unknowable" into "stalls, and provably not via any of the five
+deferral paths" — which is what eliminated half the search space in a single
+run.
+
+**Harness rule learned the hard way:** kill matrix runs with
+`bash /tmp/cmkill.sh` in its *own* ssh invocation. `pkill -f` / `pgrep -f` over
+ssh matches the ssh command string itself and kills the shell before it acts.
+That silently produced two stale-log readings here, and I drew a conclusion from
+one of them before noticing the output was byte-identical across "different"
+runs.
