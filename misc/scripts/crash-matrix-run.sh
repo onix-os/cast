@@ -179,9 +179,9 @@ if [ ! -r "$KERNEL" ]; then
 fi
 
 # Operations that write durable state without needing network.
-OPS=(activate)
+OPS=(${MATRIX_OPS:-activate})
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(phase:ActivateArchived.CandidatePrepared)
+CUTS=(${MATRIX_CUTS:-phase:ActivateArchived.CandidatePrepared})
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -225,6 +225,27 @@ stage_and_activate() {
     # from itself. Any command that can park must write straight to the console.
     cast -D /mnt/root -y state activate 1 2>&1
 }
+stage_and_reblit() {
+    stage_and_install
+    # `cast state verify` drives ActiveReblit (`client/verify.rs:295`) only for
+    # an active state it finds *damaged*, so the tree has to be broken first or
+    # verify is a no-op and the cell measures nothing — the same trap
+    # `stage_and_activate` fell into when it activated an already-active state.
+    # Must be a *package* file. Verify flags `MissingVFSPath` only for paths in
+    # the state's VFS (`client/verify.rs:129`), so tree metadata does not count:
+    # a plain `find /mnt/root/usr | head -1` picks up `.stateID`, `.cast-tree-id`
+    # or `lib/os-release` and verify then reports "No issues found", which the
+    # harness scores as NOT-ON-CHAIN — a cell that looks like a real answer.
+    victim=$(find /mnt/root/usr/share -type f 2>/dev/null | head -1)
+    if [ -z "$victim" ]; then
+        echo "CELL-FAIL no package file to damage under /mnt/root/usr/share"
+        return 1
+    fi
+    echo "DAMAGED $victim"
+    rm -f "$victim"
+    # Unpiped: this is the command that parks. See the note in stage_and_activate.
+    cast -D /mnt/root -y state verify 2>&1
+}
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
@@ -265,6 +286,7 @@ if [ "$MODE" = write ]; then
     # in the guest.
     case "$OP" in
         activate) stage_and_activate 2>&1 ;;
+        reblit) stage_and_reblit 2>&1 ;;
         *) stage_and_install 2>&1 ;;
     esac
     echo "CELL-OP-DONE"
@@ -273,7 +295,7 @@ elif [ "$MODE" = control ]; then
     # No cut: let the operation finish and shut down cleanly. Without this the
     # `state` column cannot be read — an absent package could equally mean the
     # cut worked or the install never works in this guest.
-    case "$OP" in activate) stage_and_activate ;; *) stage_and_install ;; esac
+    case "$OP" in activate) stage_and_activate ;; reblit) stage_and_reblit ;; *) stage_and_install ;; esac
     sync
     echo "CELL-OP-DONE"
     poweroff -f
