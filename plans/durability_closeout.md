@@ -3002,3 +3002,35 @@ instrument that the predicate was never the problem.
 
 **Still to run:** ActiveReblit and archived-repair cells. The harness is only
 now capable of measuring them.
+
+### ActiveReblit cell — driver added, damage vector still wrong (2026-08-05)
+
+`MATRIX_OPS` / `MATRIX_CUTS` are now env-overridable, and `stage_and_reblit`
+exists: install, damage the live tree, then `cast state verify -y`, which is the
+only production path to `Operation::ActiveReblit` (`client/verify.rs:295`).
+
+**The cell runs but reports `NOT-ON-CHAIN`** — verify prints `No issues found`,
+so no reblit is attempted and the phase is never reached. Two damage targets
+tried, both wrong:
+
+| target | result |
+|---|---|
+| `find /mnt/root/usr -type f \| head -1` | picks tree metadata (`.stateID`, `.cast-tree-id`, `lib/os-release`) — not in the state's VFS, so not an issue |
+| `find /mnt/root/usr/share -type f \| head -1` | identical `No issues found`; the package may not install under `share/`, or the path was empty |
+
+Verify has two halves and only the second can trigger a reblit: assets are
+checked by hash in the content store (`verify.rs:61`), while
+`MissingVFSPath` is raised only for paths in the *state's VFS* under
+`installation.root.join("usr")` (`verify.rs:129`). The damage must therefore be
+a file the installed package actually owns.
+
+**Next step:** enumerate the package's VFS instead of guessing at the
+filesystem — `cast state query` or the stone contents — and delete a path that
+is provably in it. Print the victim *and* verify's issue count in the cell, so a
+no-op damages loudly instead of scoring `NOT-ON-CHAIN`, which reads like a real
+answer about the phase when it is really a statement about the setup. That
+failure mode — a setup no-op scoring as a verdict — is the same one
+`stage_and_activate` had when it activated an already-active state.
+
+**Archived repair** has no cell yet; `verify` handles archived states in the
+same pass, so the same damage vector likely unblocks both.
