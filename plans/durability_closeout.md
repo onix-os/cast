@@ -3176,3 +3176,39 @@ is the claimant. The probe is already committed and scoped to
 **Method note:** the positive control is what makes each silence load-bearing.
 Without it every one of these negatives would be the same uncalibrated-
 instrument trap this epic hit four times.
+
+### RETRACTION 2026-08-05 — the ActiveReblit localization is not established
+
+The two preceding sections concluded (a) `capture` is never called and (b) the
+claimant sits upstream of `startup_gate.rs:644`. **Both are withdrawn.** They
+rested on forge-side `tracing::warn!` probes staying silent, and that inference
+does not hold.
+
+A bisect with **eight** probes — seven stage markers plus an *unconditional* one
+before the first dispatcher in the chain (`active_reblit_boot_sync_started`,
+`:269`) — produced **no output at all**. A probe that fires whenever control
+reaches a line, on the first stage of the chain, cannot legitimately be silent
+for a record the chain exists to handle. The likelier reading is that
+**forge-side tracing never reaches the guest console**, which voids every probe
+result in this investigation.
+
+**The positive control was mis-targeted, and that is the lesson.** It emitted
+`ERROR cast: ...` — target `cast`, the binary's own. That proves the subscriber
+and the driver's stderr capture work *for that target*. It says nothing about
+whether events from the `forge` library arrive. `init_log` does call
+`.with_default(level)` (`tracing_common/src/logging.rs:23`), so forge events
+ought to pass — making the silence a contradiction that has to be resolved
+before it can be used as evidence.
+
+This is the **fifth** uncalibrated-instrument failure in this epic, and the
+first where the calibration itself was wrong rather than absent. A positive
+control must exercise *the same target, sink and filter path* as the
+measurement, not merely the same binary.
+
+**Next step, before any further bisecting:** unconditional `tracing::warn!` at
+the very top of `CleanSystemStartup::enter`, before any fallible call.
+Prints => forge tracing works, silences are real, resume the bisect.
+Silent => the instrument is broken and every probe result so far is void.
+
+**The defect itself is unaffected and remains solid:** six reproductions,
+distinct transition ids, `state=absent`, ActiveReblit-specific.

@@ -266,6 +266,9 @@ impl CleanSystemStartup {
             // BootSyncStarted. An exactly pending or legacy receipt remains
             // rollback-eligible, while an exactly promoted receipt stays at
             // this forward checkpoint until cleanup recovery can resume it.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "boot_sync_started", "startup gate stage");
+            }
             let (journal, record) = match active_reblit_boot_sync_started::dispatch(
                 installation,
                 state_db,
@@ -293,6 +296,9 @@ impl CleanSystemStartup {
             // evidence and the one durable successor end this startup entry,
             // so `BootSyncComplete` can never fall through and a newly written
             // `CommitDecided` record can never be redispatched here.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "boot_sync_complete", "startup gate stage");
+            }
             let (journal, record) = match active_reblit_boot_sync_complete::dispatch(
                 installation,
                 state_db,
@@ -319,6 +325,9 @@ impl CleanSystemStartup {
             // replacement mutation, root-ABI normalization, or rollback. A
             // handled source or freshly persisted successor ends this startup
             // entry and is never redispatched here.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "commit_cleanup", "startup gate stage");
+            }
             let (journal, record) = match active_reblit_commit_cleanup::dispatch(
                 installation,
                 state_db,
@@ -345,6 +354,9 @@ impl CleanSystemStartup {
             // complete, then advance once to Complete without changing that
             // receipt. A deferred source or newly persisted successor ends
             // this entry and can never fall through to rollback admission.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "commit_cleanup_complete", "startup gate stage");
+            }
             let (journal, record) = match active_reblit_commit_cleanup_complete::dispatch(
                 installation,
                 state_db,
@@ -371,6 +383,9 @@ impl CleanSystemStartup {
             // rollback logic. Incompatible evidence remains pending; exact
             // evidence consumes one bound deletion and hands the same locked
             // store directly to shared clean admission.
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "complete_finalization", "startup gate stage");
+            }
             let (journal, record) = match active_reblit_complete_finalization::dispatch(
                 installation,
                 state_db,
@@ -615,6 +630,9 @@ impl CleanSystemStartup {
                 return Err(Error::RecoveryPending(pending));
             }
 
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "activate_archived", "startup gate stage");
+            }
             let (journal, record) = match usr_rollback_activate_archived::dispatch(
                 installation,
                 state_db,
@@ -679,6 +697,9 @@ impl CleanSystemStartup {
                 }
             };
 
+            if record.operation == crate::transition_journal::Operation::ActiveReblit {
+                tracing::warn!(phase = ?record.phase, stage = "new_state", "startup gate stage");
+            }
             let (journal, record) = match usr_rollback_new_state::dispatch(
                 installation,
                 state_db,
