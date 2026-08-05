@@ -3212,3 +3212,42 @@ Silent => the instrument is broken and every probe result so far is void.
 
 **The defect itself is unaffected and remains solid:** six reproductions,
 distinct transition ids, `state=absent`, ActiveReblit-specific.
+
+### Why every forge-side probe was invisible — RESOLVED 2026-08-05
+
+Not a tracing problem. **The harness discards all but the last line of the
+driver's output**, and my probes were earlier lines:
+
+    echo "$DRV" | tail -1 | fold -w 160          # crash-matrix-run.sh:362
+
+This is the **fourth** output-swallowing bug in this harness, after
+`>/dev/null 2>&1`, BusyBox `grep`, and `| tail -2`. The authors had already hit
+it once (comment dated 2026-08-01, "that cost a whole round trip") and added a
+`DIAG_GREP` escape hatch — default `-DIAG` — precisely so an instrumented binary
+could speak. My probes were not tagged with it, so they were filtered out, and
+`DIAG-BEGIN -DIAG / DIAG-END` came back empty exactly as designed.
+
+Setting `DIAG_GREP="startup gate"` on the host **also fails**: it is read inside
+the *nested guest*, whose environment comes from the kernel cmdline
+(`cell_mode`, `cell_op`, `cell_phase`) and the init script's own exports. Host
+env does not cross the VM boundary. The log still printed `DIAG-BEGIN -DIAG`,
+which is the tell.
+
+**Fix, requiring no plumbing:** tag the probe messages themselves, e.g.
+`tracing::warn!("-DIAG startup gate: enter")`. The default `DIAG_GREP` then
+surfaces them. Alternatively plumb `DIAG_GREP` through the cmdline alongside
+`cell_phase`.
+
+**Consequences for this investigation.** Every "silence" so far — the five
+`Deferred` variants, the off-chain `NotApplicable`, eight dispatcher-stage
+probes, and the unconditional `enter` control — is **void as evidence**. None of
+them could have printed. The earlier retraction was correct, and the reason is
+now known: not that forge tracing is broken, but that the transport drops it.
+
+The defect is unaffected: **seven reproductions**, distinct transition ids,
+`state=absent`, ActiveReblit-specific.
+
+**Standing rule, now paid for four times over:** in this harness, an instrument
+is not calibrated until you have seen *that exact instrument* produce output
+through *that exact path*. Not the same binary, not the same log level — the
+same line reaching the same sink.
