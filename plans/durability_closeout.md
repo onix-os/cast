@@ -2953,3 +2953,52 @@ Suite **2735 passed, 0 failed, 6 ignored**; 6x163 stress-clean on the
 coordinator module.
 
 **#10 reduces to one step: excise the route from those five files.**
+
+## Crash matrix: first real ActivateArchived phase cut — 2026-08-05 (task #9)
+
+**The harness had been measuring nothing since `fe529969`.** Two output-
+swallowing bugs, found in sequence on the approved VM:
+
+1. **BusyBox `grep`.** The guest init piped the operation through
+   `grep -a --line-buffered "CAST-AT-PHASE"`. BusyBox grep supports *neither*
+   flag, so the pipeline died with a usage message immediately after
+   `CELL-READY` and the install never ran. Signature: qemu burning **15s of CPU
+   in 10:45 of wall clock** — an idle guest, not a slow one. That filter was
+   added in `fe529969`, the same commit that recorded the last end-to-end
+   success, so every cell run after it was inert.
+
+2. **`| tail -2` on a parking command.** `tail` holds its whole input until EOF,
+   and a phase-targeted `cast` never reaches EOF — parking is the entire point.
+   So the pipe swallowed `CAST-AT-PHASE` for exactly the command the marker
+   exists to observe.
+
+That is now **three** distinct ways this harness has hidden the marker from
+itself (`>/dev/null 2>&1`, BusyBox `grep`, `tail`), and four wrong diagnoses
+across the epic. **Standing rule: any command that can park writes straight to
+the console, unpiped, unredirected.** A flooded serial log is cosmetic; it is
+also what settled all three.
+
+**First meaningful verdict:**
+
+    activate  phase:ActivateArchived.CandidatePrepared
+              recovery=PENDING driver=recovered-at-4 state=installed
+    PHASE-1: CandidatePreserveIntent
+    PHASE-2: CandidatePreserved
+    PHASE-3: RollbackComplete
+
+The marker fired — proof by construction, not inference: the runner prints
+`TIMED-OUT` or `NOT-ON-CHAIN` whenever `CAST-AT-PHASE` is absent from the
+console, and it printed neither.
+
+Read correctly: a cut at `CandidatePrepared` leaves a record at
+`RollbackDecided`; the read-only path *correctly* refuses (`recovery=PENDING`
+is right, not a failure), and the mutating driver walks the chain to
+`RollbackComplete` in four invocations, ending `state=installed`.
+
+**This independently corroborates the task-#29 correction.** The rollback walks
+*through* `CandidatePreserveIntent` and completes on a real guest — the exact
+phase my in-process fixture stalled at. Confirmation from a different
+instrument that the predicate was never the problem.
+
+**Still to run:** ActiveReblit and archived-repair cells. The harness is only
+now capable of measuring them.
