@@ -243,6 +243,14 @@ impl CleanSystemStartup {
         system: &MutableSystemCapabilities,
         active_state_reservation: &ActiveStateReservation,
     ) -> Result<Self, Error> {
+        // POSITIVE CONTROL for task #31. Unconditional, before any fallible
+        // call, so it fires on every startup without exception. Its only job is
+        // to prove that a `tracing` event emitted from the `forge` library
+        // reaches the same sink the crash-matrix driver captures. Eight probes
+        // deeper in this function stayed silent, and that silence was used as
+        // evidence before anyone checked whether forge-side tracing arrives at
+        // all — the earlier control emitted from target `cast`, not `forge`.
+        tracing::warn!("startup gate: enter");
         let installation = system.installation();
         let state_db = system.state_db();
         installation.revalidate_mutable_namespace()?;
