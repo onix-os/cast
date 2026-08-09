@@ -3425,3 +3425,38 @@ gate *with* an exclusion test proving the projection holds for ActiveReblit, or
 by writing a dedicated no-reservation effect. Then re-run the guest cell, and
 also cut at a post-reservation phase to prove the wrapper-bearing shapes still
 work.
+
+## Crash matrix closed out — 2026-08-09 (task #9)
+
+All three operations answered.
+
+| cell | result |
+|---|---|
+| ActivateArchived @ CandidatePrepared | marker fires; rollback walks to `RollbackComplete`, `state=installed` |
+| ActiveReblit @ CandidatePrepared | marker fires; **real defect** — stalls at `CandidatePreserveIntent`, `state=absent` (task #31) |
+| archived repair | **not expressible as a phase cut** — architectural |
+
+**Why archived repair cannot be phase-cut.** `CAST_CRASH_AT_PHASE` parks when a
+transition record becomes durable at a named phase. **Archived repair never
+writes a record.** It opens the journal only to hold the lock and assert a clean
+baseline (`archived_state_repair/preparation.rs:35-42` — `open_retained` then
+`require_clean_baseline`) and never advances it. There is no phase to target.
+
+The only alternative is a wall-clock cut, which this plan already rejects:
+wall-clock cuts cannot isolate one operation's window when the setup before it
+takes seconds, and such cells look green without testing what they name.
+
+So the §A2 instruction to run archived repair "first — it is the newest
+durability claim and has zero crash coverage" is **unachievable as written**.
+Closing that gap needs archived repair to become a journalled operation, which
+is a design change, not a harness change. Worth its own task; the gap is real.
+
+**The harness itself is now trustworthy, which it was not at the start.** Four
+distinct output-swallowing bugs were found and fixed — BusyBox `grep` (which
+supports neither `-a` nor `--line-buffered`, so the guest died at `CELL-READY`
+and every cell since `fe529969` measured nothing), `| tail -2` on a command that
+parks by design, `tail -1` in the STALL block discarding every probe, and
+`pkill -f` over ssh killing its own shell. Standing rule now in the script: **any
+command that can park writes straight to the console, unpiped and
+unredirected.** A flooded serial log is cosmetic; it is also what settled all
+four.
