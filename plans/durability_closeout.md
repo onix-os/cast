@@ -3460,3 +3460,31 @@ parks by design, `tail -1` in the STALL block discarding every probe, and
 command that can park writes straight to the console, unpiped and
 unredirected.** A flooded serial log is cosmetic; it is also what settled all
 four.
+
+### ActiveReblit exclusion baseline measured — 2026-08-09 (task #31)
+
+A cut at a **post**-reservation phase completes cleanly:
+
+    reblit  phase:ActiveReblit.TransactionTriggersComplete
+            recovery=PENDING driver=recovered-at-4 state=installed
+    PHASE-1: CandidatePreserveIntent
+    PHASE-2: CandidatePreserved
+    PHASE-3: RollbackComplete
+
+Same operation, same `CandidatePreserveIntent` phase, opposite outcome from the
+`CandidatePrepared` cut. That is the diagnosis confirmed from the other side:
+**the wrapper-bearing topology works; only the pre-reservation window is
+broken.** Nothing about ActiveReblit rollback is generally wrong.
+
+**This is the exclusion baseline the fix must not break.** It was the one piece
+of verification listed as mandatory before writing the new effect, and it now
+exists as a measured result rather than an intention. Re-run this exact cell
+after implementing the effect; if it stops reaching `RollbackComplete`, the new
+branch has widened into the wrapper-bearing shape.
+
+Both cells together bracket the defect precisely:
+
+| cut | reservation done? | wrapper present? | outcome |
+|---|---|---|---|
+| `CandidatePrepared` | no | no | **stalls**, `state=absent` |
+| `TransactionTriggersComplete` | yes | yes | completes, `state=installed` |
