@@ -3293,3 +3293,54 @@ From the retired `plans/cleanup_legacy.md` §§3–4, recoverable with
   exported at `transition_identity.rs:113`, caller at
   `core/stateful_recovery.rs:139`, error variant at `core/error.rs:787`. Delete
   with its caller; the coordinator boot route supersedes it.
+
+## ActiveReblit stall — ROOT CAUSE 2026-08-09 (task #31)
+
+    candidate preservation deferred
+      reason=namespace inspection could not begin:
+             the exact active-reblit replacement wrapper is absent
+      phase=CandidatePreserveIntent
+
+**The ActiveReblit rollback demands a replacement wrapper that is not there.**
+`UsrRollbackCandidatePreserveNamespaceInspection::begin` fails, `capture`
+returns `Deferred(NamespaceInspectionBegin)`, the gate maps that to
+`Unhandled`, and nothing after a power cut will ever create the wrapper — so the
+deferral is permanent. The rollback advances `RollbackDecided ->
+CandidatePreserveIntent` and stalls there forever with `state=absent`.
+ActivateArchived at the same phase completes, because its topology does not
+require that wrapper.
+
+The full gate trail now logs in order — boot_sync_started, boot_sync_complete,
+commit_cleanup, commit_cleanup_complete, complete_finalization,
+activate_archived, *reached the active-reblit rollback dispatcher*, capture,
+deferral, new_state — which also confirms the retracted claims were wrong for
+the reason already identified: the harness was discarding probe output, not the
+code failing to run.
+
+**Next:** find where the replacement wrapper is created on the forward path.
+Either it is created *after* `CandidatePrepared`, in which case the rollback
+predicate must accept its absence for pre-creation sources, or the rollback's
+own earlier steps removed it. Grep the error variant in
+`startup_reconciliation/activation_namespace/` for the predicate, then compare
+against what the forward path has actually built by `CandidatePrepared`.
+
+**Note the symmetry with #29.** That was a *fixture* supplying a wrapper the
+forward path never creates. This is the mirror image in *product* code — a
+rollback predicate demanding a wrapper absent at that phase. Both may trace to
+the same wrapper-lifecycle assumption; worth checking together.
+
+### Harness, now genuinely repaired
+
+The STALL block printed only `echo "$DRV" | tail -1`, discarding every probe —
+the **fourth** output-swallowing bug here. It now also greps `WARN`, which
+needs no per-probe tagging and no env plumbing (`DIAG_GREP` cannot cross the
+host/guest boundary; the guest's environment comes from the kernel cmdline).
+
+Re-staging notes after a VM reboot wipes `/tmp`: `nixlibs.tgz` must contain
+**both** the `/nix/store/...` paths (the binary's ELF interpreter is an absolute
+store path) **and** `bin/` copies of each `.so` (`LD_LIBRARY_PATH=/bin` resolves
+the rest). Store paths alone yields `liblzma.so.5: cannot open shared object
+file`; `bin/` alone yields `cast: not found`.
+
+**Do not run `cargo build --release` while the VM is up** — it OOM-killed the
+host and took the VM down with it (exit 137), destroying the staged environment.

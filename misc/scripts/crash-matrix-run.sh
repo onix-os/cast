@@ -368,8 +368,16 @@ else
                 # (default `-DIAG`) so an instrumented binary can actually say
                 # why it refused. Always emit the marker line, so a run with no
                 # matches is distinguishable from a run whose output was eaten.
-                echo "DIAG-BEGIN ${DIAG_GREP:--DIAG}"
-                echo "$DRV" | grep -a -- "${DIAG_GREP:--DIAG}" | head -20 || true
+                # Also surface every WARN line. Requiring a `-DIAG` tag meant a
+                # `tracing::warn!` added to diagnose a stall was still filtered
+                # out, so eight probes — including an unconditional one — read as
+                # "the code path never ran" when the transport was simply
+                # dropping them (2026-08-05). `DIAG_GREP` cannot be set from the
+                # host either: it is read inside the nested guest, whose
+                # environment comes from the kernel cmdline, so host env never
+                # arrives. Matching WARN needs neither a tag nor plumbing.
+                echo "DIAG-BEGIN ${DIAG_GREP:--DIAG}|WARN"
+                echo "$DRV" | grep -aE -- "${DIAG_GREP:--DIAG}|WARN" | head -40 || true
                 echo "DIAG-END"
                 break
             fi
