@@ -3344,3 +3344,44 @@ file`; `bin/` alone yields `cast: not found`.
 
 **Do not run `cargo build --release` while the VM is up** — it OOM-killed the
 host and took the VM down with it (exit 137), destroying the staged environment.
+
+### The wrapper lifecycle — why it breaks, and the fix design (2026-08-09)
+
+**The replacement wrapper is created by the ActiveReblit *reservation*
+(`reserve_for_transaction_triggers`), which runs after `CandidatePrepared`.**
+A cut at `CandidatePrepared` therefore lands in a window where the wrapper does
+not exist yet — and `active_reblit_topology` requires it unconditionally
+(`candidate_preserve_proof.rs:783-787`). Both shapes it accepts,
+`ActiveReblitStaged` and `ActiveReblitPreserved`, carry a `wrapper_index`, so
+neither can express "reservation never happened".
+
+That is the whole defect: **a rollback predicate written for the post-
+reservation topology, applied to a pre-reservation source.** `archived_topology`
+has no such requirement, which is exactly why ActivateArchived completes at the
+same phase.
+
+**Fix, with every site identified — see task #31 for the full form:**
+
+1. New `UsrRollbackCandidatePreserveTopology` variant with no `wrapper_index`.
+2. `active_reblit_topology`: accept a missing wrapper **only** in the staged
+   shape (candidate in staging, staging contains it, no slot identity). If the
+   candidate claims to live in a wrapper, a missing wrapper stays an error.
+3. Map the new variant to the quarantine effect, not
+   `ExchangeActiveReblit` — with no reservation there is nothing to unpark.
+4. Keep it out of `is_preserved()`; it is a staged shape.
+5. In-process test for the new shape; check `tests/topology_refusal.rs` does not
+   conflict.
+6. Verify on the guest, then **also cut at a post-reservation phase** to prove
+   the wrapper-bearing shapes still work. Three over-widenings happened in this
+   epic and every one was caught by an exclusion test, not by the admission
+   invariants added beside it.
+
+**Not implemented here, deliberately.** This is the code that decides what
+happens to a real system after a crash, and a half-applied change to it is worse
+than a diagnosed-but-unfixed stall. The design above is complete enough to
+execute directly.
+
+**Cleanup owed:** `startup_gate.rs` carries 8 diagnostic probes from this
+investigation. The off-chain `NotApplicable` warn and the #30 deferral reasons
+should stay — they are what made this findable — but the stage markers should be
+trimmed before merge.
