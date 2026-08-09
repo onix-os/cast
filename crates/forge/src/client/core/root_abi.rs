@@ -109,10 +109,6 @@ fn sync_retained_root_abi(directory: &fs::File) -> io::Result<()> {
 
 
 impl RootAbiPreflight {
-    fn path(&self) -> &Path {
-        &self.root
-    }
-
     fn revalidate(&self) -> Result<(), Error> {
         require_root_abi_directory(&self.root, &self.directory, self.identity)?;
         for (source, target, pinned) in &self.links {
