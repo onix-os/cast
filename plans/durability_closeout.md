@@ -3488,3 +3488,31 @@ Both cells together bracket the defect precisely:
 |---|---|---|---|
 | `CandidatePrepared` | no | no | **stalls**, `state=absent` |
 | `TransactionTriggersComplete` | yes | yes | completes, `state=installed` |
+
+### #31: the "share the NewState preserve path" shortcut does NOT work
+
+Tested and rejected 2026-08-09, so the next session need not repeat it.
+
+The NewState capture looked operation-agnostic in substance — candidate tree by
+token, `marker.links == 1`, exact staging wrapper, quarantine target matched
+against `record.quarantine_name` — with no fresh-db logic (that happens in the
+separate `FreshDbInvalidationIntent` phase *after* `CandidatePreserved`). And
+ActiveReblit's rollback disposition is `Quarantine`, the same as NewState's, so
+the two genuinely want the same effect.
+
+**But the path carries four separate `Operation::NewState` gates, not one:**
+
+    effect_evidence.rs:66
+    capture/wrappers.rs:104                          <- namespace classification
+    capture/new_state_candidate_preserve.rs:178
+    capture/new_state_candidate_target_preparation.rs:312
+
+`wrappers.rs:104` is the dangerous one: it sits in shared classification, so
+relaxing it could change how *other* operations' topologies are read. Four gates
+that each may exist for a different reason is precisely the shape of the three
+over-widenings this epic already suffered, every one caught by an exclusion test
+rather than by the invariants added beside it.
+
+So the remaining work stays as scoped in task #31: a dedicated ActiveReblit
+no-reservation effect. Before writing it, read each of those four gates and
+record *why* it is there — that reading is the real prerequisite, not the code.
