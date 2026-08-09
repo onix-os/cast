@@ -39,13 +39,6 @@ enum StatefulTransitionCheckpoint {
     BeforeRecoveryBootSynchronization,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StatefulCandidateOrigin {
-    Fresh,
-    Archived,
-    ActiveReblit,
-}
-
 /// One ephemeral filesystem candidate plus the process-local writer lease
 /// held from destructive materialization through metadata and trigger work.
 struct EphemeralCandidate {
@@ -56,32 +49,6 @@ struct EphemeralCandidate {
     active_state: active_state_snapshot::ActiveStateLease,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreviousUsrLocation {
-    Staging,
-    Archived(state::Id),
-}
-
-#[derive(Debug, Default)]
-struct StatefulRecoveryFailures {
-    previous_archive_cleanup: Option<Box<Error>>,
-    restore_previous: Option<Box<Error>>,
-    reverse_exchange: Option<Box<Error>>,
-    preserve_candidate: Option<Box<Error>>,
-    invalidate_candidate: Option<Box<Error>>,
-    repair_boot: Option<Box<Error>>,
-}
-
-impl StatefulRecoveryFailures {
-    fn is_empty(&self) -> bool {
-        self.previous_archive_cleanup.is_none()
-            && self.restore_previous.is_none()
-            && self.reverse_exchange.is_none()
-            && self.preserve_candidate.is_none()
-            && self.invalidate_candidate.is_none()
-            && self.repair_boot.is_none()
-    }
-}
 
 /// One executable path that must be supplied by one exact package in a
 /// materialized frozen closure.
