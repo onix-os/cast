@@ -3578,3 +3578,33 @@ The types are what couple the effect to the successor — which is the same
 lesson route 4 proved at runtime, now visible statically. Any attempt to reuse
 `MoveNewState` wholesale re-creates the stack overflow, because its reconcile
 produces a NewState authority and therefore a NewState successor.
+
+### #31: complete type-level specification of the missing component
+
+Traced end to end 2026-08-09. The reuse boundary is exact:
+
+**Reusable** — `prepare_move` / `reconcile_move` on
+`UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence`
+(`candidate_preserve_proof/effect_reconciliation.rs:62,96`). The move itself is
+operation-agnostic, and its capture is too (verified).
+
+**Not reusable** — everything downstream of the move:
+
+    UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority
+      holds ReconciledActiveReblitCandidatePreserveEffect<
+              UsrRollbackActiveReblitCandidatePreserveAppliedNamespace>
+
+That namespace type encodes the **wrapper exchange**, and its durability entry
+is `complete_post_exchange_durability` — exchange-specific by name and by shape.
+A quarantine move cannot produce it.
+
+So the missing component is a parallel applied-authority + durability path:
+a `MoveActiveReblit` lease whose `reconcile` yields an ActiveReblit-typed
+applied authority built from a *move* namespace rather than an *exchange* one,
+plus its `complete_post_move_durability`, its
+`CandidatePreserveDurabilityReady::ActiveReblit` arm, the selection variant and
+the dispatch arm. Roughly 300 lines across four files.
+
+Everything on either side of it already exists: the capture (agnostic), the
+move (agnostic), and the successor route
+(`usr_rollback_active_reblit.rs:191`, `Phase::CandidatePreserved`).
