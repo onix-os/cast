@@ -47,7 +47,6 @@ mod fault_injection;
 mod journal_active_reblit;
 #[allow(dead_code)] // contract-only until startup reconciliation can consume its records
 mod journal_coordinator;
-mod legacy_boot_repair;
 mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
@@ -110,7 +109,6 @@ pub(crate) use journal_coordinator::{
     StatefulTransitionCoordinatorError, StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
     execute_activate_archived_forward, execute_active_reblit_forward, execute_new_state_forward,
 };
-pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;
 
 #[allow(unused_imports)]
