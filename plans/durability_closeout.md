@@ -3552,3 +3552,29 @@ this epic an exclusion/endpoint test caught an over-widening the admission-side
 assertions missed.
 
 Tree reverted to the detection-only state and green at 2731 passed.
+
+### #31: the remaining component, mapped exactly
+
+The dispatch (`usr_rollback_candidate_preserve_dispatch.rs:197-250`) maps each
+selection variant to a `CandidatePreserveDurabilityReady::{NewState, Archived,
+ActiveReblit}`, and *that* enum determines the successor phase. Each arm's
+`lease.reconcile(...)` yields an operation-typed authority which the matching
+`DurabilityReady` variant requires.
+
+So the missing piece is precisely:
+
+> a lease whose **apply** is `MoveNewState`'s quarantine move (staged candidate
+> into the record-named target, no wrapper), but whose **reconcile** yields an
+> ActiveReblit-typed authority so it lands in
+> `CandidatePreserveDurabilityReady::ActiveReblit`.
+
+That is one new effect type plus its selection arm and dispatch arm. Everything
+on either side already exists: the namespace capture is verified
+operation-agnostic, and the successor route
+(`usr_rollback_active_reblit.rs:191`, `Phase::CandidatePreserved`) is already
+implemented.
+
+The types are what couple the effect to the successor — which is the same
+lesson route 4 proved at runtime, now visible statically. Any attempt to reuse
+`MoveNewState` wholesale re-creates the stack overflow, because its reconcile
+produces a NewState authority and therefore a NewState successor.
