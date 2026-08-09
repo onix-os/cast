@@ -22,7 +22,14 @@ impl ExchangeJournalGuard<'_> {
 
 #[derive(Clone, Copy)]
 enum JournalAcquisition<'authority> {
-    LegacyBlocking,
+    /// Preparation entered without a coordinator or recovery seal.
+    ///
+    /// Non-blocking like the sealed variants. It used to block, which is how
+    /// two live identities in one process deadlocked against each other: the
+    /// second acquisition waited forever on a lock the first still held. A
+    /// contended journal now fails fast instead, which is the same answer the
+    /// sealed paths already gave.
+    Unsealed,
     CoordinatorNonblocking(&'authority crate::client::JournalUsrExchangePreparationSeal),
     /// The dispatcher already holds the journal, so a blocking acquisition
     /// would deadlock against itself; and a clean baseline is by definition
@@ -61,7 +68,7 @@ impl JournalAcquisition<'_> {
         root: &Path,
     ) -> Result<TransitionJournalStore, crate::transition_journal::StorageError> {
         match self {
-            Self::LegacyBlocking => TransitionJournalStore::open_in_retained_cast(cast, root),
+            Self::Unsealed => TransitionJournalStore::try_open_in_retained_cast(cast, root),
             Self::CoordinatorNonblocking(seal) => {
                 let _seal = seal;
                 TransitionJournalStore::try_open_in_retained_cast(cast, root)
@@ -147,7 +154,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::ExistingId(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -169,7 +176,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::UnknownIdAbsent,
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -192,7 +199,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -215,7 +222,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::ExistingId(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -235,7 +242,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::UnknownIdAbsent,
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -257,7 +264,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
