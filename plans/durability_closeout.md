@@ -3251,3 +3251,45 @@ The defect is unaffected: **seven reproductions**, distinct transition ids,
 is not calibrated until you have seen *that exact instrument* produce output
 through *that exact path*. Not the same binary, not the same log level — the
 same line reaching the same sink.
+
+## TASK #10 COMPLETE — the legacy route is deleted (2026-08-05)
+
+`crates/forge/src/client/core/stateful_transition.rs` (575 lines) is gone, along
+with its `include!` in `client/mod.rs`.
+
+**It turned out to be entirely dead**, which the earlier count did not reveal.
+The file held exactly one `impl Client` block with three methods forming a
+closed chain:
+
+    apply_stateful_blit_with_checkpoint  (#[cfg(test)])
+      -> apply_stateful_blit_with_capability
+        -> commit_stateful_staging
+
+with **no external caller**. The `#[allow(dead_code)] // NOT dead — see
+plans/cleanup_legacy.md §§3-4` marker on the middle function referred to the
+`#[cfg(test)]` callers this epic spent the session removing; once they were
+gone, so was every reference. The four "remaining call sites" reported earlier
+in other files were all **comments**, not code — the same call-site-counting
+error that inflated the deletion estimate twice before.
+
+**Suite: 2735 passed, 0 failed, 6 ignored.** A first run showed failures that
+were entirely the `$TMPDIR` fault (unset `TMPDIR` falls back to world-writable
+`/tmp`; `UnsafeInitialMaterializationParent { mode: 1023 }`). Re-running with
+`TMPDIR` at 0700 is clean, and deleting unreferenced code cannot change other
+tests' behavior in any case.
+
+### Follow-on cleanup this unblocks
+
+From the retired `plans/cleanup_legacy.md` §§3–4, recoverable with
+`git show e9beb95f^:plans/cleanup_legacy.md`:
+
+- **§3 — legacy journal guards.** `ArchiveJournalGuard::LegacyNoJournal`
+  (`previous_tree_move.rs:36`) and `JournalAcquisition::LegacyBlocking`
+  (`tree_lifecycle.rs:24`), ~22 non-test references, collapse to their
+  coordinator variants; `require_no_journal` disappears with them. `LegacyBlocking`
+  is also why two live identities deadlock, so this simplifies the
+  recovery-identity constructor.
+- **§4 — `legacy_boot_repair`.** `client/legacy_boot_repair.rs` (65 lines),
+  exported at `transition_identity.rs:113`, caller at
+  `core/stateful_recovery.rs:139`, error variant at `core/error.rs:787`. Delete
+  with its caller; the coordinator boot route supersedes it.
