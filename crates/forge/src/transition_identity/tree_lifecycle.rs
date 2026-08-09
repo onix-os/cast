@@ -630,21 +630,6 @@ impl StatefulTreeIdentity {
         )
     }
 
-    /// Forward exchange with one final read-only validation executed inside
-    /// the descriptor-bound preflight immediately before the single syscall.
-    pub(crate) fn exchange_forward_validated(
-        &self,
-        installation: &Installation,
-        validate: &impl Fn() -> Result<(), Error>,
-    ) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(
-            installation,
-            RetainedExchangeDirection::Forward,
-            ExchangeJournalGuard::LegacyNoJournal,
-            validate,
-        )
-    }
-
     /// Coordinator-only forward exchange.  The seal proves that the caller
     /// owns the exact durable `UsrExchangeIntent`; every legacy entry point
     /// continues to require journal absence.
@@ -671,31 +656,6 @@ impl StatefulTreeIdentity {
             RetainedExchangeDirection::Reverse,
             ExchangeJournalGuard::LegacyNoJournal,
             &|| Ok(()),
-        )
-    }
-
-    /// Finish durability after a reverse exchange which is already proven to
-    /// have moved both exact trees.
-    ///
-    /// This path deliberately performs no rename. Retrying an exchange after
-    /// an applied-but-not-yet-durable result would put the failed candidate
-    /// back in the live namespace.
-    pub(crate) fn finish_applied_reverse(&self, installation: &Installation) -> Result<(), Error> {
-        ExchangeJournalGuard::LegacyNoJournal.require(self)?;
-        installation.revalidate_root_directory()?;
-        let staging = self.open_exchange_staging(installation)?;
-        staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
-        self.require_exchange_layout(
-            installation.root_directory(),
-            &installation.root,
-            &staging,
-            RetainedExchangeDirection::Reverse.after(),
-        )?;
-        self.finish_exchange(
-            installation,
-            &staging,
-            RetainedExchangeDirection::Reverse.after(),
-            ExchangeJournalGuard::LegacyNoJournal,
         )
     }
 
