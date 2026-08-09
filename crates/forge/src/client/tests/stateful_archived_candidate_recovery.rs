@@ -711,7 +711,7 @@ fn repeated_archived_activations_reuse_wrapper_slots_beyond_the_scan_bound() {
     let mut fixture = stateful_transition_fixture(true);
     fixture
         .client
-        .activate_state_with_checkpoint(fixture.candidate.id, true, true, |_| Ok(()))
+        .activate_state_inner(fixture.candidate.id, true, true)
         .unwrap();
     fixture.client.installation.active_state = Some(fixture.candidate.id);
     let mut active = fixture.candidate.id;
@@ -723,7 +723,7 @@ fn repeated_archived_activations_reuse_wrapper_slots_beyond_the_scan_bound() {
     for _ in 0..257 {
         let replaced = fixture
             .client
-            .activate_state_with_checkpoint(next, true, true, |_| Ok(()))
+            .activate_state_inner(next, true, true)
             .unwrap();
         assert_eq!(replaced, active);
         fixture.client.installation.active_state = Some(next);

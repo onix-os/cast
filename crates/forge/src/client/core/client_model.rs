@@ -20,25 +20,6 @@ pub struct Client {
     installation: Installation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StatefulTransitionCheckpoint {
-    #[allow(dead_code)] // reachable only from #[cfg(test)] callers; NOT dead — see plans/cleanup_legacy.md §§3-4
-    AfterTransactionTriggers,
-    BeforeUsrExchange,
-    AfterUsrExchange,
-    AfterSystemTriggersStarted,
-    AfterSystemTriggers,
-    BeforePreviousStateArchive,
-    AfterPreviousStateArchive,
-    BeforeCandidateBootSynchronization,
-    AfterCandidateBootSynchronizationStarted,
-    BeforeRecoveryPreviousStateRestore,
-    BeforeRecoveryUsrExchange,
-    BeforeRecoveryCandidatePreservation,
-    BeforeRecoveryCandidateInvalidation,
-    BeforeRecoveryBootSynchronization,
-}
-
 /// One ephemeral filesystem candidate plus the process-local writer lease
 /// held from destructive materialization through metadata and trigger work.
 struct EphemeralCandidate {

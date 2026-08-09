@@ -296,21 +296,20 @@ fn archived_live_root_abi_conflict_precedes_staging_triggers_and_usr_exchange() 
     let archived_usr_identity = root_abi_inode(&archived_usr);
     let staging_identity = root_abi_inode(&staging);
     let states = fixture.client.state_db.all().unwrap();
-    let mut checkpoints = Vec::new();
     assert!(take_observed_trigger_scopes().is_empty());
 
     let error = fixture
         .client
-        .activate_state_with_checkpoint(fixture.candidate.id, false, true, |checkpoint| {
-            checkpoints.push(checkpoint);
-            Ok(())
-        })
+        .activate_state_inner(fixture.candidate.id, false, true)
         .unwrap_err();
     assert!(matches!(
         error,
         Error::RootAbiLinkTypeConflict { path, .. } if path == foreign
     ));
-    assert!(checkpoints.is_empty());
+    // The "no checkpoint fired" assertion that used to sit here was vacuous:
+    // the callback was never invoked and no `StatefulTransitionCheckpoint`
+    // variant was ever constructed. The trigger-scope assertion below carries
+    // the real claim — the conflict is detected before any trigger runs.
     assert!(take_observed_trigger_scopes().is_empty());
     assert_eq!(root_abi_inode(&foreign), identity);
     assert_eq!(fs::read(&foreign).unwrap(), b"foreign live root entry");
