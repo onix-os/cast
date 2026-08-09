@@ -67,7 +67,7 @@ use crate::{
     state::{self, Selection},
     system_model::{self, LoadedSystemModel},
     transition_identity::{
-        ArchivedCandidateError, FailedCandidateKind, QuarantinedCandidate, RetainedArchivedCandidateMoveFailure,
+        ArchivedCandidateError, RetainedArchivedCandidateMoveFailure,
         RetainedArchivedCandidateMoveOutcome, RetainedExchangeFailure, RetainedExchangeOutcome,
         RetainedPreviousMoveFailure, RetainedPreviousMoveOutcome, RetainedStagingWrapperRotationFailure,
         StatefulTreeIdentity,
