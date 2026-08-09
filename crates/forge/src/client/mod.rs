@@ -67,10 +67,10 @@ use crate::{
     state::{self, Selection},
     system_model::{self, LoadedSystemModel},
     transition_identity::{
-        ArchivedCandidateError, FailedCandidateKind, QuarantinedCandidate, RetainedArchivedCandidateMoveFailure,
+        ArchivedCandidateError, RetainedArchivedCandidateMoveFailure,
         RetainedArchivedCandidateMoveOutcome, RetainedExchangeFailure, RetainedExchangeOutcome,
         RetainedPreviousMoveFailure, RetainedPreviousMoveOutcome, RetainedStagingWrapperRotationFailure,
-        RetainedStagingWrapperRotationOutcome, StatefulTreeIdentity,
+        StatefulTreeIdentity,
     },
 };
 
@@ -134,8 +134,6 @@ mod active_reblit_publication_plan;
 #[allow(dead_code)] // authenticated root locator consumed by the render-input aggregate
 #[path = "boot/active_reblit_root_filesystem_intent.rs"]
 mod active_reblit_root_filesystem_intent;
-#[cfg(test)]
-mod active_reblit_tests;
 mod active_reblit_transition;
 mod active_state_authority;
 #[cfg(test)]
@@ -171,7 +169,6 @@ mod fetch;
 mod fixed_staging;
 mod install;
 mod journal_usr_exchange_authority;
-mod legacy_boot_repair;
 #[cfg(test)]
 mod mutable_startup_namespace_tests;
 mod mutable_system_capabilities;
@@ -201,8 +198,9 @@ pub(crate) use startup_recovery_forward_origin_test_support::{
     assert_reverse_exchange_intent_recovers_to_usr_restored,
     assert_root_links_complete_restart_persists_rollback_decision,
     assert_usr_exchange_post_recovers_to_pending_reverse, assert_usr_restored_routes_to_candidate_preserve_intent,
-    assert_usr_rollback_decision_routes_to_reverse_exchange_intent, snapshot_startup_recovery_namespace,
-    snapshot_startup_recovery_namespace_without_root_abi,
+    assert_usr_rollback_decision_routes_to_reverse_exchange_intent, drive_startup_recovery_to_clean,
+    reverse_exchange_intent_refusal_reason,
+    snapshot_startup_recovery_namespace, snapshot_startup_recovery_namespace_without_root_abi,
 };
 mod sync;
 mod transaction_root;
@@ -224,7 +222,6 @@ include!("core/construction.rs");
 include!("core/client_model.rs");
 include!("core/client_facade.rs");
 include!("core/state_planning.rs");
-include!("core/stateful_transition.rs");
 include!("core/stateful_recovery.rs");
 include!("core/ephemeral_transition.rs");
 include!("core/package_cache_orchestration.rs");

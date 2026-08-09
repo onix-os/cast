@@ -117,6 +117,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveT
     ArchivedPreserved,
     ActiveReblitStaged { wrapper_index: usize },
     ActiveReblitPreserved { wrapper_index: usize },
+    /// Staged candidate whose replacement wrapper was never reserved.
+    ///
+    /// The reservation runs at `reserve_for_transaction_triggers`, after
+    /// `CandidatePrepared`, so a crash before it leaves no wrapper to name.
+    /// Carries no index for that reason.
+    ActiveReblitStagedWithoutReservation,
 }
 
 impl UsrRollbackCandidatePreserveTopology {
@@ -557,17 +563,65 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Whether a parked archived-candidate slot is this activation's own displaced
+/// slot, rather than residue left beside a canonical one.
+///
+/// `MoveDirection::Stage` sets the slot marker to `Displaced` on success, so an
+/// in-flight `ActivateArchived` *is supposed to* leave its source slot parked —
+/// that is what frees the canonical state name for the live candidate. The
+/// shape that is genuine residue, and which
+/// `startup_candidate_preserve_refuses_unmodeled_parking_for_new_and_archived_states`
+/// pins, is a parking name **beside** a canonical slot: an abandoned staging
+/// move rather than a completed one.
+///
+/// Refusing on the presence of a parking wrapper alone conflated the two, and
+/// stalled the activation rollback at `CandidatePreserveIntent` on a real guest
+/// (2026-08-02), whose roots held exactly `ArchivedCandidateParking { state: 1 }`
+/// and no `State(1)`.
+fn is_own_displaced_candidate_slot(record: &TransitionRecord, state: i32, snapshot: &NamespaceSnapshot) -> bool {
+    record.operation == Operation::ActivateArchived
+        && record.candidate.id == Some(state)
+        && !snapshot
+            .wrappers()
+            .any(|wrapper| matches!(wrapper.role, TreeLocation::State(canonical) if canonical == state))
+}
+
+/// Whether a parked previous slot is the one this record's own rollback just
+/// vacated, rather than arbitrary residue.
+///
+/// A completed previous-restore *leaves* its slot parked — deliberately, so
+/// ambient, replaced, moved, or populated directories survive — and
+/// `classify_root_name` already treats that name as a legal root entry. Before
+/// the previous-restore dispatcher existed nothing could produce one here, so
+/// this gate refused every parking wrapper outright; with the dispatcher live
+/// that refusal stalled an `ActivateArchived` rollback at
+/// `CandidatePreserveIntent` on a real guest (2026-08-01).
+///
+/// Deliberately narrow rather than "any `PreviousParking` is fine": the slot
+/// must belong to this record's predecessor, the record must carry the archive
+/// slot that makes the restore reversible at all, and the restore must actually
+/// be settled. Stale parking residue from anything else is still refused.
+fn is_own_vacated_previous_parking(record: &TransitionRecord, state: i32) -> bool {
+    record.previous.id == Some(state)
+        && record.previous_archive_slot.is_some()
+        && record
+            .rollback
+            .as_ref()
+            .is_some_and(|rollback| rollback.previous_archive.resolved())
+}
+
 fn candidate_preserve_topology_after_phase(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<UsrRollbackCandidatePreserveTopology, UsrRollbackCandidatePreserveNamespaceError> {
     assess_snapshot_layout(record, snapshot)?;
     if record.operation != Operation::ActiveReblit
-        && snapshot.wrappers().any(|wrapper| {
-            matches!(
-                wrapper.role,
-                TreeLocation::ArchivedCandidateParking { .. } | TreeLocation::PreviousParking { .. }
-            )
+        && snapshot.wrappers().any(|wrapper| match wrapper.role {
+            TreeLocation::ArchivedCandidateParking { state, .. } => {
+                !is_own_displaced_candidate_slot(record, state, snapshot)
+            }
+            TreeLocation::PreviousParking { state, .. } => !is_own_vacated_previous_parking(record, state),
+            _ => false,
         })
     {
         return Err(UsrRollbackCandidatePreserveNamespaceError::UnexpectedParkingWrapper);
@@ -674,8 +728,23 @@ fn archived_topology(
         .candidate
         .id
         .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateStateMissing)?;
-    let canonical = one_wrapper(snapshot, |wrapper| wrapper.role == TreeLocation::State(state))?
-        .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateWrapperMissing)?;
+    // The slot answers to one of two names, and both are modelled states rather
+    // than alternatives to tolerate. `MoveDirection::Stage` sets its marker to
+    // `Displaced` on success — that is what frees the canonical state name for
+    // the live candidate — and the rearchive restores it. So a rollback that
+    // begins while the activation is still in flight finds the slot parked, and
+    // demanding the canonical name refused every such rollback with
+    // `CandidateWrapperMissing` (measured on a guest 2026-08-02).
+    //
+    // `one_wrapper` still requires exactly one match, so a canonical slot *and*
+    // a parking name for the same state remains a conflict, which is the
+    // residue shape the topology-refusal suite pins.
+    let slot = one_wrapper(snapshot, |wrapper| match wrapper.role {
+        TreeLocation::State(canonical) => canonical == state,
+        TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+        _ => false,
+    })?
+    .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateWrapperMissing)?;
     let exact_slot = |wrapper: &WrapperFingerprint| {
         wrapper
             .slot_identity()
@@ -683,14 +752,14 @@ fn archived_topology(
     };
 
     if candidate.location == TreeLocation::Staging && wrapper_contains(staging, candidate) {
-        if staging.slot_identity().is_none() && canonical.usr.is_none() && exact_slot(canonical) {
+        if staging.slot_identity().is_none() && slot.usr.is_none() && exact_slot(slot) {
             return Ok(UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot);
         }
     }
     if candidate.location == TreeLocation::State(state)
         && wrapper_is_empty(staging)
-        && wrapper_contains(canonical, candidate)
-        && exact_slot(canonical)
+        && wrapper_contains(slot, candidate)
+        && exact_slot(slot)
     {
         return Ok(UsrRollbackCandidatePreserveTopology::ArchivedPreserved);
     }
@@ -720,8 +789,22 @@ fn active_reblit_topology(
     let replacement = one_wrapper(
         snapshot,
         |wrapper| matches!(wrapper.role, TreeLocation::ActiveReblitWrapper { state: actual, .. } if actual == state),
-    )?
-    .ok_or(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitWrapperMissing)?;
+    )?;
+    // A missing wrapper is only legal in the staged shape. The reservation that
+    // creates it runs after `CandidatePrepared`, so a crash before that point
+    // has nothing to name — and demanding it there stalled the rollback
+    // permanently (measured on a guest 2026-08-09). If the candidate instead
+    // claims to live inside a wrapper, absence remains a real error: that is a
+    // tree pointing at a parent which is not there.
+    let Some(replacement) = replacement else {
+        if candidate.location == TreeLocation::Staging
+            && wrapper_contains(staging, candidate)
+            && staging.slot_identity().is_none()
+        {
+            return Ok(UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation);
+        }
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitWrapperMissing);
+    };
     let TreeLocation::ActiveReblitWrapper {
         index: wrapper_index, ..
     } = &replacement.role

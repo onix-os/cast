@@ -15,6 +15,7 @@ use crate::{
     transition_journal::{Operation, Phase, TransitionRecord},
 };
 
+use super::super::super::COORDINATED_IDENTITY_OPENED_ITS_JOURNAL;
 use super::super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorError};
 use super::{SystemTriggersCompleteCoordinator, require_system_trigger_same_store_evidence};
 
@@ -90,7 +91,7 @@ impl SystemTriggersCompleteCoordinator {
             ActiveReblitBootSyncHandoffSeal { _private: () },
             record,
             record_binding,
-            journal,
+            journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
             state_database,
             installation,
             active_reblit,
@@ -192,7 +193,7 @@ impl SystemTriggersCompleteCoordinator {
                 NewStateUnarchivedBootSyncHandoffSeal { _private: () },
                 record,
                 record_binding,
-                journal,
+                journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
                 state_database,
                 installation,
                 boot_candidate,

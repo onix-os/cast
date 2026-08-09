@@ -155,7 +155,11 @@ fn begin_usr_exchange_intent(
     require_usr_exchange_intent_sandwich(&coordinator, candidate, &metadata, &provenance, &readiness)
         .map_err(preflight)?;
 
-    if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &intent) {
+    if let Err(source) = coordinator
+        .identity
+        .retained_journal()
+        .advance(&coordinator.record, &intent)
+    {
         return Err(UsrExchangeIntentFailure::IntentPersistence {
             transition_id,
             predecessor,

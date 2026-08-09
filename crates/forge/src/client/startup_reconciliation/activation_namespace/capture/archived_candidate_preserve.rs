@@ -9,7 +9,11 @@ mod effect;
 mod post_move_durability;
 mod target_durability;
 
-use std::{ffi::CString, fs::File, path::PathBuf};
+use std::{
+    ffi::{CStr, CString},
+    fs::File,
+    path::PathBuf,
+};
 
 use crate::{
     Installation,
@@ -194,11 +198,22 @@ impl ProjectedArchivedCandidatePreserveNamespace {
             |wrapper| wrapper.role == TreeLocation::Staging,
             "staging",
         )?;
-        let target = exact_wrapper(
-            &fingerprint.roots_entries,
-            |wrapper| wrapper.role == TreeLocation::State(state),
-            "canonical archived candidate",
-        )?;
+        // The slot answers to two modelled names: `MoveDirection::Stage` parks
+        // it so the canonical state name is free for the live candidate, and
+        // the rearchive restores it. Matching only the canonical name made this
+        // capture report "occurs 0 times" for every rollback that begins while
+        // an activation is in flight — the same assumption already corrected in
+        // `archived_topology`, one layer up (guest, 2026-08-02).
+        //
+        // `exact_wrapper` still demands exactly one match, so a canonical slot
+        // *and* a parking name for the same state stays the conflict the
+        // topology-refusal suite pins.
+        let is_candidate_slot = |wrapper: &WrapperFingerprint| match wrapper.role {
+            TreeLocation::State(canonical) => canonical == state,
+            TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+            _ => false,
+        };
+        let target = exact_wrapper(&fingerprint.roots_entries, is_candidate_slot, "archived candidate slot")?;
         let slot = target
             .slot
             .as_ref()
@@ -225,7 +240,7 @@ impl ProjectedArchivedCandidatePreserveNamespace {
         let other_root_wrappers = fingerprint
             .roots_entries
             .iter()
-            .filter(|wrapper| wrapper.role != TreeLocation::Staging && wrapper.role != TreeLocation::State(state))
+            .filter(|wrapper| wrapper.role != TreeLocation::Staging && !is_candidate_slot(wrapper))
             .cloned()
             .collect();
         Ok(Self {
@@ -433,15 +448,39 @@ impl RetainedArchivedCandidatePreserveParents {
             .id
             .ok_or(ArchivedCandidatePreserveCaptureError::CandidateStateMissing)?;
         let staging = exact_retained_wrapper(&snapshot.roots_entries, &TreeLocation::Staging, "staging")?;
-        let target = exact_retained_wrapper(
+        // Found at either name, but always *targeted* at the canonical one.
+        //
+        // `MoveDirection::Rearchive` calls `restore_displaced_slot_if_parked`
+        // as its first step, so the slot is back at its canonical name before
+        // the child move happens. The destination below is therefore correct as
+        // it stands — what was wrong is looking the wrapper up *now*, while the
+        // activation is still in flight and the slot is parked. A rename does
+        // not change the inode, so the descriptor retained here is the same one
+        // either way (guest, 2026-08-02).
+        let target = exact_retained_wrapper_matching(
             &snapshot.roots_entries,
-            &TreeLocation::State(state),
-            "canonical archived candidate",
+            |role| match *role {
+                TreeLocation::State(canonical) => canonical == state,
+                TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+                _ => false,
+            },
+            "archived candidate slot",
         )?;
-        let target_name =
-            CString::new(state.to_string()).map_err(|_| ArchivedCandidatePreserveCaptureError::InvalidTargetName)?;
+        // The slot's *current* name, not the canonical one. This is used for a
+        // single purpose — reopening the slot by name and proving it is still
+        // the retained descriptor — so it has to say where the directory is
+        // now. Nothing renames by it; `MoveDirection::Rearchive` unparks the
+        // slot itself before the child move.
+        //
+        // Holding it canonical made that proof open `.cast/root/<state>`, which
+        // does not exist while the activation is in flight, and the whole
+        // rollback stalled on `No such file or directory` (guest, 2026-08-02).
+        let target_name = CString::new(target.fingerprint.name.clone())
+            .map_err(|_| ArchivedCandidatePreserveCaptureError::InvalidTargetName)?;
         let staging_path = snapshot.roots_path.join("staging");
-        let target_path = snapshot.roots_path.join(state.to_string());
+        let target_path = snapshot
+            .roots_path
+            .join(String::from_utf8_lossy(&target.fingerprint.name).as_ref());
         let identity = MoveParentIdentity::from_witnesses(staging.fingerprint.witness, target.fingerprint.witness)?;
         let candidate = exact_retained_candidate(snapshot, record.candidate.tree_token.as_str())?;
         let candidate = TreeMarkerStore::open(
@@ -468,6 +507,21 @@ impl RetainedArchivedCandidatePreserveParents {
             roots_witness: snapshot.fingerprint.roots,
             identity,
         })
+    }
+
+    /// The roots directory the slot lives in.
+    pub(super) fn roots(&self) -> &File {
+        &self.roots
+    }
+
+    /// The slot's current name, which is its parking name while an activation
+    /// is in flight.
+    pub(super) fn slot_name(&self) -> &CStr {
+        &self.target_name
+    }
+
+    pub(super) fn slot_path(&self) -> &std::path::Path {
+        &self.target_path
     }
 
     pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate_value_identity(
@@ -541,9 +595,21 @@ fn exact_retained_wrapper<'a>(
     role: &TreeLocation,
     label: &'static str,
 ) -> Result<&'a super::RetainedWrapper, ArchivedCandidatePreserveCaptureError> {
+    exact_retained_wrapper_matching(wrappers, |actual| actual == role, label)
+}
+
+/// `exact_retained_wrapper` for a slot that answers to more than one name.
+///
+/// Still exactly one match: two names for the same slot present at once is a
+/// conflict, not a choice.
+fn exact_retained_wrapper_matching<'a>(
+    wrappers: &'a [super::RetainedWrapper],
+    accepts: impl Fn(&TreeLocation) -> bool,
+    label: &'static str,
+) -> Result<&'a super::RetainedWrapper, ArchivedCandidatePreserveCaptureError> {
     let matches = wrappers
         .iter()
-        .filter(|wrapper| &wrapper.fingerprint.role == role)
+        .filter(|wrapper| accepts(&wrapper.fingerprint.role))
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [wrapper] => Ok(*wrapper),

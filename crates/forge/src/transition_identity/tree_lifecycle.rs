@@ -1,6 +1,6 @@
 use super::candidate_state_authority::CandidateStatePreparation;
-use super::*;
 use super::previous_tree_move::PreviousRestoreRecoverySeal;
+use super::*;
 
 #[derive(Clone, Copy)]
 enum ExchangeJournalGuard<'authority> {
@@ -22,7 +22,14 @@ impl ExchangeJournalGuard<'_> {
 
 #[derive(Clone, Copy)]
 enum JournalAcquisition<'authority> {
-    LegacyBlocking,
+    /// Preparation entered without a coordinator or recovery seal.
+    ///
+    /// Non-blocking like the sealed variants. It used to block, which is how
+    /// two live identities in one process deadlocked against each other: the
+    /// second acquisition waited forever on a lock the first still held. A
+    /// contended journal now fails fast instead, which is the same answer the
+    /// sealed paths already gave.
+    Unsealed,
     CoordinatorNonblocking(&'authority crate::client::JournalUsrExchangePreparationSeal),
     /// The dispatcher already holds the journal, so a blocking acquisition
     /// would deadlock against itself; and a clean baseline is by definition
@@ -61,7 +68,7 @@ impl JournalAcquisition<'_> {
         root: &Path,
     ) -> Result<TransitionJournalStore, crate::transition_journal::StorageError> {
         match self {
-            Self::LegacyBlocking => TransitionJournalStore::open_in_retained_cast(cast, root),
+            Self::Unsealed => TransitionJournalStore::try_open_in_retained_cast(cast, root),
             Self::CoordinatorNonblocking(seal) => {
                 let _seal = seal;
                 TransitionJournalStore::try_open_in_retained_cast(cast, root)
@@ -147,7 +154,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::ExistingId(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -169,7 +176,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::UnknownIdAbsent,
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -192,7 +199,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -215,7 +222,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::ExistingId(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -235,7 +242,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::UnknownIdAbsent,
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -257,7 +264,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
-            JournalAcquisition::LegacyBlocking,
+            JournalAcquisition::Unsealed,
             CandidateNameAuthority::Pathname,
             PreviousPreparation::LiveUsr,
         )
@@ -433,16 +440,25 @@ impl StatefulTreeIdentity {
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_candidate_mutable_namespace_preflight();
-        let journal = journal_acquisition.open(cast, root);
+        // The handle exists only to prove a clean baseline, and recovery
+        // deliberately skips that proof: it runs *because* a durable record
+        // exists, so demanding an empty journal would refuse every case the
+        // dispatcher was built for.
+        //
+        // So recovery must not open one either. It used to, and the handle was
+        // then dropped unread — but acquiring it takes the canonical lock, and
+        // the rollback dispatcher that selected this recovery is already
+        // holding that lock. The result was a previous-restore that failed
+        // `WouldBlock` against itself, measured 2026-08-01.
+        let journal = journal_acquisition
+            .requires_clean_baseline()
+            .then(|| journal_acquisition.open(cast, root));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        let journal = journal?;
-        // Recovery deliberately skips this: it runs because a durable record
-        // exists, so demanding a clean baseline would refuse every case the
-        // dispatcher was built for.
-        let baseline = journal_acquisition
-            .requires_clean_baseline()
-            .then(|| require_clean_baseline(&journal, state_db));
+        let journal = journal.transpose()?;
+        let baseline = journal
+            .as_ref()
+            .map(|journal| require_clean_baseline(journal, state_db));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         if let Some(baseline) = baseline {
@@ -502,13 +518,14 @@ impl StatefulTreeIdentity {
             PreviousPreparation::LiveUsr => {
                 require_named_live_usr(installation, previous_store.retained_directory(), &previous_path)
             }
-            PreviousPreparation::ArchivedSlot(_) => {
-                installation.revalidate_root_directory().map_err(Error::from).and_then(|()| {
+            PreviousPreparation::ArchivedSlot(_) => installation
+                .revalidate_root_directory()
+                .map_err(Error::from)
+                .and_then(|()| {
                     TreeMarkerStore::open_path(previous_path.clone())
                         .map_err(Error::from)
                         .and_then(|named| previous_store.require_same_directory(&named).map_err(Error::from))
-                })
-            }
+                }),
         };
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
@@ -568,10 +585,18 @@ impl StatefulTreeIdentity {
         // A cooperating writer cannot pass either held flock. Repeating the
         // evidence audit after marker publication also makes the ordering an
         // executable invariant rather than a comment.
-        let baseline = require_clean_baseline(&journal, state_db);
+        // Skipped for recovery for the same reason as the first: a durable
+        // record is exactly why this identity is being built. Running it
+        // unconditionally meant the recovery path could only ever succeed with
+        // no record present — which is to say, only in tests.
+        let baseline = journal
+            .as_ref()
+            .map(|journal| require_clean_baseline(journal, state_db));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        baseline?;
+        if let Some(baseline) = baseline {
+            baseline?;
+        }
 
         Ok(Self {
             journal,
@@ -612,21 +637,6 @@ impl StatefulTreeIdentity {
         )
     }
 
-    /// Forward exchange with one final read-only validation executed inside
-    /// the descriptor-bound preflight immediately before the single syscall.
-    pub(crate) fn exchange_forward_validated(
-        &self,
-        installation: &Installation,
-        validate: &impl Fn() -> Result<(), Error>,
-    ) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(
-            installation,
-            RetainedExchangeDirection::Forward,
-            ExchangeJournalGuard::LegacyNoJournal,
-            validate,
-        )
-    }
-
     /// Coordinator-only forward exchange.  The seal proves that the caller
     /// owns the exact durable `UsrExchangeIntent`; every legacy entry point
     /// continues to require journal absence.
@@ -653,31 +663,6 @@ impl StatefulTreeIdentity {
             RetainedExchangeDirection::Reverse,
             ExchangeJournalGuard::LegacyNoJournal,
             &|| Ok(()),
-        )
-    }
-
-    /// Finish durability after a reverse exchange which is already proven to
-    /// have moved both exact trees.
-    ///
-    /// This path deliberately performs no rename. Retrying an exchange after
-    /// an applied-but-not-yet-durable result would put the failed candidate
-    /// back in the live namespace.
-    pub(crate) fn finish_applied_reverse(&self, installation: &Installation) -> Result<(), Error> {
-        ExchangeJournalGuard::LegacyNoJournal.require(self)?;
-        installation.revalidate_root_directory()?;
-        let staging = self.open_exchange_staging(installation)?;
-        staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
-        self.require_exchange_layout(
-            installation.root_directory(),
-            &installation.root,
-            &staging,
-            RetainedExchangeDirection::Reverse.after(),
-        )?;
-        self.finish_exchange(
-            installation,
-            &staging,
-            RetainedExchangeDirection::Reverse.after(),
-            ExchangeJournalGuard::LegacyNoJournal,
         )
     }
 

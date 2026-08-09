@@ -111,7 +111,12 @@ pub(super) fn dispatch<'reservation>(
                     UsrRollbackCandidatePreserveReady::Finish(authority)
                 }
                 UsrRollbackCandidatePreserveAdmission::NotApplicable
-                | UsrRollbackCandidatePreserveAdmission::Deferred => {
+                => return Ok(Dispatch::Unhandled { journal, record }),
+                UsrRollbackCandidatePreserveAdmission::Deferred(reason) => {
+                    // Never drop this. An unhandled dispatch becomes a
+                    // recovery-pending result with no blocker, so a deferral
+                    // that never resolves is invisible without it.
+                    tracing::warn!(%reason, phase = ?record.phase, "candidate preservation deferred");
                     return Ok(Dispatch::Unhandled { journal, record });
                 }
             };

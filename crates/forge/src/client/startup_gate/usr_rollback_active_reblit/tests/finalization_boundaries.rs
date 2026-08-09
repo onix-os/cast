@@ -4,7 +4,10 @@ use std::fs;
 
 use crate::{
     client::{startup_gate, startup_reconciliation::RecoveryBlocker},
-    transition_journal::{BootRollback, ForwardPhase, Phase, RollbackAction, RollbackActionOutcome, encode},
+    transition_journal::{
+        BootRollback, ForwardPhase, InitialRollbackAction, Phase, RollbackAction, RollbackActionOutcome,
+        RollbackObservations, encode, expected_forward_generation,
+    },
 };
 
 use super::{
@@ -59,17 +62,37 @@ fn startup_active_reblit_finalization_rejects_a_valid_terminal_lookalike_plan_an
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
-    let source = persist_candidate_preserved(&lookalike, CandidateOrigin::AlreadySatisfied);
-    let mut inexact = source.clone();
-    let rollback = inexact.rollback.as_mut().unwrap();
-    rollback.source = ForwardPhase::TransactionTriggersComplete;
-    rollback.usr_exchange = RollbackAction::NotRequired;
+    persist_candidate_preserved(&lookalike, CandidateOrigin::AlreadySatisfied);
+    // Built by the journal rather than by rewriting a post-exchange record.
+    // Editing `source` and `usr_exchange` in place left the generation counting
+    // a reverse exchange this plan says never happened; the finalization gate's
+    // generation bound now derives what the source implies and refuses it.
+    let mut forward = lookalike.fixture.source.clone();
+    forward.phase = Phase::TransactionTriggersComplete;
+    forward.generation = expected_forward_generation(&forward, ForwardPhase::TransactionTriggersComplete)
+        .expect("ActiveReblit runs its transaction triggers");
+    let terminal_lookalike = forward
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive: None,
+            usr_exchange: None,
+            candidate: InitialRollbackAction::Pending,
+            fresh_db: None,
+        })
+        .unwrap()
+        .rollback_successor(None)
+        .unwrap()
+        .rollback_successor(Some(RollbackActionOutcome::AlreadySatisfied))
+        .unwrap()
+        .rollback_successor(None)
+        .unwrap();
+    assert_eq!(terminal_lookalike.phase, Phase::RollbackComplete);
+    let rollback = terminal_lookalike.rollback.as_ref().unwrap();
+    assert_eq!(rollback.usr_exchange, RollbackAction::NotRequired);
     assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
     assert_eq!(rollback.fresh_db, RollbackAction::NotRequired);
     assert_eq!(rollback.boot, BootRollback::NotRequired);
-    rollback.external_effects_may_remain = true;
-    let terminal_lookalike = inexact.rollback_successor(None).unwrap();
-    assert_eq!(terminal_lookalike.phase, Phase::RollbackComplete);
+    assert!(rollback.external_effects_may_remain);
     fs::write(
         canonical_journal(&lookalike.fixture.installation.root),
         encode(&terminal_lookalike).unwrap(),
@@ -79,10 +102,19 @@ fn startup_active_reblit_finalization_rejects_a_valid_terminal_lookalike_plan_an
     let namespace_before = lookalike.fixture.namespace_snapshot();
     reset_candidate_effect_observers();
 
-    let plan_error = enter_candidate(&lookalike);
-
-    assert_pending_phase(&plan_error, Phase::RollbackComplete);
-    assert_eq!(lookalike.fixture.canonical_record(), terminal_lookalike);
+    // This is no longer a lookalike: a pre-exchange ActiveReblit rollback is a
+    // real plan that must finalize. It used to be refused because the
+    // finalization gate's source list started at `UsrExchangeIntent`, so a
+    // crash before the exchange walked the whole chain and then could not
+    // finish — the machine stayed unrecovered. Refusing here was the defect,
+    // not the boundary.
+    //
+    // Boundedness of this route is still covered, by
+    // `startup_active_reblit_finalization_admits_root_links_only_at_generation_*`
+    // and by the wrong-topology half below.
+    let finalized = enter_clean_candidate(&lookalike);
+    assert_canonical_absent(&lookalike.fixture.installation.root);
+    drop(finalized);
     assert_eq!(lookalike.fixture.database_snapshot(), database_before);
     assert_eq!(lookalike.fixture.namespace_snapshot(), namespace_before);
     assert_no_candidate_effects();

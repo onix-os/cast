@@ -52,6 +52,36 @@ fn coordinator_from_exchange_fixture_with_options(
     UsrExchangeIntentCoordinator,
     JournalUsrExchangeAuthority,
 ) {
+    coordinator_from_exchange_fixture_after_begin(
+        candidate_kind,
+        fixture,
+        identity,
+        authority,
+        run_system_triggers,
+        run_boot_sync,
+        |_| {},
+    )
+}
+
+/// As above, but with a hook that runs immediately after `begin_transition`
+/// and before the staging pair.
+///
+/// That window is where production creates the archived candidate's slot link:
+/// the journal record exists, but no preparation API has read the marker yet,
+/// so an `nlink=2` marker is admissible there and nowhere earlier.
+fn coordinator_from_exchange_fixture_after_begin(
+    candidate_kind: CandidateKind,
+    fixture: CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    run_system_triggers: bool,
+    run_boot_sync: bool,
+    after_begin: impl FnOnce(&CoordinatorFixture),
+) -> (
+    CoordinatorFixture,
+    UsrExchangeIntentCoordinator,
+    JournalUsrExchangeAuthority,
+) {
     let mut coordinator = identity
         .begin_transition(request(
             candidate_kind,
@@ -69,6 +99,7 @@ fn coordinator_from_exchange_fixture_with_options(
     }
     coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     let prepared = finish_candidate_prepare(coordinator).unwrap();
+    after_begin(&fixture);
     let ready = match prepared {
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
             TestUsrExchangeReady::Archived(ready.prepare_archived_isolation(&fixture.installation).unwrap())
@@ -251,8 +282,37 @@ fn journal_coordinator_new_state_synthesized_empty_exchange_applies_once_and_ret
     assert_eq!(intent_record.previous.origin, PreviousOrigin::SynthesizedEmpty);
     assert_eq!(intent_record.previous.id, None);
     let candidate = directory_identity(&fixture.candidate_path);
-    let previous = directory_identity(&fixture.installation.root.join("usr"));
-    assert_state_metadata_name_absent(&fixture.installation.root.join("usr/.stateID"));
+    let live_usr = fixture.installation.root.join("usr");
+    let previous = directory_identity(&live_usr);
+    assert_state_metadata_name_absent(&live_usr.join(".stateID"));
+
+    // The synthesized previous tree is a real marked tree, not a bare
+    // directory: preparation creates it, marks it, and leaves nothing else in
+    // it. A synthesized tree that shared the candidate's token would make the
+    // two indistinguishable to every later identity check.
+    let metadata = fs::symlink_metadata(&live_usr).unwrap();
+    assert!(metadata.file_type().is_dir());
+    assert_eq!(metadata.uid(), nix::unistd::Uid::effective().as_raw());
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o755);
+    let entries = fs::read_dir(&live_usr)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [std::ffi::OsString::from(".cast-tree-id")]);
+    assert_ne!(
+        TreeMarkerStore::open_path(&live_usr)
+            .unwrap()
+            .read_for_recovery()
+            .unwrap()
+            .token()
+            .as_str(),
+        TreeMarkerStore::open_path(&fixture.candidate_path)
+            .unwrap()
+            .read_for_recovery()
+            .unwrap()
+            .token()
+            .as_str()
+    );
     reset_retained_exchange_syscall_count();
 
     let exchanged = intent.execute_usr_exchange(authority).unwrap();
@@ -960,6 +1020,278 @@ fn journal_coordinator_usr_exchange_identity_handoff_fails_bounded_when_contende
     let (identity, authority) = retry_preflight
         .prepare_unallocated_candidate(&database, &candidate_path)
         .unwrap();
+    drop(identity);
+    drop(authority);
+}
+
+/// Drive an applied-but-faulted exchange all the way to the exact
+/// `ReverseExchangeIntent`, so a caller can substitute the live tree and prove
+/// the *reverse* exchange refuses.
+///
+/// The existing recovery tests all take this route to prove it advances. These
+/// take it to prove it stops, which is the half a substituted tree exercises.
+fn reverse_exchange_intent_after_applied_exchange(
+    candidate_kind: CandidateKind,
+) -> (CoordinatorFixture, TransitionRecord, (u64, u64), (u64, u64)) {
+    let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(candidate_kind);
+    let candidate = directory_identity(&fixture.candidate_path);
+    let previous = directory_identity(&fixture.installation.root.join("usr"));
+    reset_retained_exchange_syscall_count();
+    arm_retained_exchange_fault(RetainedExchangeFaultPoint::FinalRevalidation);
+
+    let failure = intent.execute_usr_exchange(authority).unwrap_err();
+    assert!(matches!(
+        failure,
+        UsrExchangeEffectFailure::Exchange {
+            outcome: RetainedExchangeOutcome::Applied,
+            ..
+        }
+    ));
+    assert_eq!(retained_exchange_syscall_count(), 1);
+    // The fault must have been consumed, not merely armed. A fault point that
+    // is never reached produces the same green result as one that is survived,
+    // and the two mean opposite things — see the note in `fault_injection.rs`.
+    assert!(
+        !retained_exchange_fault_armed(),
+        "the forward exchange never reached its durability fault point"
+    );
+
+    assert_usr_exchange_post_recovers_to_pending_reverse(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+    assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+
+    let reverse_intent = read_canonical(&fixture.installation.root);
+    assert_eq!(reverse_intent.phase, Phase::ReverseExchangeIntent);
+    assert_eq!(retained_exchange_syscall_count(), 1, "routing must not exchange");
+    assert_exchange_layout(&fixture, true, candidate, previous);
+    (fixture, reverse_intent, candidate, previous)
+}
+
+#[test]
+fn journal_coordinator_reverse_exchange_refuses_a_hardlinked_marker() {
+    let (fixture, reverse_intent, candidate, previous) =
+        reverse_exchange_intent_after_applied_exchange(CandidateKind::Archived);
+    let marker = fixture.installation.root.join("usr/.cast-tree-id");
+    let external = fixture.installation.root.join("external-marker");
+
+    // Same bytes, but reachable under a second name. A rewrite that only
+    // changes the marker's inode is inert (see the test below); sharing the
+    // inode is not, because the tree's identity becomes writable from outside
+    // the tree.
+    let frame = fs::read(&marker).unwrap();
+    fs::write(&external, &frame).unwrap();
+    fs::set_permissions(&external, fs::Permissions::from_mode(0o444)).unwrap();
+    fs::remove_file(&marker).unwrap();
+    fs::hard_link(&external, &marker).unwrap();
+    assert_eq!(fs::symlink_metadata(&marker).unwrap().nlink(), 2);
+
+    let reason =
+        reverse_exchange_intent_refusal_reason(&fixture.installation, &fixture.database, &fixture.layout_database);
+    assert!(!reason.is_empty(), "refusal carried no reason");
+
+    assert_eq!(retained_exchange_syscall_count(), 1, "the reverse exchange must not run");
+    assert_eq!(read_canonical(&fixture.installation.root), reverse_intent);
+    assert_eq!(fs::symlink_metadata(&marker).unwrap().nlink(), 2, "the link was repaired");
+}
+
+/// The legacy route refused this; the coordinated route accepts it, and that
+/// difference is deliberate rather than a gap.
+///
+/// The durable record identifies the previous tree by `usr_runtime_identity`
+/// — the *directory's* `(st_dev, inode, mount_id)` — plus `tree_token`.
+/// Rewriting the marker file with identical bytes changes neither, so no
+/// durable evidence distinguishes it, and the reverse exchange has everything
+/// it needs to be correct.
+///
+/// The legacy refusal came from holding a live descriptor on the marker across
+/// the whole transition and revalidating by inode. Crash recovery cannot hold
+/// one — it starts in a fresh process after a reboot — so that strictness is
+/// not portable, and it was catching an inert rewrite rather than a hazard.
+/// The two tests around this one pin the substitutions that *are* refused:
+/// a shared inode, and a swapped directory.
+#[test]
+fn journal_coordinator_reverse_exchange_accepts_an_inert_same_content_marker_rewrite() {
+    let (fixture, _reverse_intent, candidate, previous) =
+        reverse_exchange_intent_after_applied_exchange(CandidateKind::Archived);
+    let marker = fixture.installation.root.join("usr/.cast-tree-id");
+
+    // Rewrite the marker at its canonical 0o444 rather than through
+    // Rewrite at the canonical 0o444 rather than through
+    // `replace_file_with_same_bytes`, which writes 0o644: a wrong mode would be
+    // caught as a mode fault and would say nothing about inode identity.
+    let frame = fs::read(&marker).unwrap();
+    let original = fs::symlink_metadata(&marker).unwrap().ino();
+    fs::remove_file(&marker).unwrap();
+    fs::write(&marker, &frame).unwrap();
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o444)).unwrap();
+    let rewritten = fs::symlink_metadata(&marker).unwrap().ino();
+    assert_ne!(original, rewritten);
+    assert_eq!(fs::symlink_metadata(&marker).unwrap().nlink(), 1);
+
+    assert_reverse_exchange_intent_recovers_to_usr_restored(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+
+    // The reverse exchange ran, ran exactly once, and put both trees back at
+    // their original directory identities — the identities the record names,
+    // and the ones the rewrite never touched.
+    assert_eq!(retained_exchange_syscall_count(), 2);
+    assert_eq!(read_canonical(&fixture.installation.root).phase, Phase::UsrRestored);
+    assert_exchange_layout(&fixture, false, candidate, previous);
+}
+
+#[test]
+fn journal_coordinator_reverse_exchange_refuses_a_whole_directory_same_token_substitution() {
+    let (fixture, reverse_intent, candidate, previous) =
+        reverse_exchange_intent_after_applied_exchange(CandidateKind::Archived);
+    let live = fixture.installation.root.join("usr");
+    let displaced = fixture.installation.root.join("displaced-live-usr");
+
+    // A fresh directory carrying the same marker frame and the same `.stateID`
+    // is indistinguishable from the retained tree by content alone. Only the
+    // retained descriptor separates them.
+    let frame = fs::read(live.join(".cast-tree-id")).unwrap();
+    let state_id = fs::read(live.join(".stateID")).unwrap();
+    fs::rename(&live, &displaced).unwrap();
+    create_canonical_directory(&live);
+    fs::write(live.join(".cast-tree-id"), &frame).unwrap();
+    fs::set_permissions(live.join(".cast-tree-id"), fs::Permissions::from_mode(0o444)).unwrap();
+    write_canonical_file(&live.join(".stateID"), &state_id);
+    let substituted = directory_identity(&live);
+
+    let reason =
+        reverse_exchange_intent_refusal_reason(&fixture.installation, &fixture.database, &fixture.layout_database);
+    assert!(!reason.is_empty(), "refusal carried no reason");
+    assert_eq!(retained_exchange_syscall_count(), 1, "the reverse exchange must not run");
+    assert_eq!(read_canonical(&fixture.installation.root), reverse_intent);
+    assert_eq!(
+        directory_identity(&live),
+        substituted,
+        "recovery must not exchange the substituted directory"
+    );
+    assert!(displaced.is_dir(), "the retained tree must survive untouched");
+}
+
+/// A previous tree that vanishes between preparation and the exchange must
+/// stop the transition, never be synthesized.
+///
+/// The synthesize path is legitimate for a first install, where
+/// `installation.active_state` is `None`. The hazard is an *active* previous
+/// whose tree has gone missing: silently synthesizing an empty one there would
+/// exchange the candidate over nothing and strand the real predecessor under a
+/// name the record no longer describes.
+#[test]
+fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous() {
+    let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(CandidateKind::Archived);
+    let intent_record = intent.record().clone();
+    let live = fixture.installation.root.join("usr");
+    let displaced = fixture.installation.root.join("displaced-previous-usr");
+    let previous = directory_identity(&live);
+    let candidate = directory_identity(&fixture.candidate_path);
+    assert!(fixture.installation.active_state.is_some());
+    fs::rename(&live, &displaced).unwrap();
+    reset_retained_exchange_syscall_count();
+
+    let failure = intent.execute_usr_exchange(authority).unwrap_err();
+
+    assert!(
+        matches!(failure, UsrExchangeEffectFailure::Preflight { .. }),
+        "expected a preflight refusal, got {failure:?}"
+    );
+    assert_eq!(retained_exchange_syscall_count(), 0, "no exchange may be attempted");
+    // `exists()` follows symlinks and would read a dangling link as absent.
+    assert_state_metadata_name_absent(&live);
+    assert_eq!(
+        directory_identity(&displaced),
+        previous,
+        "the displaced previous tree must be left exactly where it went"
+    );
+    assert_eq!(directory_identity(&fixture.candidate_path), candidate);
+    assert_eq!(read_canonical(&fixture.installation.root), intent_record);
+}
+
+
+// Ported from `fresh_identity_can_archive_after_a_complete_compensating_recovery`.
+//
+// Every other coordinated cross-transition test starts from a *successful*
+// prior transition. This one starts from a rolled-back one: the claim is that a
+// completed compensating recovery leaves the installation genuinely reusable,
+// not merely consistent. A rollback that left residue — a half-retired slot, a
+// stale journal, an unreleased reservation — would satisfy every single-
+// transition assertion and still make the next transition impossible.
+#[test]
+// The fixture must give the archived candidate its slot link *before*
+// preparation, and that is the whole trick.
+//
+// `archived_topology` requires the candidate's marker to be a two-link pair
+// sharing `<state>/.cast-state-slot-<state>-<token>`
+// (`candidate_preserve_proof.rs:715`), because production reaches
+// `ActivateArchived` by moving the tree out of that slot. `RetainedIdentity::prepare`
+// adopts such a marker through `adopt_or_create_before_journal_for_transition`
+// — the one `nlink=2`-tolerant reader — and then authorizes the extra link
+// (`tree_lifecycle.rs:536`). Every *later* read is strict, and passes only
+// because the retained marker was authorized at preparation.
+//
+// So a link planted after preparation is never authorized and every subsequent
+// step refuses it (`UnsafeMarker links=2` at
+// `begin_candidate_prepare_through_staging`, then at
+// `prepare_archived_isolation`), while a candidate with no link at all fails
+// the rollback topology and defers forever at `CandidatePreserveIntent`.
+// Both wrong orderings were measured on 2026-08-04 and cost most of a session;
+// see the plan. The ordering is the requirement, not a fixture detail.
+fn journal_coordinator_a_completed_rollback_leaves_the_installation_reusable() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_candidate_slot();
+    let (fixture, intent, authority) = coordinator_from_exchange_fixture_after_begin(
+        CandidateKind::Archived,
+        fixture,
+        identity,
+        authority,
+        false,
+        false,
+        |_| {},
+    );
+    let candidate = directory_identity(&fixture.candidate_path);
+    let previous = directory_identity(&fixture.installation.root.join("usr"));
+    reset_retained_exchange_syscall_count();
+    arm_retained_exchange_fault(RetainedExchangeFaultPoint::FinalRevalidation);
+    intent.execute_usr_exchange(authority).unwrap_err();
+    assert!(!retained_exchange_fault_armed());
+    assert_usr_exchange_post_recovers_to_pending_reverse(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+
+    let entries = drive_startup_recovery_to_clean(
+        &fixture.installation,
+        &fixture.database,
+        &fixture.layout_database,
+    );
+    assert!(entries > 1, "the rollback completed without advancing");
+
+    // A clean startup means no record survives to block the next transition.
+    assert_canonical_journal_absent(&fixture.installation.root);
+    // The previous tree is live again at its original identity, and the
+    // candidate went back to its archive slot rather than being left in
+    // staging — `AbortDisposition::Rearchive`, carried through to completion.
+    assert_eq!(directory_identity(&fixture.installation.root.join("usr")), previous);
+    assert_state_metadata_name_absent(&fixture.candidate_path);
+    let slot = fixture.installation.root_path(fixture.candidate_state.to_string());
+    assert_eq!(directory_identity(&slot.join("usr")), candidate);
+
+    // The installation must now accept a fresh transition. This is the claim
+    // the legacy test was really making: a completed compensating recovery
+    // leaves no residue that blocks the next one.
+    let (identity, authority) = reacquire_new_state(&fixture);
     drop(identity);
     drop(authority);
 }

@@ -73,21 +73,30 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
             break;
         }
     }
-    // Startup admits the archive rollback and routes it to restore the archived
-    // predecessor first: RollbackDecided → PreviousRestoreIntent. The
-    // predecessor-restore dispatcher lands next; until then it holds fail-safe at
-    // PreviousRestoreIntent (record + plan intact) — never a brick.
+    // Startup admits the archive rollback, routes it to restore the archived
+    // predecessor first (RollbackDecided → PreviousRestoreIntent), and the
+    // dispatcher carries that restore out: the predecessor comes back to
+    // staging and the plan records it `Applied`. Everything after it is still
+    // outstanding, which is what makes this a chain rather than one step.
     assert_eq!(phases.first(), Some(&Phase::RollbackDecided), "phases={phases:?}");
     assert!(
         phases.contains(&Phase::PreviousRestoreIntent),
         "recovery did not route to the predecessor restore intent: {phases:?}"
     );
+    assert!(
+        phases.contains(&Phase::PreviousRestoredToStaging),
+        "the predecessor restore was routed to but never carried out: {phases:?}"
+    );
     let plan = fixture
         .canonical_record()
         .rollback
         .expect("a rollback plan was persisted");
-    assert_eq!(plan.previous_archive, RollbackAction::Pending, "plan={plan:?}");
-    assert_eq!(plan.usr_exchange, RollbackAction::Pending, "plan={plan:?}");
+    // Both undone: the predecessor is back in staging and the exchange that put
+    // the candidate live has been reversed onto it. The candidate and its fresh
+    // row are still outstanding, which is what keeps this a chain.
+    assert_eq!(plan.previous_archive, RollbackAction::Applied, "plan={plan:?}");
+    assert_eq!(plan.usr_exchange, RollbackAction::Applied, "plan={plan:?}");
+    assert_eq!(plan.candidate.action, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
 }
 
@@ -272,7 +281,7 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
 }
 
 #[test]
-fn startup_system_trigger_sources_require_post_and_exclude_activate_archived() {
+fn startup_system_trigger_sources_require_post_for_every_operation() {
     for historical in [false, true] {
         for kind in [OperationKind::NewState, OperationKind::ActiveReblit] {
             for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
@@ -288,14 +297,28 @@ fn startup_system_trigger_sources_require_post_and_exclude_activate_archived() {
             }
         }
 
+        // ActivateArchived is admitted here as of 2026-07-31. It used to assert
+        // the opposite, and the "record unchanged, still pending" that refusal
+        // produced was the machine failing to recover: a plain
+        // install → remove → activate stalls at `PreviousArchived` on a real
+        // guest with no crash injection at all.
+        //
+        // The reverse-exchange and previous-restore effects are still missing,
+        // so the chain is expected to advance and then stall further in. This
+        // asserts admission and the pre-exchange requirement, not that recovery
+        // completes.
         for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
             let fixture = Fixture::system_trigger(OperationKind::Archived, source, true, historical);
-            assert!(!usr_rollback_decision_source_is_supported_for_test(&fixture.source));
-            let before = fixture.canonical_bytes();
-            let error = fixture.enter();
+            assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+
+            // A pre-exchange namespace at a post-exchange source is still
+            // incoherent evidence and must be refused, for every operation.
+            let pre = Fixture::system_trigger(OperationKind::Archived, source, false, historical);
+            let before = pre.canonical_bytes();
+            let error = pre.enter();
             assert_eq!(pending(&error).phase(), source);
-            assert_eq!(fixture.canonical_bytes(), before);
-            fixture.assert_source_unchanged();
+            assert_eq!(pre.canonical_bytes(), before);
+            pre.assert_source_unchanged();
         }
     }
 }

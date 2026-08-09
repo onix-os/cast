@@ -9,9 +9,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
-        TransitionJournalStore, TransitionRecord,
+        BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError, TransitionJournalBinding,
+        TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -245,41 +244,63 @@ impl UsrRollbackFinalizationAfterDeleteAuthority<'_> {
 }
 
 /// Exact narrow plan accepted by NewState rollback finalization.
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_finalization_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    rollback_finalization_plan_is_exact(record)
+}
+
 fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
     record.operation == Operation::NewState
         && record.phase == Phase::RollbackComplete
-        && record.candidate.id.is_some()
-        && matches!(
-            (rollback.source, record.generation),
-            // Pre-exchange sources reach `RollbackComplete` by a shorter route
-            // (no reverse exchange), so their generation is not fixed and is
-            // left unconstrained here (`plans/future_impl.md` §1.4).
-            (
-                ForwardPhase::CandidatePrepared
-                    | ForwardPhase::TransactionTriggersStarted
-                    | ForwardPhase::TransactionTriggersComplete,
-                _,
-            ) | (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
-                | (ForwardPhase::RootLinksComplete, 18)
-                | (ForwardPhase::SystemTriggersStarted, 19)
-                | (ForwardPhase::SystemTriggersComplete, 20)
-        )
-        && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
+        // Required exactly when a candidate could have been allocated. NewState
+        // allocates from `FreshStateAllocated` on, so a rollback begun before
+        // that legitimately carries `None` — demanding an ID there refused the
+        // plan forever and the machine could never finish recovering. Confirmed
+        // on a real guest 2026-07-31: a killed install rolls back from an early
+        // phase, walks the whole chain, and stalls on `FinalizeRollback`.
+        && (record.candidate.id.is_some()
+            || rollback.source.ordinal() < ForwardPhase::FreshStateAllocated.ordinal())
+        // Pre-exchange sources reach `RollbackComplete` by a shorter route (no
+        // reverse exchange), so their generation is not fixed and is left
+        // unconstrained. Delegated rather than listed: this was yet another
+        // hand-kept copy that started at `CandidatePrepared`, so a rollback
+        // begun while allocating the fresh state or preparing the candidate
+        // walked the whole chain and then could not finalize — the machine
+        // recovered everything except the ability to finish
+        // (`plans/future_impl.md` §1.4, and the VM run 2026-07-31).
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
-        && matches!(
-            rollback.fresh_db,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
+        // Resolved only if a row could ever have existed. Demanding
+        // `Applied | AlreadySatisfied` unconditionally assumed the allocation
+        // had happened, so a rollback begun before it carried the correct
+        // `NotRequired` and was refused for it.
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            matches!(
+                rollback.fresh_db,
+                RollbackAction::Applied | RollbackAction::AlreadySatisfied
+            )
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
         && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        // Derived, not asserted. Hard-coding this to `true` required the
+        // crash to have happened after the transaction triggers, so a
+        // rollback that began before them reached this phase and had no
+        // route out — the terminal stall measured in the VM 2026-07-31.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 fn require_journal_record_binding(

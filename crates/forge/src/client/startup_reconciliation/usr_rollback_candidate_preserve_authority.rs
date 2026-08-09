@@ -19,8 +19,7 @@ mod target_normalization;
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        BootRollback, Phase, RollbackAction, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -71,9 +70,49 @@ pub(in crate::client) use target_creation::UsrRollbackNewStateCandidatePreserveC
 pub(in crate::client) use target_normalization::UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation;
 
 /// Exact result of read-only candidate-preservation admission.
+/// Why candidate preservation declined to run this time.
+///
+/// A deferral is only safe when something can still change. A *permanent* one
+/// is a stalled boot, and without a reason it is undiagnosable: the gate turns
+/// it into a recovery-pending result with no blocker, so every restart looks
+/// identical. Carrying the cause is what makes "waiting" distinguishable from
+/// "stuck" — measured the hard way on 2026-08-04, when a fixture ordering error
+/// presented as a product liveness bug and took a session to unwind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::client) enum UsrRollbackCandidatePreserveDeferral {
+    /// The record carries no rollback plan yet.
+    RollbackPlanAbsent,
+    /// The namespace could not be inspected at all.
+    NamespaceInspectionBegin(String),
+    /// The database disagrees with the record, or the plan is not exact.
+    DatabaseIncompatibleOrPlanInexact,
+    /// The database changed between the two capture passes.
+    DatabaseChangedDuringCapture,
+    /// The namespace changed, or failed its topology, during capture.
+    NamespaceInspectionFinish(String),
+}
+
+impl std::fmt::Display for UsrRollbackCandidatePreserveDeferral {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RollbackPlanAbsent => formatter.write_str("record carries no rollback plan"),
+            Self::NamespaceInspectionBegin(source) => {
+                write!(formatter, "namespace inspection could not begin: {source}")
+            }
+            Self::DatabaseIncompatibleOrPlanInexact => {
+                formatter.write_str("database is incompatible with the record, or the plan is not exact")
+            }
+            Self::DatabaseChangedDuringCapture => formatter.write_str("database changed between capture passes"),
+            Self::NamespaceInspectionFinish(source) => {
+                write!(formatter, "namespace inspection could not finish: {source}")
+            }
+        }
+    }
+}
+
 pub(in crate::client) enum UsrRollbackCandidatePreserveAdmission<'reservation> {
     NotApplicable,
-    Deferred,
+    Deferred(UsrRollbackCandidatePreserveDeferral),
     Apply(UsrRollbackCandidatePreserveApplyAuthority<'reservation>),
     Finish(UsrRollbackCandidatePreserveFinishAuthority<'reservation>),
 }
@@ -194,13 +233,23 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if record.phase != Phase::CandidatePreserveIntent {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
-        let Some(rollback) = record.rollback.as_ref() else {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
-        };
-        if !super::rollback_source_is_supported(record.operation, rollback.source)
-            && !system_trigger_candidate_preserve_source_is_exact(record)
-            && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
-        {
+        if record.rollback.is_none() {
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::RollbackPlanAbsent,
+            ));
+        }
+        if !crate::transition_journal::rollback_evidence_is_on_chain(record) {
+            // Logged, unlike the phase-mismatch `NotApplicable` above. Reaching
+            // here means the record *is* at CandidatePreserveIntent but its
+            // rollback evidence does not sit on the chain, so candidate
+            // preservation silently declines a record that named it — which is
+            // indistinguishable from a stall at the gate.
+            tracing::warn!(
+                operation = ?record.operation,
+                phase = ?record.phase,
+                transition = %record.transition_id.as_str(),
+                "candidate preservation not applicable: rollback evidence is off-chain"
+            );
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
 
@@ -214,22 +263,34 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             record,
         ) {
             Ok(inspection) => inspection,
-            Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                    UsrRollbackCandidatePreserveDeferral::NamespaceInspectionBegin(format!("{source}")),
+                ));
+            }
         };
         let database = inspect_database(record, state_db, initial_in_flight)?;
         if !database_is_compatible(record, &database) || !candidate_preserve_plan_is_exact(record) {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::DatabaseIncompatibleOrPlanInexact,
+            ));
         }
 
         run_between_initial_database_captures();
         let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
         let database_after = inspect_database(record, state_db, in_flight_after)?;
         if !database_is_compatible(record, &database_after) || database != database_after {
-            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
+            return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                UsrRollbackCandidatePreserveDeferral::DatabaseChangedDuringCapture,
+            ));
         }
         let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
-            Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackCandidatePreserveAdmission::Deferred(
+                    UsrRollbackCandidatePreserveDeferral::NamespaceInspectionFinish(format!("{source}")),
+                ));
+            }
         };
 
         let retained_state_db = state_db.clone();
@@ -414,6 +475,20 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
                 Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
             }
+            // The effect for this shape is not written yet. Classifying it is
+            // still worth landing on its own: it turns a silent permanent
+            // deferral — which named nothing and stalled every restart — into a
+            // recognised topology reaching a known-safe outcome.
+            //
+            // It cannot reuse the NewState quarantine effect as-is:
+            // `into_new_state_move_effect_evidence` is gated on
+            // `NewStateStagedWithEmptyQuarantine` exactly
+            // (`candidate_preserve_proof.rs:264`), and widening that gate would
+            // reuse a NewState-shaped projection and parents-capture for an
+            // ActiveReblit record without proof they hold. See task #31.
+            UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation => {
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
+            }
         }
     }
 }
@@ -516,13 +591,18 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
+    let boot_source = crate::transition_journal::boot_rollback_is_possible(rollback.source);
+    // As at the reverse gate: reaching this phase means the previous restore,
+    // if one was ever possible, is already settled.
+    let previous_archive_is_exact = if record.previous_restore_rollback_is_possible(rollback.source) {
+        rollback.previous_archive.resolved()
+    } else {
+        rollback.previous_archive == RollbackAction::NotRequired
+    };
     if record.phase != Phase::CandidatePreserveIntent
-        || (!super::rollback_source_is_supported(record.operation, rollback.source)
-            && !system_trigger_candidate_preserve_source_is_exact(record)
-            && !boot_source)
-        || rollback.previous_archive != RollbackAction::NotRequired
-        || !super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
+        || !crate::transition_journal::rollback_evidence_is_on_chain(record)
+        || !previous_archive_is_exact
+        || !super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
             != if boot_source {
@@ -533,47 +613,15 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     {
         return false;
     }
-    let fresh_is_exact = match record.operation {
-        Operation::NewState => rollback.fresh_db == RollbackAction::Pending,
-        Operation::ActivateArchived | Operation::ActiveReblit => rollback.fresh_db == RollbackAction::NotRequired,
+    let fresh_is_exact = if record.fresh_db_rollback_is_possible(rollback.source) {
+        rollback.fresh_db == RollbackAction::Pending
+    } else {
+        rollback.fresh_db == RollbackAction::NotRequired
     };
-    let disposition_is_exact = match record.operation {
-        Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,
-        Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
-    };
+    let disposition_is_exact = rollback.candidate.disposition == record.candidate_disposition_for(rollback.source);
     fresh_is_exact
         && disposition_is_exact
-        && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
-}
-
-fn system_trigger_candidate_preserve_source_is_exact(record: &TransitionRecord) -> bool {
-    let Some(rollback) = record.rollback.as_ref() else {
-        return false;
-    };
-    matches!(
-        (record.operation, record.phase, rollback.source, record.generation),
-        (
-            Operation::NewState,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersStarted,
-            15,
-        ) | (
-            Operation::NewState,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersComplete,
-            16,
-        ) | (
-            Operation::ActiveReblit,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersStarted,
-            13,
-        ) | (
-            Operation::ActiveReblit,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersComplete,
-            14,
-        )
-    )
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 #[cfg(test)]

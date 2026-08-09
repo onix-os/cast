@@ -21,19 +21,10 @@ impl Client {
             "block".into(),
         )?;
 
-        self.activate_state_with_checkpoint(id, skip_triggers, skip_boot, |_| Ok(()))
+        self.activate_state_inner(id, skip_triggers, skip_boot)
     }
 
-    fn activate_state_with_checkpoint<F>(
-        &self,
-        id: state::Id,
-        skip_triggers: bool,
-        skip_boot: bool,
-        mut checkpoint: F,
-    ) -> Result<state::Id, Error>
-    where
-        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
-    {
+    fn activate_state_inner(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
         self.require_stateful_scope()?;
         let local_etc = transaction_root::prepare_local_etc(&self.installation)?;
         let active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
@@ -92,11 +83,10 @@ impl Client {
         // `commit_stateful_staging`, whose exchange asserts through
         // `ExchangeJournalGuard::LegacyNoJournal` that no journal exists, so
         // ActivateArchived was never actually durable.
-        // `checkpoint` and `isolation_root` are genuinely obsolete here: the
-        // coordinated route drives recovery through journal phases, and acquires
-        // its own isolation ABI. `skip_triggers` is not — it is a live CLI flag
-        // and is threaded through below.
-        let _ = (live_root_abi, &mut checkpoint);
+        // `isolation_root` is genuinely obsolete here: the coordinated route
+        // acquires its own isolation ABI. `skip_triggers` is not — it is a live
+        // CLI flag and is threaded through below.
+        let _ = live_root_abi;
         self.apply_activate_archived_candidate(
             &new,
             &old,

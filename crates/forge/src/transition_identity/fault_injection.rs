@@ -1,22 +1,6 @@
 use super::*;
 
 #[cfg(test)]
-pub(crate) fn arm_quarantine_fault(point: QuarantineFaultPoint) {
-    arm_quarantine_faults(point, 1);
-}
-
-#[cfg(test)]
-pub(crate) fn arm_quarantine_faults(point: QuarantineFaultPoint, count: usize) {
-    assert!(count > 0, "quarantine fault count must be nonzero");
-    QUARANTINE_FAULT.with(|slot| {
-        assert!(
-            slot.replace(Some((point, count))).is_none(),
-            "quarantine fault already armed"
-        );
-    });
-}
-
-#[cfg(test)]
 pub(crate) fn arm_retained_exchange_fault(point: RetainedExchangeFaultPoint) {
     RETAINED_EXCHANGE_FAULT.with(|slot| {
         assert!(
@@ -42,6 +26,16 @@ pub(crate) fn arm_retained_previous_move_faults(points: &[RetainedPreviousMoveFa
         assert!(slot.is_empty(), "retained previous-tree move fault already armed");
         slot.extend_from_slice(points);
     });
+}
+
+/// How many armed previous-tree move faults have not yet fired.
+///
+/// Same reason as [`retained_exchange_fault_armed`]: a clean run with an armed
+/// fault means either "the code survived it" or "the fault point was never
+/// reached", and those are opposite conclusions from an identical green result.
+#[cfg(test)]
+pub(crate) fn retained_previous_move_faults_remaining() -> usize {
+    RETAINED_PREVIOUS_MOVE_FAULT.with(|slot| slot.borrow().len())
 }
 
 #[cfg(test)]
@@ -103,6 +97,17 @@ pub(crate) fn arm_retained_exchange_syscall_fault(fault: RetainedExchangeSyscall
         );
     });
     reset_retained_exchange_syscall_count();
+}
+
+/// Whether an armed exchange fault is still waiting to fire.
+///
+/// A clean run with an armed fault is ambiguous: the code may have survived the
+/// fault, or may never have reached the fault point at all. Those are opposite
+/// conclusions from an identical green result, so tests that arm a fault and
+/// then observe success must check this to tell them apart.
+#[cfg(test)]
+pub(crate) fn retained_exchange_fault_armed() -> bool {
+    RETAINED_EXCHANGE_FAULT.with(|slot| slot.borrow().is_some())
 }
 
 #[cfg(test)]

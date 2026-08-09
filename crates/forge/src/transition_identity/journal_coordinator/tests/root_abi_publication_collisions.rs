@@ -16,7 +16,9 @@ fn journal_coordinator_root_links_complete_authenticates_exact_eexist_at_every_p
         crate::client::assert_before_retained_root_abi_link_publication_consumed();
         assert_eq!(
             root_abi_link_identity(&path),
-            raced_identity.get().expect("exact EEXIST callback retained raced inode"),
+            raced_identity
+                .get()
+                .expect("exact EEXIST callback retained raced inode"),
             "publisher index {index} replaced the authenticated exact winner"
         );
         assert_root_links_complete(&fixture);
@@ -30,8 +32,7 @@ fn journal_coordinator_root_links_complete_rejects_foreign_eexist_at_every_publi
         let (fixture, exchanged) = coordinator_ready_for_root_abi_publication(CandidateKind::NewState, 0);
         let source = exchanged.record().clone();
         let database_before = usr_exchange_database_snapshot(&fixture, &source);
-        let namespace_before =
-            snapshot_startup_recovery_namespace_without_root_abi(&fixture.installation.root);
+        let namespace_before = snapshot_startup_recovery_namespace_without_root_abi(&fixture.installation.root);
         let collision = fixture.installation.root.join(name);
         let collision_hook = collision.clone();
         let raced_identity = std::rc::Rc::new(std::cell::Cell::new(None));
@@ -53,8 +54,7 @@ fn journal_coordinator_root_links_complete_rejects_foreign_eexist_at_every_publi
             namespace_before
         );
         assert_eq!(usr_exchange_database_snapshot(&fixture, &source), database_before);
-        for (published_index, (published_name, published_target)) in
-            ROOT_ABI_PUBLICATION_LINKS.into_iter().enumerate()
+        for (published_index, (published_name, published_target)) in ROOT_ABI_PUBLICATION_LINKS.into_iter().enumerate()
         {
             let path = fixture.installation.root.join(published_name);
             match published_index.cmp(&index) {
@@ -88,10 +88,7 @@ fn journal_coordinator_root_links_complete_rejects_existing_and_new_exact_target
         let identities = std::rc::Rc::new(std::cell::Cell::new(None));
         let identities_hook = std::rc::Rc::clone(&identities);
         crate::client::arm_before_retained_root_abi_link_publication(hook_index, move || {
-            identities_hook.set(Some(replace_symlink_with_same_target(
-                &hook_path,
-                &hook_displaced,
-            )));
+            identities_hook.set(Some(replace_symlink_with_same_target(&hook_path, &hook_displaced)));
         });
 
         let failure = exchanged.publish_root_abi().unwrap_err();
@@ -104,5 +101,63 @@ fn journal_coordinator_root_links_complete_rejects_existing_and_new_exact_target
         assert_eq!(root_abi_link_identity(&path), replacement);
         assert_eq!(fs::read_link(&displaced).unwrap(), fs::read_link(&path).unwrap());
         assert_root_links_complete(&fixture);
+    }
+}
+
+// Ported from
+// `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry`.
+//
+// The sibling collision tests above all race a *symlink* into the publisher's
+// path, which the no-replace link syscall reports as EEXIST. A regular file is
+// a different refusal: the name is occupied by something that is not a link at
+// all, so the conflict is one of type rather than of existence. Nothing else in
+// the coordinated suite races a non-symlink at a publisher index.
+//
+// The legacy test also asserted that the route *reverses* the usr exchange
+// inline (`StatefulTransitionUsrRestored`). That half is deliberately not
+// ported: the coordinated route leaves the record at `UsrExchanged` and hands
+// the reversal to recovery, which is asserted here instead.
+#[test]
+fn journal_coordinator_root_links_complete_rejects_a_regular_file_at_every_publisher_index() {
+    for (index, (name, _target)) in ROOT_ABI_PUBLICATION_LINKS.into_iter().enumerate() {
+        let (fixture, exchanged) = coordinator_ready_for_root_abi_publication(CandidateKind::NewState, 0);
+        let source = exchanged.record().clone();
+        let namespace_before = snapshot_startup_recovery_namespace_without_root_abi(&fixture.installation.root);
+        let collision = fixture.installation.root.join(name);
+        let collision_hook = collision.clone();
+        let raced_identity = std::rc::Rc::new(std::cell::Cell::new(None));
+        let raced_identity_hook = std::rc::Rc::clone(&raced_identity);
+
+        crate::client::arm_before_retained_root_abi_link_publication(index, move || {
+            write_canonical_file(&collision_hook, b"foreign post-exchange publication winner");
+            let metadata = fs::symlink_metadata(&collision_hook).unwrap();
+            raced_identity_hook.set(Some((metadata.dev(), metadata.ino())));
+        });
+
+        let failure = exchanged.publish_root_abi().unwrap_err();
+
+        crate::client::assert_before_retained_root_abi_link_publication_consumed();
+        assert!(matches!(failure, RootAbiPublicationFailure::Publication { .. }));
+
+        // The exchange stands; recovery owns the reversal.
+        assert_usr_exchanged_source(&fixture, &source);
+
+        // The stranger is preserved exactly — never replaced by a link.
+        let after = fs::symlink_metadata(&collision).unwrap();
+        assert!(
+            after.file_type().is_file(),
+            "the regular file was replaced at index {index}"
+        );
+        assert_eq!((after.dev(), after.ino()), raced_identity.get().unwrap());
+        assert_eq!(
+            fs::read(&collision).unwrap(),
+            b"foreign post-exchange publication winner"
+        );
+
+        // Nothing outside the root-ABI names moved.
+        assert_eq!(
+            snapshot_startup_recovery_namespace_without_root_abi(&fixture.installation.root),
+            namespace_before
+        );
     }
 }

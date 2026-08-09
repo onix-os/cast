@@ -32,7 +32,7 @@ mod usr_exchange_effect;
 mod usr_exchange_intent;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use active_reblit_forward::{
     ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
@@ -43,9 +43,9 @@ use active_reblit_reservation::ActiveReblitReservationFailure;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
     PreparedActiveReblitReservationCoordinator, PreparedArchivedIsolationCoordinator,
-    PreparedArchivedTransitionCoordinator,
-    PreparedStatefulTransitionCoordinator, PreparedTransactionIsolationCoordinator,
-    PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
+    PreparedArchivedTransitionCoordinator, PreparedStatefulTransitionCoordinator,
+    PreparedTransactionIsolationCoordinator, PreparedTransactionTriggerCoordinator,
+    TransactionTriggersCompleteCoordinator,
 };
 use candidate_preparation::{TransactionTriggerOperationReadiness, TransactionTriggerReadiness};
 pub(crate) use error::StatefulTransitionCoordinatorError;
@@ -210,7 +210,7 @@ impl StatefulTreeIdentity {
         self.require_global_transition_audit(parts.operation, None)?;
         self.require_no_journal()
             .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        self.journal.create(&record)?;
+        self.retained_journal().create(&record)?;
         Ok(StatefulTransitionCoordinator { identity: self, record })
     }
 
@@ -617,7 +617,7 @@ impl StatefulTransitionCoordinator {
 
     fn advance(&mut self, candidate: Option<i32>) -> Result<(), StatefulTransitionCoordinatorError> {
         let next = self.record.forward_successor(candidate)?;
-        self.identity.journal.advance(&self.record, &next)?;
+        self.identity.retained_journal().advance(&self.record, &next)?;
         self.record = next;
         Ok(())
     }

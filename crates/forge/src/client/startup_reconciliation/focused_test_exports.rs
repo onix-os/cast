@@ -15,22 +15,43 @@ pub(in crate::client) use super::usr_rollback_candidate_preserve_authority::{
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use super::usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
 pub(in crate::client) use super::usr_rollback_decision_authority::usr_rollback_decision_source_is_supported_for_test;
+#[allow(unused_imports)] // exported for the focused previous-restore race contracts
+pub(in crate::client) use super::usr_rollback_previous_restore_authority::{
+    arm_between_usr_rollback_previous_restore_database_captures, usr_rollback_previous_restore_plan_is_exact_for_test,
+};
 pub(in crate::client) use super::usr_rollback_resume_route_authority::usr_rollback_resume_route_plan_is_exact_for_test;
 pub(in crate::client) use super::usr_rollback_reverse_authority::{
     UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,
     arm_between_usr_rollback_reverse_database_captures, usr_rollback_reverse_plan_is_exact_for_test,
 };
 pub(in crate::client) use super::{
-    usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures,
-    usr_rollback_activate_archived_finalization_authority::arm_between_usr_rollback_activate_archived_finalization_database_captures,
+    usr_rollback_activate_archived_complete_route_authority::{
+        arm_between_usr_rollback_activate_archived_complete_route_database_captures,
+        usr_rollback_activate_archived_complete_route_plan_is_exact_for_test,
+    },
+    usr_rollback_activate_archived_finalization_authority::{
+        arm_between_usr_rollback_activate_archived_finalization_database_captures,
+        usr_rollback_activate_archived_finalization_plan_is_exact_for_test,
+    },
     usr_rollback_active_reblit_boot_repair_complete_authority::arm_between_usr_rollback_active_reblit_boot_repair_complete_database_captures,
     usr_rollback_active_reblit_boot_repair_required_authority::arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures,
-    usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures,
-    usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures,
-    usr_rollback_complete_route_authority::arm_between_usr_rollback_complete_route_database_captures,
-    usr_rollback_finalization_authority::arm_between_usr_rollback_finalization_database_captures,
+    usr_rollback_active_reblit_complete_route_authority::{
+        arm_between_usr_rollback_active_reblit_complete_route_database_captures,
+        usr_rollback_active_reblit_complete_route_plan_is_exact_for_test,
+    },
+    usr_rollback_active_reblit_finalization_authority::{
+        arm_between_usr_rollback_active_reblit_finalization_database_captures,
+        usr_rollback_active_reblit_finalization_plan_is_exact_for_test,
+    },
+    usr_rollback_complete_route_authority::{
+        arm_between_usr_rollback_complete_route_database_captures, usr_rollback_complete_route_plan_is_exact_for_test,
+    },
+    usr_rollback_finalization_authority::{
+        arm_between_usr_rollback_finalization_database_captures, usr_rollback_finalization_plan_is_exact_for_test,
+    },
     usr_rollback_fresh_db_invalidation_authority::{
         arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
+        usr_rollback_fresh_db_invalidation_plan_is_exact_for_test,
     },
     usr_rollback_fresh_db_invalidation_route_authority::arm_between_usr_rollback_fresh_db_invalidation_route_database_captures,
     usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures,

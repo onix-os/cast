@@ -10,8 +10,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Operation, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -180,6 +180,11 @@ fn require_journal_record_binding(
 }
 
 /// Exact narrow plan accepted by the completion-route checkpoint.
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_complete_route_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    rollback_complete_route_plan_is_exact(record)
+}
+
 fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
@@ -187,24 +192,31 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::FreshDbInvalidated
         && record.candidate.id.is_some()
-        && (super::rollback_source_is_supported(record.operation, rollback.source)
-            || matches!(
-                (rollback.source, record.generation),
-                (ForwardPhase::SystemTriggersStarted, 18) | (ForwardPhase::SystemTriggersComplete, 19)
-            ))
-        && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
         && matches!(
             rollback.fresh_db,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
+        // Kept absolute on purpose, unlike the fields above. This route ends
+        // the rollback; a plan with boot repair outstanding must route to
+        // `BootRepairRequired` instead, through its own authority.
         && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        // Derived, not asserted. Hard-coding this to `true` required the
+        // crash to have happened after the transaction triggers, so a
+        // rollback that began before them reached this phase and had no
+        // route out — the terminal stall measured in the VM 2026-07-31.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 /// Inspect exact-before -> generic context -> exact-after so neither evidence

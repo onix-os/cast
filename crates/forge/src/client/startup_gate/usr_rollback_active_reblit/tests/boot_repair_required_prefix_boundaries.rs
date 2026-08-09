@@ -78,9 +78,18 @@ fn decision_post_pre_and_sibling_boundaries() {
         assert!(matches!(pre_admission, UsrRollbackDecisionAdmission::Deferred(_)));
     }
 
+    // Every operation is admitted at `BootSyncStarted` as of 2026-07-31.
+    // NewState and ActivateArchived used to be excluded here, which left a
+    // crash during boot sync with a `BeginRollback` disposition that no
+    // authority would accept — the boot stalled and never recovered.
+    //
+    // ADMISSION ONLY: the boot-repair authorities are still ActiveReblit's
+    // alone, so the sibling operations are expected to advance and then stall
+    // where those effects are missing. This asserts the decision is accepted,
+    // not that boot repair runs.
     for kind in [OperationKind::NewState, OperationKind::Archived] {
         let sibling = Fixture::boot_sync_started(kind, BootSyncStartedLayout::Post, false);
-        assert!(!usr_rollback_decision_source_is_supported_for_test(&sibling.source));
+        assert!(usr_rollback_decision_source_is_supported_for_test(&sibling.source));
     }
     let mut wrong_phase = post_source;
     wrong_phase.phase = Phase::BootSyncComplete;
@@ -93,7 +102,8 @@ fn exact_active_reblit_prefix_admissions() {
     let decision_error = enter_boot(&fixture);
     assert_pending_phase(&decision_error, Phase::RollbackDecided);
     let decision = fixture.fixture.canonical_record();
-    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&decision));
+    // This fixture crashed at `BootSyncStarted`, long after the exchange.
+    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&decision, true));
     assert_resume_ready(&fixture, &decision);
 
     let route_error = enter_boot(&fixture);
@@ -112,7 +122,8 @@ fn exact_active_reblit_prefix_admissions() {
     let reverse_error = enter_boot(&fixture);
     assert_pending_phase(&reverse_error, Phase::UsrRestored);
     let restored = fixture.fixture.canonical_record();
-    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&restored));
+    // The reverse exchange has been applied, so `/usr` is back to pre-exchange.
+    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&restored, false));
     assert_resume_ready(&fixture, &restored);
 
     let candidate_route_error = enter_boot(&fixture);
@@ -138,10 +149,36 @@ fn sibling_and_legacy_plan_predicates_are_rejected() {
     for kind in [OperationKind::NewState, OperationKind::Archived] {
         let fixture = Fixture::boot_sync_started(kind, BootSyncStartedLayout::Post, false);
         let prefixes = sibling_prefixes(&fixture.source, kind);
-        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(&prefixes.decision));
-        assert!(!usr_rollback_reverse_plan_is_exact_for_test(&prefixes.reverse));
-        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(&prefixes.restored));
-        assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(
+        // These prefixes used to be asserted refused, on the premise that only
+        // ActiveReblit can crash during boot sync. It cannot: `BootSyncStarted`
+        // is a legal rollback source for every operation — the journal builds
+        // these very plans — and refusing the shared gates left a NewState or
+        // ActivateArchived boot-sync crash with a decision it could never act
+        // on. So the shared route, reverse, and preserve gates now admit them,
+        // each at the layout its own phase implies, and refuse the other.
+        //
+        // What still has no sibling implementation is the *boot repair* tail
+        // these chains end in; that stall is pinned in
+        // `admitted_post_exchange_rollback_routes_always_have_a_consuming_successor`
+        // rather than disguised as a refusal here.
+        assert!(usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.decision,
+            true
+        ));
+        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.decision,
+            false
+        ));
+        assert!(usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.restored,
+            false
+        ));
+        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.restored,
+            true
+        ));
+        assert!(usr_rollback_reverse_plan_is_exact_for_test(&prefixes.reverse));
+        assert!(usr_rollback_candidate_preserve_plan_is_exact_for_test(
             &prefixes.candidate_intent
         ));
     }
@@ -296,16 +333,22 @@ fn sibling_prefixes(source: &TransitionRecord, kind: OperationKind) -> SiblingPr
 }
 
 fn assert_prefix_plan_refused(record: &TransitionRecord) {
+    // Refusal must not depend on the observed layout, so every resume-route
+    // assertion below covers both.
+    let resume_refused = |record| {
+        !usr_rollback_resume_route_plan_is_exact_for_test(record, false)
+            && !usr_rollback_resume_route_plan_is_exact_for_test(record, true)
+    };
     match record.phase {
         Phase::RollbackDecided | Phase::UsrRestored => {
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(record));
+            assert!(resume_refused(record));
         }
         Phase::ReverseExchangeIntent => assert!(!usr_rollback_reverse_plan_is_exact_for_test(record)),
         Phase::CandidatePreserveIntent => {
             assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(record));
         }
         _ => {
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(record));
+            assert!(resume_refused(record));
             assert!(!usr_rollback_reverse_plan_is_exact_for_test(record));
             assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(record));
         }

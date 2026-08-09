@@ -131,7 +131,7 @@ impl UsrExchangedCoordinator {
             .map_err(preflight)?;
         let record_binding = coordinator
             .identity
-            .journal
+            .retained_journal()
             .record_binding(cast, &coordinator.record)
             .map_err(StatefulTransitionCoordinatorError::from)
             .map_err(preflight)?;
@@ -164,7 +164,7 @@ impl UsrExchangedCoordinator {
             })?;
         let record_binding = coordinator
             .identity
-            .journal
+            .retained_journal()
             .advance_record_binding(cast, record_binding, &complete)
             .map_err(StatefulTransitionCoordinatorError::from)
             .map_err(|source| RootAbiPublicationFailure::CompletionPersistence { transition_id, source })?;
@@ -270,7 +270,7 @@ fn require_exact_record_binding(
         .map_err(StatefulTransitionCoordinatorError::Identity)?;
     if coordinator
         .identity
-        .journal
+        .retained_journal()
         .has_record_binding(cast, record_binding, &coordinator.record)?
     {
         Ok(())

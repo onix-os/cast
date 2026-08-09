@@ -47,7 +47,6 @@ mod fault_injection;
 mod journal_active_reblit;
 #[allow(dead_code)] // contract-only until startup reconciliation can consume its records
 mod journal_coordinator;
-mod legacy_boot_repair;
 mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
@@ -110,7 +109,6 @@ pub(crate) use journal_coordinator::{
     StatefulTransitionCoordinatorError, StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
     execute_activate_archived_forward, execute_active_reblit_forward, execute_new_state_forward,
 };
-pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;
 
 #[allow(unused_imports)]
@@ -120,8 +118,8 @@ pub(crate) use prejournal_inventory::{
 
 #[cfg(test)]
 pub(crate) use active_previous_slot_parking::{
-    RetainedActivePreviousSlotParkingFaultPoint, arm_active_previous_slot_parking_faults,
-    arm_before_active_previous_slot_parking_rename,
+    RetainedActivePreviousSlotParkingFaultPoint, active_previous_slot_parking_faults_remaining,
+    arm_active_previous_slot_parking_faults, arm_before_active_previous_slot_parking_rename,
 };
 pub(crate) use archived_candidate::{
     ArchivedCandidateError, RetainedArchivedCandidateMoveFailure, RetainedArchivedCandidateMoveOutcome,
@@ -160,9 +158,10 @@ pub(crate) use archived_state_repair::{
 pub(crate) use fault_injection::{
     arm_after_retained_exchange_rename, arm_before_live_usr_mkdir, arm_before_previous_archive_slot_reopen,
     arm_before_previous_slot_retirement_rename, arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename,
-    arm_before_retained_previous_move_rename, arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault,
+    arm_before_retained_previous_move_rename, arm_retained_exchange_fault,
     arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
-    reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
+    reset_retained_exchange_syscall_count, retained_exchange_fault_armed, retained_exchange_syscall_count,
+    retained_previous_move_faults_remaining,
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
@@ -175,7 +174,7 @@ pub(crate) use staging_wrapper_rotation::{
 };
 #[cfg(test)]
 pub(crate) use staging_wrapper_rotation::{
-    RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_exchange,
+    RetainedStagingWrapperRotationFaultPoint,
     arm_before_staging_wrapper_final_preparation_revalidation, arm_before_staging_wrapper_journal_validation,
     arm_staging_wrapper_rotation_faults,
 };
@@ -336,6 +335,13 @@ pub(crate) struct RetainedPreviousMoveFailure {
 impl RetainedPreviousMoveFailure {
     pub(crate) fn outcome(&self) -> RetainedPreviousMoveOutcome {
         self.outcome
+    }
+
+    /// Take the underlying cause. The recovery dispatcher decides applied vs
+    /// not-applied from the namespace, not from this report, so it keeps only
+    /// the diagnostic.
+    pub(crate) fn into_source(self) -> Error {
+        self.source
     }
 
     fn with_abort_cleanup(self, cleanup: Error) -> Self {
@@ -523,7 +529,8 @@ std::thread_local! {
 /// durable-prefix coordinator consumes this guard when it creates a journal.
 #[derive(Debug)]
 pub(crate) struct StatefulTreeIdentity {
-    journal: TransitionJournalStore,
+    /// `None` on a recovery identity — see [`Self::retained_journal`].
+    journal: Option<TransitionJournalStore>,
     state_database: db::state::Database,
     candidate: RetainedIdentity,
     candidate_state_id: candidate_state_authority::RetainedCandidateStateId,
@@ -563,14 +570,41 @@ impl StatefulTreeIdentity {
     }
 
     fn require_no_journal(&self) -> Result<(), Error> {
-        if let Some(record) = self.journal.load()? {
+        // A recovery identity holds no handle to inspect, and demanding journal
+        // *absence* of it would be contradictory: it exists because a durable
+        // record exists. The guard's job — stopping a legacy effect from
+        // running across an unreconciled crash — is already done by
+        // `PreviousRestoreRecoverySeal`, which only the dispatcher that proved
+        // the exact record can mint, and which is required to construct one.
+        let Some(journal) = self.journal.as_ref() else {
+            return Ok(());
+        };
+        if let Some(record) = journal.load()? {
             return Err(Error::JournalAppeared {
                 transition: record.transition_id.as_str().to_owned(),
             });
         }
         Ok(())
     }
+
+    /// The journal handle this identity opened.
+    ///
+    /// A **recovery** identity deliberately opens none: the rollback
+    /// dispatcher that selected the recovery already holds the canonical lock,
+    /// and a second acquisition deadlocks against it. Callers of this accessor
+    /// are the forward coordinator, legacy boot repair, staging-wrapper
+    /// rotation, and the archived-state prune — none of which a recovery
+    /// identity can be handed to, because the only constructor that produces
+    /// one is `prepare_previous_restore_recovery`. The soft case,
+    /// `require_no_journal`, reads the field directly instead.
+    fn retained_journal(&self) -> &TransitionJournalStore {
+        self.journal.as_ref().expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL)
+    }
 }
+
+/// Why unwrapping [`StatefulTreeIdentity::journal`] is sound on these paths.
+pub(crate) const COORDINATED_IDENTITY_OPENED_ITS_JOURNAL: &str =
+    "only a recovery identity has no journal handle, and it reaches none of these paths";
 
 impl RetainedDirectory {
     fn open_beneath(root: &std::fs::File, relative: &CStr, path: PathBuf) -> Result<Self, Error> {

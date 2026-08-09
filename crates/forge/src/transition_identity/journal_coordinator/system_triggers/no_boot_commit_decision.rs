@@ -17,6 +17,7 @@ use crate::{
     transition_journal::{Operation, Phase, TransitionJournalStore, TransitionRecord},
 };
 
+use super::super::super::COORDINATED_IDENTITY_OPENED_ITS_JOURNAL;
 use super::super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorError};
 use super::{
     BoundSystemTriggerAdvanceFailure, SystemTriggersCompleteCoordinator, advance_bound_system_trigger_record,
@@ -186,7 +187,7 @@ impl SystemTriggersCompleteCoordinator {
             ..
         } = identity;
         Ok(ActiveReblitNoBootCommitDecisionHandoff {
-            journal,
+            journal: journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
             state_database,
             installation,
             record,
@@ -340,7 +341,7 @@ impl SystemTriggersCompleteCoordinator {
             ..
         } = identity;
         Ok(NewStateUnarchivedNoBootHandoff {
-            journal,
+            journal: journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
             state_database,
             installation,
             record,

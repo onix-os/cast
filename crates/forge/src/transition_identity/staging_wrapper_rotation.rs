@@ -16,6 +16,7 @@ mod state_snapshot;
 pub(crate) use fault_injection::{
     arm_before_staging_wrapper_exchange, arm_before_staging_wrapper_final_preparation_revalidation,
     arm_before_staging_wrapper_journal_validation, arm_staging_wrapper_rotation_faults,
+    staging_wrapper_rotation_faults_remaining,
 };
 pub(super) use journal_reservation::{
     ActiveReblitReservationError, RetainedActiveReblitReservation, RetainedActiveReblitReservationEvidenceFailure,

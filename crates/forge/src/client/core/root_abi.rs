@@ -40,38 +40,11 @@ struct RootAbiPreflight {
 
 #[cfg(test)]
 std::thread_local! {
-    static BEFORE_STATEFUL_CANDIDATE_METADATA: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
     static BEFORE_STATEFUL_ROOT_ABI_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static BEFORE_RETAINED_ROOT_ABI_LINK_PUBLICATION: std::cell::RefCell<Option<(usize, Box<dyn FnOnce()>)>> =
         const { std::cell::RefCell::new(None) };
     static RETAINED_ROOT_ABI_SYNC_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static AFTER_STATEFUL_ISOLATION_ROOT_RETENTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn arm_before_stateful_candidate_metadata(hook: impl FnOnce() + 'static) {
-    BEFORE_STATEFUL_CANDIDATE_METADATA.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
-    });
-}
-
-#[cfg(test)]
-fn before_stateful_candidate_metadata() {
-    BEFORE_STATEFUL_CANDIDATE_METADATA.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().take() {
-            hook();
-        }
-    });
-}
-
-#[cfg(test)]
-fn arm_before_stateful_root_abi_publication(hook: impl FnOnce() + 'static) {
-    BEFORE_STATEFUL_ROOT_ABI_PUBLICATION.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
-    });
 }
 
 #[cfg(test)]
@@ -134,27 +107,8 @@ fn sync_retained_root_abi(directory: &fs::File) -> io::Result<()> {
     directory.sync_all()
 }
 
-#[cfg(test)]
-fn arm_after_stateful_isolation_root_retention(hook: impl FnOnce() + 'static) {
-    AFTER_STATEFUL_ISOLATION_ROOT_RETENTION.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
-    });
-}
-
-#[cfg(test)]
-pub(super) fn after_stateful_isolation_root_retention() {
-    AFTER_STATEFUL_ISOLATION_ROOT_RETENTION.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().take() {
-            hook();
-        }
-    });
-}
 
 impl RootAbiPreflight {
-    fn path(&self) -> &Path {
-        &self.root
-    }
-
     fn revalidate(&self) -> Result<(), Error> {
         require_root_abi_directory(&self.root, &self.directory, self.identity)?;
         for (source, target, pinned) in &self.links {

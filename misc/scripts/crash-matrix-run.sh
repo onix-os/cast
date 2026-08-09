@@ -125,9 +125,12 @@
 # cut there. Until that lands, this operation's cells prove the harness runs,
 # not that the transition is durable.
 #
-# Note the pre-exchange rollback fix is deliberately scoped to NewState
-# (`plans/future_impl.md` §1.4); whether ActiveReblit and ActivateArchived share
-# the gap is still unmeasured.
+# The pre-exchange rollback fix used to be scoped to NewState
+# (`plans/future_impl.md` §1.4). That scoping was itself the bug: the gates that
+# *decide* to roll back never had the restriction, so ActivateArchived and
+# ActiveReblit persisted `RollbackDecided` and were then refused forever.
+# Measured here on 2026-07-30, fixed the same day, and now covered in-process by
+# `admitted_rollback_resume_routes_always_have_a_consuming_successor`.
 #
 # **Phase-targeted cuts, added 2026-07-27.** A `CUTS` entry of the form
 # `phase:<Phase>` or `phase:<Operation>.<Phase>` exports `CAST_CRASH_AT_PHASE`
@@ -146,23 +149,39 @@
 # Verified against the known defect: `phase:TransactionTriggersStarted` on
 # `install` cuts exactly there and recovery converges (`recovered-at-7`).
 #
-# **Open: `OPS=(activate)` does not produce an ActivateArchived transition.**
-# Both `phase:ActivateArchived.TransactionTriggersStarted` and
-# `phase:ActivateArchived.CandidatePrepared` report `CELL-OP-DONE` without the
-# marker ever printing, so `cast state activate 1` in this guest is not driving
-# the journal route the target names — it may be failing silently, or taking a
-# different path. Diagnose that before drawing any conclusion about whether
-# ActivateArchived shares NewState's pre-exchange recovery gap; the cells it
-# currently produces prove nothing about that question.
+# **Resolved 2026-07-30: the marker never printed because the hook was on the
+# wrong route.** `park_for_phase_targeted_crash` lived only in the unbound
+# `store::advance`, but every coordinated transition publishes through
+# `advance_record_binding`. So `CAST_CRASH_AT_PHASE` was silently inert for the
+# exact operations this matrix exists to test, and the harness reported "phase
+# never reached" while a real transition was running. The hook is now on both
+# publish paths.
+#
+# Two other false greens preceded it, all the same shape — a cell that looks
+# green because the thing it names never ran:
+#   * the guest kernel was `0600`, so qemu never booted at all;
+#   * `activate 1` on a fresh root failed with "state 1 already active".
+# Assume the next one exists. Before believing any green cell, confirm the
+# operation under test actually ran: `CAST-AT-PHASE` present for phase cuts,
+# and a non-empty `state=` column.
 #
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
-KERNEL=$(ls /boot/vmlinuz-* | head -1)
+# Distro kernels are `0600 root:root`, so qemu cannot open them as this user and
+# fails with "could not open kernel file ... Permission denied" — a cell that
+# never boots still prints "phase never reached", which reads as a real result.
+# Prefer a readable staged copy and fail loudly rather than produce that.
+KERNEL=${KERNEL:-/tmp/vmlinuz}
+if [ ! -r "$KERNEL" ]; then
+    echo "kernel '$KERNEL' is not readable by $(id -un)." >&2
+    echo "stage one:  sudo cp \$(ls /boot/vmlinuz-* | head -1) /tmp/vmlinuz && sudo chmod 644 /tmp/vmlinuz" >&2
+    exit 1
+fi
 
 # Operations that write durable state without needing network.
-OPS=(activate)
+OPS=(${MATRIX_OPS:-activate})
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(phase:ActivateArchived.CandidatePrepared)
+CUTS=(${MATRIX_CUTS:-phase:ActivateArchived.CandidatePrepared})
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -176,8 +195,19 @@ export LD_LIBRARY_PATH=/bin
 # No session manager in this guest, so nothing can interrupt a transaction and
 # forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
 export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
+# A rollback that defers carries a reason but only logs it at `warn`
+# (`usr_rollback_candidate_preserve_authority.rs`). Without this, a stall prints
+# `blocked by []` and names nothing — which is exactly how the ActiveReblit
+# stall (#31) was found but not diagnosed. Set before the mode branch so the
+# verdict boot's driver invocations get it too; that is where stalls surface.
+export RUST_LOG=${RUST_LOG:-warn}
 CRASH_PHASE=$(sed -n 's/.*cell_phase=\([A-Za-z.]*\).*/\1/p' /proc/cmdline | tr '.' ':')
-if [ -n "$CRASH_PHASE" ]; then export CAST_CRASH_AT_PHASE="$CRASH_PHASE"; fi
+if [ -n "$CRASH_PHASE" ]; then
+    export CAST_CRASH_AT_PHASE="$CRASH_PHASE"
+    # Durable disk, not /tmp: the guest's tmpfs dies with the power cut, so a
+    # witness written there cannot be read by the verdict boot that follows.
+    export CAST_CRASH_AT_PHASE_WITNESS=/mnt/root
+fi
 stage_and_activate() {
     stage_and_install
     # The install created state *1*, not state 2 — this is a fresh root. So
@@ -193,14 +223,51 @@ stage_and_activate() {
     # leave its displaced /usr placeholder in fixed staging, so the next stateful
     # operation refused with "fixed staging contains crash or foreign evidence".
     cast -D /mnt/root -y remove bash-completion 2>&1 | tail -2
-    cast -D /mnt/root -y state activate 1 2>&1 | tail -2
+    # Unpiped. `tail` holds its whole input until EOF, and a phase-targeted
+    # `cast` never reaches EOF — parking is the point. So `| tail -2` swallowed
+    # `CAST-AT-PHASE` for exactly the command the marker exists to observe.
+    # Same family as the `>/dev/null 2>&1` bug recorded above and the BusyBox
+    # `grep` bug below: three separate ways this harness has hidden the marker
+    # from itself. Any command that can park must write straight to the console.
+    cast -D /mnt/root -y state activate 1 2>&1
+}
+stage_and_reblit() {
+    stage_and_install
+    # `cast state verify` drives ActiveReblit (`client/verify.rs:295`) only for
+    # an active state it finds *damaged*, so the tree has to be broken first or
+    # verify is a no-op and the cell measures nothing — the same trap
+    # `stage_and_activate` fell into when it activated an already-active state.
+    # Must be a *package* file. Verify flags `MissingVFSPath` only for paths in
+    # the state's VFS (`client/verify.rs:129`), so tree metadata does not count:
+    # a plain `find /mnt/root/usr | head -1` picks up `.stateID`, `.cast-tree-id`
+    # or `lib/os-release` and verify then reports "No issues found", which the
+    # harness scores as NOT-ON-CHAIN — a cell that looks like a real answer.
+    victim=$(find /mnt/root/usr/share -type f 2>/dev/null | head -1)
+    if [ -z "$victim" ]; then
+        echo "CELL-FAIL no package file to damage under /mnt/root/usr/share"
+        return 1
+    fi
+    echo "DAMAGE-TARGET $victim"
+    rm -f "$victim"
+    # Prove the damage landed. A silent no-op here scores NOT-ON-CHAIN, which
+    # reads like a verdict about the phase when it is a statement about setup.
+    if [ -e "$victim" ]; then
+        echo "DAMAGE-FAILED $victim still present"
+    else
+        echo "DAMAGE-OK $victim removed"
+    fi
+    echo "DAMAGE-LIVE-TREE $(ls -d /mnt/root/usr 2>&1); usr-share-count=$(find /mnt/root/usr/share -type f 2>/dev/null | wc -l)"
+    # Unpiped: this is the command that parks. See the note in stage_and_activate.
+    cast -D /mnt/root -y state verify 2>&1
 }
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
     cast index /mnt/repo 2>&1 | tail -1
     cast -D /mnt/root -y repo add local file:///mnt/repo/stone.index 2>&1 | tail -1
-    cast -D /mnt/root -y install bash-completion 2>&1 | tail -2
+    # Unpiped for the same reason as the activate below: a NewState phase cut
+    # parks inside this install, and `tail` would hold the marker forever.
+    cast -D /mnt/root -y install bash-completion 2>&1
 }
 MODE=$(sed -n 's/.*cell_mode=\([a-z]*\).*/\1/p' /proc/cmdline)
 OP=$(sed -n 's/.*cell_op=\([a-zA-Z0-9_./-]*\).*/\1/p' /proc/cmdline | tr '_' ' ')
@@ -210,14 +277,39 @@ mkdir -p /mnt/root
 echo "BOOT-ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ "$MODE" = write ]; then
     echo "CELL-READY"
-    case "$OP" in activate) stage_and_activate >/dev/null 2>&1 ;; *) stage_and_install >/dev/null 2>&1 ;; esac
+    # Keep the phase marker. `>/dev/null 2>&1` here discarded it: the hook
+    # prints `CAST-AT-PHASE` on stderr and then parks, so the guest was sitting
+    # exactly where it was asked to while the harness grepped a console log the
+    # marker had been thrown into /dev/null out of. Every "phase never reached"
+    # verdict this harness ever produced came from that redirect, and three
+    # separate diagnoses blamed the hook, the cmdline parsing, and install
+    # throughput before anyone read this line.
+    #
+    # Unfiltered, deliberately. The guest runs BusyBox, whose grep supports
+    # neither `-a` nor `--line-buffered`; piping through it made the operation
+    # die instantly with a usage message, so the install never ran and every
+    # cell reported "TIMED-OUT ... the operation had not finished" about a guest
+    # that had done nothing. That filter was added in `fe529969` — the same
+    # commit that recorded the last end-to-end success — so every cell run after
+    # it measured nothing.
+    #
+    # A flooded serial console is cosmetic. This harness has now produced four
+    # wrong diagnoses (hook route, cmdline parsing, install throughput,
+    # `>/dev/null`), and the console is what settles them, so it stays whole.
+    # The runner greps `$W/o1` for the marker anyway; nothing needed filtering
+    # in the guest.
+    case "$OP" in
+        activate) stage_and_activate 2>&1 ;;
+        reblit) stage_and_reblit 2>&1 ;;
+        *) stage_and_install 2>&1 ;;
+    esac
     echo "CELL-OP-DONE"
     while :; do sleep 1; done
 elif [ "$MODE" = control ]; then
     # No cut: let the operation finish and shut down cleanly. Without this the
     # `state` column cannot be read — an absent package could equally mean the
     # cut worked or the install never works in this guest.
-    case "$OP" in activate) stage_and_activate ;; *) stage_and_install ;; esac
+    case "$OP" in activate) stage_and_activate ;; reblit) stage_and_reblit ;; *) stage_and_install ;; esac
     sync
     echo "CELL-OP-DONE"
     poweroff -f
@@ -240,15 +332,55 @@ else
     # changing across several attempts.
     PREV_PHASE=""; STALL=0
     for attempt in $(seq 1 60); do
-        if DRV=$(cast -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
+        # `--log warn`, not RUST_LOG: cast configures tracing from this flag
+        # (`tracing_common::logging::init_log`) and ignores the env var. Without
+        # it a deferral prints `blocked by []` and names nothing, which is how
+        # the ActiveReblit stall (#31) was found but not diagnosed.
+        if DRV=$(cast --log warn -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
         # "no package found" means the cut landed before the repo was indexed,
         # so there is nothing to install and nothing to recover. That is not a
         # durability outcome and must not be reported as a stall.
         case "$DRV" in *"no package found"*) D=nothing-staged; break ;; esac
+        # A phase name only appears when startup *refused* a phase. A failure
+        # inside a dispatcher has no `at <Phase> requires` text at all, so this
+        # came out empty and the verdict degraded to `stalled-at-unknown` — the
+        # one reading that tells you nothing. Name the layer instead.
         PHASE=$(echo "$DRV" | grep -oE 'at [A-Za-z]+ requires' | head -1 | awk '{print $2}')
+        if [ -z "$PHASE" ]; then
+            PHASE=$(echo "$DRV" | grep -oE 'dispatch the exact startup [A-Za-z]+' | head -1 | awk '{print "dispatch-" $NF}')
+        fi
         if [ "$PHASE" = "$PREV_PHASE" ]; then
             STALL=$((STALL + 1))
-            if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then D=stalled-at-${PHASE:-unknown}; echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"; break; fi
+            if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then
+                D=stalled-at-${PHASE:-unknown}
+                # The 200-character cut kept the summary readable and threw away
+                # the end of every error chain — which is where the cause lives,
+                # since these errors nest source-first. Print the whole last
+                # line, wrapped, rather than a prefix that always stops just
+                # before the answer (2026-08-02).
+                echo "STALL:"
+                echo "$DRV" | tail -1 | fold -w 160
+                # Everything cast writes lands in `$DRV`, and the summary above
+                # keeps only 200 characters of its last line. Diagnostics added
+                # to chase a stall are therefore captured and discarded, which
+                # reads as "the code path never ran" — that cost a whole round
+                # trip on 2026-08-01. Surface anything tagged with DIAG_GREP
+                # (default `-DIAG`) so an instrumented binary can actually say
+                # why it refused. Always emit the marker line, so a run with no
+                # matches is distinguishable from a run whose output was eaten.
+                # Also surface every WARN line. Requiring a `-DIAG` tag meant a
+                # `tracing::warn!` added to diagnose a stall was still filtered
+                # out, so eight probes — including an unconditional one — read as
+                # "the code path never ran" when the transport was simply
+                # dropping them (2026-08-05). `DIAG_GREP` cannot be set from the
+                # host either: it is read inside the nested guest, whose
+                # environment comes from the kernel cmdline, so host env never
+                # arrives. Matching WARN needs neither a tag nor plumbing.
+                echo "DIAG-BEGIN ${DIAG_GREP:--DIAG}|WARN"
+                echo "$DRV" | grep -aE -- "${DIAG_GREP:--DIAG}|WARN" | head -40 || true
+                echo "DIAG-END"
+                break
+            fi
         else
             STALL=0
             echo "PHASE-$attempt: ${PHASE:-?}"
@@ -285,9 +417,27 @@ for op in "${OPS[@]}"; do
             # Cut exactly when the record is durable at the named phase, rather
             # than after N seconds. A wall-clock cut cannot isolate one
             # transition's window when the setup before it takes seconds.
-            for _ in $(seq 1 120); do grep -q "CAST-AT-PHASE" "$W/o1" 2>/dev/null && break; sleep 1; done
+            # Stop as soon as either outcome is decided: the marker printed, or
+            # the operation finished without ever reaching that phase. Waiting a
+            # fixed 120s conflated the two — a nested-KVM install can outlast it,
+            # so the guest was killed mid-setup and the cell reported "phase
+            # never reached" for a phase the run had simply not got to yet.
+            # `state=absent` in the verdict is the tell.
+            PHASE_WAIT=${PHASE_WAIT:-600}
+            for _ in $(seq 1 "$PHASE_WAIT"); do
+                grep -q "CAST-AT-PHASE" "$W/o1" 2>/dev/null && break
+                grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null && break
+                sleep 1
+            done
             if ! grep -q "CAST-AT-PHASE" "$W/o1"; then
-                echo "phase ${cut#phase:} never reached"; tail -4 "$W/o1"
+                # These need opposite fixes, so never report them the same way.
+                if grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null; then
+                    echo "NOT-ON-CHAIN: ${cut#phase:} — operation completed without reaching it"
+                else
+                    echo "TIMED-OUT: ${cut#phase:} not reached in ${PHASE_WAIT}s, and the operation had not finished"
+                    echo "  (raise PHASE_WAIT; this cell proves nothing about that phase)"
+                fi
+                tail -4 "$W/o1"
             fi
             ;;
         *) sleep "$cut" ;;

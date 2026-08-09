@@ -126,7 +126,7 @@ fn ready<'reservation>(
         UsrRollbackCandidatePreserveAdmission::Finish(authority) => {
             UsrRollbackCandidatePreserveReady::Finish(authority)
         }
-        UsrRollbackCandidatePreserveAdmission::NotApplicable | UsrRollbackCandidatePreserveAdmission::Deferred => {
+        UsrRollbackCandidatePreserveAdmission::NotApplicable | UsrRollbackCandidatePreserveAdmission::Deferred(_) => {
             panic!("exact candidate-preservation evidence did not admit production dispatch")
         }
     }

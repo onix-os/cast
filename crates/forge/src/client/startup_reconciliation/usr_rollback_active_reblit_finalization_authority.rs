@@ -11,9 +11,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
-        TransitionJournalStore, TransitionRecord,
+        BootRollback, Operation, Phase, RollbackAction, StorageError, TransitionJournalBinding,
+        TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -253,23 +252,50 @@ fn active_reblit_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         && record.phase == Phase::RollbackComplete
         && record.candidate.id.is_some()
         && record.candidate.id == record.previous.id
-        && matches!(
-            (rollback.source, record.generation),
-            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
-                | (ForwardPhase::RootLinksComplete, 14)
-                | (ForwardPhase::SystemTriggersStarted, 15)
-                | (ForwardPhase::SystemTriggersComplete, 16)
-        )
-        && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
+        // Pre-exchange sources reach `RollbackComplete` by the short route, so
+        // their generation is not fixed and they were excluded entirely — the
+        // same stall fixed for NewState in `ab949007`, present here too.
+        // One derived chain check in place of the tuple table. Its rows stopped
+        // at `SystemTriggersComplete`, so an ActiveReblit cut during boot sync
+        // — the very case this operation's boot-repair route exists for —
+        // could not finalize once the repair completed.
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
-        && rollback.fresh_db == RollbackAction::NotRequired
-        && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            rollback.fresh_db.resolved()
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
+        // Settled, not absent. `NotRequired` is only one of the two ways a
+        // rollback legitimately arrives here: the other is through the
+        // boot-repair route this operation owns, which leaves the action
+        // `Applied`, `AlreadySatisfied`, or `Unverified`. Demanding
+        // `NotRequired` meant an ActiveReblit boot-sync crash could complete
+        // its repair and still never finalize. Only `PendingUnverifiable` is
+        // refused, because that repair is still owed.
+        && rollback.boot != BootRollback::PendingUnverifiable
+        // Derived, not asserted. Hard-coding this to `true` required the
+        // crash to have happened after the transaction triggers, so a
+        // rollback that began before them reached this phase and had no
+        // route out — the terminal stall measured in the VM 2026-07-31.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_active_reblit_finalization_plan_is_exact_for_test(
+    record: &TransitionRecord,
+) -> bool {
+    active_reblit_finalization_plan_is_exact(record)
 }
 
 fn require_journal_record_binding(

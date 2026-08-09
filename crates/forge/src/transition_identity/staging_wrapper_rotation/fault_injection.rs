@@ -23,6 +23,16 @@ pub(crate) fn arm_staging_wrapper_rotation_faults(
     FAULT.with(|fault| *fault.borrow_mut() = points);
 }
 
+/// How many armed faults have *not* been consumed.
+///
+/// Without this a test cannot distinguish "the rotation survived the injected
+/// fault" from "the fault point was never reached", and those two readings of a
+/// passing run are opposite conclusions.
+#[cfg(test)]
+pub(crate) fn staging_wrapper_rotation_faults_remaining() -> usize {
+    FAULT.with(|fault| fault.borrow().len())
+}
+
 #[cfg(test)]
 pub(crate) fn arm_before_staging_wrapper_exchange(hook: impl FnOnce() + 'static) {
     BEFORE_EXCHANGE.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));

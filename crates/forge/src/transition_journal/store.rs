@@ -950,11 +950,23 @@ impl TransitionJournalStore {
 ///
 /// Opt-in and explicitly named, like `CAST_ALLOW_UNINHIBITED_TRANSACTION`, so it
 /// cannot be reached by accident.
+/// Read once per process, not once per advance.
+///
+/// `env::var_os` takes std's global environment lock, and this hook runs while
+/// the journal operation lock is held. Paying that on every phase advance
+/// lengthens the critical section for a value that cannot legitimately change
+/// mid-process — a diagnostic making the durability it observes measurably
+/// worse. Reading it once removes the cost entirely when the hook is unarmed,
+/// which is every case except a crash-matrix guest.
+fn phase_targeted_crash_target() -> Option<&'static str> {
+    static TARGET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    TARGET
+        .get_or_init(|| std::env::var_os("CAST_CRASH_AT_PHASE").and_then(|value| value.to_str().map(str::to_owned)))
+        .as_deref()
+}
+
 fn park_for_phase_targeted_crash(operation: super::model::Operation, phase: Phase) {
-    let Some(target) = std::env::var_os("CAST_CRASH_AT_PHASE") else {
-        return;
-    };
-    let Some(target) = target.to_str() else {
+    let Some(target) = phase_targeted_crash_target() else {
         return;
     };
     // `Phase` alone, or `Operation:Phase` when a run performs more than one
@@ -970,6 +982,29 @@ fn park_for_phase_targeted_crash(operation: super::model::Operation, phase: Phas
     };
     if !matches_target {
         return;
+    }
+    // Two independent witnesses, because the console one has been unreliable
+    // and cost four wrong diagnoses of why the marker "never fired".
+    //
+    // The file is the load-bearing one: it survives any console redirection,
+    // pipe buffering, or output filtering between here and the harness, so its
+    // presence proves this function was *entered* even when nothing appears on
+    // the serial log. A harness that sees the file but no console line is
+    // looking at a plumbing bug; one that sees neither is looking at a hook
+    // that was never reached, and those need opposite fixes.
+    // Written next to the journal, deliberately, not to `/tmp`: the guest's
+    // `/tmp` is tmpfs and dies with the power cut, so a witness there cannot be
+    // read by the verdict boot that follows. This path is on the same durable
+    // filesystem as the record whose advance is being observed, so it survives
+    // exactly as long as the evidence it describes.
+    //
+    // `CAST_CRASH_AT_PHASE` is already opt-in and crash-matrix-only, so this
+    // write never happens on a real system.
+    if let Some(directory) = std::env::var_os("CAST_CRASH_AT_PHASE_WITNESS") {
+        let _ = std::fs::write(
+            Path::new(&directory).join("cast-at-phase"),
+            format!("{operation:?}:{phase:?}\n"),
+        );
     }
     // Line-buffered stderr reaches the guest console before the park.
     eprintln!("CAST-AT-PHASE {operation:?}:{phase:?}");

@@ -69,6 +69,7 @@ fn journal_coordinator_root_links_complete_preserves_synthesized_empty_and_activ
             PreviousKind::Active,
             true,
             true,
+            false,
             0,
         );
         let authority = authority.expect("ActiveReblit root ABI fixture authority");

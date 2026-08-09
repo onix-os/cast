@@ -404,7 +404,7 @@ fn advance_bound_system_trigger_record(
     let successor_binding =
         match coordinator
             .identity
-            .journal
+            .retained_journal()
             .advance_record_binding(cast, predecessor_binding, &successor)
         {
             Ok(binding) => binding,
@@ -535,7 +535,7 @@ fn reopen_and_classify(
 ) -> Result<ReopenedAdvance, StatefulTransitionCoordinatorError> {
     let installation = authority.installation();
     let identity = reopen_identity_journal(coordinator.identity, installation, successor.phase)?;
-    let actual = identity.journal.load()?;
+    let actual = identity.retained_journal().load()?;
     let (record, durable) = match actual {
         Some(actual) if actual == *predecessor => (actual, DurableSystemTriggerRecord::Predecessor),
         Some(actual) if actual == *successor => (actual, DurableSystemTriggerRecord::Successor),
@@ -555,10 +555,11 @@ fn reopen_and_classify(
 
     if durable == DurableSystemTriggerRecord::Successor
         && let Some(old_binding) = old_successor_binding
-        && !coordinator
-            .identity
-            .journal
-            .has_reopened_record_binding(cast, old_binding, &coordinator.record)?
+        && !coordinator.identity.retained_journal().has_reopened_record_binding(
+            cast,
+            old_binding,
+            &coordinator.record,
+        )?
     {
         return Ok(ReopenedAdvance::Failed {
             durable,
@@ -569,7 +570,10 @@ fn reopen_and_classify(
         });
     }
 
-    let binding = coordinator.identity.journal.record_binding(cast, &coordinator.record)?;
+    let binding = coordinator
+        .identity
+        .retained_journal()
+        .record_binding(cast, &coordinator.record)?;
     before_reopened_fresh_binding_validation(coordinator.record.phase);
     if let Err(source) =
         require_system_trigger_same_store_evidence(&coordinator, metadata, provenance, authority, readiness, &binding)
@@ -578,10 +582,11 @@ fn reopen_and_classify(
     }
     if durable == DurableSystemTriggerRecord::Successor
         && let Some(old_binding) = old_successor_binding
-        && !coordinator
-            .identity
-            .journal
-            .has_reopened_record_binding(cast, old_binding, &coordinator.record)?
+        && !coordinator.identity.retained_journal().has_reopened_record_binding(
+            cast,
+            old_binding,
+            &coordinator.record,
+        )?
     {
         return Ok(ReopenedAdvance::Failed {
             durable,
@@ -635,7 +640,8 @@ fn reopen_identity_journal(
         .map_err(IdentityError::from)
         .map_err(StatefulTransitionCoordinatorError::Identity)?;
     Ok(StatefulTreeIdentity {
-        journal,
+        // A coordinated identity always holds its own handle.
+        journal: Some(journal),
         state_database,
         candidate,
         candidate_state_id,
@@ -675,7 +681,7 @@ fn require_same_store_record_binding(
         .map_err(StatefulTransitionCoordinatorError::Identity)?;
     if coordinator
         .identity
-        .journal
+        .retained_journal()
         .has_record_binding(cast, binding, &coordinator.record)?
     {
         Ok(())

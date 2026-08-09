@@ -73,6 +73,7 @@ fn journal_coordinator_root_links_complete_active_reblit_post_publication_state_
             PreviousKind::Active,
             true,
             true,
+            false,
             0,
         );
         let authority = authority.expect("ActiveReblit evidence-race authority");

@@ -35,10 +35,30 @@ mod usr_rollback_finalization;
 mod usr_rollback_fresh_db_invalidation_dispatch;
 mod usr_rollback_fresh_db_invalidation_persistence;
 mod usr_rollback_fresh_db_invalidation_route;
+mod usr_rollback_previous_restore_dispatch;
+mod usr_rollback_previous_restore_persistence;
 mod usr_rollback_resume_route;
 mod usr_rollback_reverse_dispatch;
 mod usr_rollback_reverse_durability;
 mod usr_rollback_reverse_persistence;
+
+/// Unforgeable permission to consume read-only previous-restore admission into
+/// mutable effect typestate. The production constructor is private to this
+/// module and its phase-specific executor descendants.
+pub(in crate::client) struct UsrRollbackPreviousRestoreEffectSeal {
+    _private: (),
+}
+
+impl UsrRollbackPreviousRestoreEffectSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
 
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
@@ -93,6 +113,17 @@ pub(crate) use usr_rollback_decision::arm_before_usr_rollback_decision_final_rev
 pub(super) use usr_rollback_resume_route::{
     DurableUsrRollbackResumeRouteRecord, UsrRollbackResumeRoutePersistenceError, UsrRollbackResumeRouteReopenError,
     persist_usr_rollback_resume_route_and_reopen,
+};
+
+pub(super) use usr_rollback_previous_restore_dispatch::{
+    UsrRollbackPreviousRestoreDispatchError, UsrRollbackPreviousRestoreReady,
+    dispatch_usr_rollback_previous_restore_and_reopen,
+};
+
+#[allow(unused_imports)] // the durable-record discriminant is consumed by focused fault contracts
+pub(in crate::client) use usr_rollback_previous_restore_persistence::DurableUsrRollbackPreviousRestoreRecord;
+pub(super) use usr_rollback_previous_restore_persistence::{
+    UsrRollbackPreviousRestorePersistenceError, persist_usr_rollback_previous_restore_and_reopen,
 };
 
 pub(super) use usr_rollback_reverse_dispatch::{
