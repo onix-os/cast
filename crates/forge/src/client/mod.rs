@@ -223,7 +223,6 @@ include!("core/construction.rs");
 include!("core/client_model.rs");
 include!("core/client_facade.rs");
 include!("core/state_planning.rs");
-include!("core/stateful_transition.rs");
 include!("core/stateful_recovery.rs");
 include!("core/ephemeral_transition.rs");
 include!("core/package_cache_orchestration.rs");
