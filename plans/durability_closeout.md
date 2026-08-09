@@ -3516,3 +3516,39 @@ rather than by the invariants added beside it.
 So the remaining work stays as scoped in task #31: a dedicated ActiveReblit
 no-reservation effect. Before writing it, read each of those four gates and
 record *why* it is there — that reading is the real prerequisite, not the code.
+
+### #31: sharing the NewState effect was TRIED and FAILS — the successor phase
+
+Implemented and reverted 2026-08-09. The result is worth more than the attempt.
+
+The reasoning that made it look safe was sound as far as it went:
+`candidate_preserve_plan_is_exact` is genuinely operation-agnostic — every
+operation-specific decision is already delegated to
+`record.fresh_db_rollback_is_possible`, `record.candidate_disposition_for` and
+`record.expected_external_effects_may_remain`. The NewState capture reads only
+the candidate token, `marker.links == 1`, the staging wrapper and the quarantine
+target. ActiveReblit's disposition is `Quarantine`, the same as NewState's. Two
+of the four `Operation::NewState` gates really were pure guards.
+
+**It still breaks, and the compiler and unit tests do not catch it.** Wiring
+`ActiveReblitStagedWithoutReservation` into `MoveNewState` compiles cleanly and
+passes almost everything, then **overflows the stack** in
+`startup_root_links_complete_fresh_entries_reach_operation_specific_stable_endpoints_without_second_reverse_exchange`.
+
+**Why:** the shared piece is the *effect*, but what follows it is not. The
+NewState move produces a `CandidatePreserved` record whose successor is
+`FreshDbInvalidationIntent`. ActiveReblit's chain expects a different successor,
+so the endpoint walk never terminates — it recurses until the stack dies.
+
+**The lesson generalises past this task:** operation-agnostic *inputs* do not
+imply an operation-agnostic *effect*, because the effect determines the next
+phase. Sharing anything in this rollback chain requires the successor to match,
+not merely the evidence. That is why #31 needs its own effect, and it is the
+concrete reason to record rather than "it felt risky".
+
+Note also which test caught it: an **endpoint** test walking each operation's
+chain to a stable end — not an admission invariant. That is the fourth time in
+this epic an exclusion/endpoint test caught an over-widening the admission-side
+assertions missed.
+
+Tree reverted to the detection-only state and green at 2731 passed.
