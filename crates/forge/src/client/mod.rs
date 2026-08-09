@@ -70,7 +70,7 @@ use crate::{
         ArchivedCandidateError, FailedCandidateKind, QuarantinedCandidate, RetainedArchivedCandidateMoveFailure,
         RetainedArchivedCandidateMoveOutcome, RetainedExchangeFailure, RetainedExchangeOutcome,
         RetainedPreviousMoveFailure, RetainedPreviousMoveOutcome, RetainedStagingWrapperRotationFailure,
-        RetainedStagingWrapperRotationOutcome, StatefulTreeIdentity,
+        StatefulTreeIdentity,
     },
 };
 
