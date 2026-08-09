@@ -3385,3 +3385,43 @@ execute directly.
 investigation. The off-chain `NotApplicable` warn and the #30 deferral reasons
 should stay — they are what made this findable — but the stage markers should be
 trimmed before merge.
+
+### Detection landed; effect still owed — 2026-08-09 (task #31)
+
+`ActiveReblitStagedWithoutReservation` added to
+`UsrRollbackCandidatePreserveTopology`. `active_reblit_topology` now accepts a
+missing replacement wrapper **only** in the staged shape (candidate in staging,
+staging contains it, no slot identity); if the candidate claims to live inside a
+wrapper, absence stays `ActiveReblitWrapperMissing` — a tree pointing at a parent
+that is not there is still a real error, and that exclusion is the guard against
+the over-widening this epic hit three times.
+
+The variant is correctly *not* `is_preserved()`, and the compiler found the one
+place that needed it beyond the two designed sites:
+`effect_reconciliation/post_move_durability.rs:97`, an exhaustive match reached
+only by preserved topologies, where it joins the other staged variants in
+`EvidenceMismatch`.
+
+**The effect is deliberately not implemented.** The design assumed the new
+variant could reuse the NewState quarantine effect; it cannot.
+`into_new_state_move_effect_evidence` is gated on
+`NewStateStagedWithEmptyQuarantine` *exactly*
+(`candidate_preserve_proof.rs:264`), so reuse means widening that gate and
+applying `ProjectedNewStateCandidatePreserveNamespace::capture` and
+`RetainedNewStateCandidatePreserveParents::capture` to an ActiveReblit record
+without proof they hold. In crash-recovery code that decides a candidate tree's
+disposition, that is not a guess worth making. The variant therefore maps to the
+existing `Unsupported` outcome, already used by the three `*Preserved` shapes.
+
+**What this buys on its own:** a silent permanent deferral that named nothing
+becomes a recognised topology reaching a known-safe outcome. The guest still
+will not complete the rollback — that needs the effect — but the failure is now
+classified rather than invisible.
+
+Suite: **2735 passed, 0 failed, 6 ignored.**
+
+**Remaining for #31:** implement the effect, either by widening the NewState
+gate *with* an exclusion test proving the projection holds for ActiveReblit, or
+by writing a dedicated no-reservation effect. Then re-run the guest cell, and
+also cut at a post-reservation phase to prove the wrapper-bearing shapes still
+work.
