@@ -475,6 +475,20 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
                 Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
             }
+            // The effect for this shape is not written yet. Classifying it is
+            // still worth landing on its own: it turns a silent permanent
+            // deferral — which named nothing and stalled every restart — into a
+            // recognised topology reaching a known-safe outcome.
+            //
+            // It cannot reuse the NewState quarantine effect as-is:
+            // `into_new_state_move_effect_evidence` is gated on
+            // `NewStateStagedWithEmptyQuarantine` exactly
+            // (`candidate_preserve_proof.rs:264`), and widening that gate would
+            // reuse a NewState-shaped projection and parents-capture for an
+            // ActiveReblit record without proof they hold. See task #31.
+            UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation => {
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
+            }
         }
     }
 }

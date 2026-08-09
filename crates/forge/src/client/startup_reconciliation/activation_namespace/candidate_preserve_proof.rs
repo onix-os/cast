@@ -117,6 +117,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveT
     ArchivedPreserved,
     ActiveReblitStaged { wrapper_index: usize },
     ActiveReblitPreserved { wrapper_index: usize },
+    /// Staged candidate whose replacement wrapper was never reserved.
+    ///
+    /// The reservation runs at `reserve_for_transaction_triggers`, after
+    /// `CandidatePrepared`, so a crash before it leaves no wrapper to name.
+    /// Carries no index for that reason.
+    ActiveReblitStagedWithoutReservation,
 }
 
 impl UsrRollbackCandidatePreserveTopology {
@@ -783,8 +789,22 @@ fn active_reblit_topology(
     let replacement = one_wrapper(
         snapshot,
         |wrapper| matches!(wrapper.role, TreeLocation::ActiveReblitWrapper { state: actual, .. } if actual == state),
-    )?
-    .ok_or(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitWrapperMissing)?;
+    )?;
+    // A missing wrapper is only legal in the staged shape. The reservation that
+    // creates it runs after `CandidatePrepared`, so a crash before that point
+    // has nothing to name — and demanding it there stalled the rollback
+    // permanently (measured on a guest 2026-08-09). If the candidate instead
+    // claims to live inside a wrapper, absence remains a real error: that is a
+    // tree pointing at a parent which is not there.
+    let Some(replacement) = replacement else {
+        if candidate.location == TreeLocation::Staging
+            && wrapper_contains(staging, candidate)
+            && staging.slot_identity().is_none()
+        {
+            return Ok(UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation);
+        }
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitWrapperMissing);
+    };
     let TreeLocation::ActiveReblitWrapper {
         index: wrapper_index, ..
     } = &replacement.role

@@ -128,7 +128,8 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
             | UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue
             | UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine
             | UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot
-            | UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { .. } => {
+            | UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { .. }
+            | UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation => {
                 Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into())
             }
         }
