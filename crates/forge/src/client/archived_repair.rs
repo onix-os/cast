@@ -98,6 +98,14 @@ impl Client {
     where
         F: FnMut(ArchivedRepairCheckpoint) -> Result<(), Error>,
     {
+        // Archived repair carries no journal record, so `CAST_CRASH_AT_PHASE`
+        // cannot name a cut inside it. Wrapping the checkpoint here gives the
+        // crash matrix the same precise boundary for every repair point at one
+        // call site.
+        let mut checkpoint = |point| {
+            park_for_repair_targeted_crash(point);
+            checkpoint(point)
+        };
         self.require_non_frozen()?;
         if !matches!(&self.scope, super::Scope::Stateful) {
             return Err(Error::EphemeralProhibitedOperation);
@@ -312,5 +320,42 @@ fn outcome_name(outcome: ArchivedStateRepairOutcome) -> &'static str {
         ArchivedStateRepairOutcome::NotApplied => "not-applied",
         ArchivedStateRepairOutcome::Applied => "applied",
         ArchivedStateRepairOutcome::Ambiguous => "ambiguous",
+    }
+}
+
+/// Opt-in cut point for the crash matrix, read once per process.
+///
+/// Archived repair is deliberately not journalled (`plans/future_impl.md`
+/// §1.3), so `CAST_CRASH_AT_PHASE` has no phase to name here and the matrix had
+/// no way to cut inside the window the interrupted-repair marker exists to
+/// cover. This is the same mechanism, keyed by repair checkpoint instead: it
+/// parks rather than aborts, because aborting leaves the page cache intact and
+/// unsynced writes survive.
+fn repair_targeted_crash_target() -> Option<&'static str> {
+    static TARGET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    TARGET
+        .get_or_init(|| std::env::var_os("CAST_CRASH_AT_REPAIR").and_then(|value| value.to_str().map(str::to_owned)))
+        .as_deref()
+}
+
+fn park_for_repair_targeted_crash(point: ArchivedRepairCheckpoint) {
+    let Some(target) = repair_targeted_crash_target() else {
+        return;
+    };
+    if !target.eq_ignore_ascii_case(&format!("{point:?}")) {
+        return;
+    }
+    // Durable witness beside the journal, for the same reason the phase hook
+    // writes one: the guest's `/tmp` is tmpfs and dies with the cut, so only a
+    // witness on this filesystem is readable by the verdict boot.
+    if let Some(directory) = std::env::var_os("CAST_CRASH_AT_PHASE_WITNESS") {
+        let _ = std::fs::write(
+            std::path::Path::new(&directory).join("cast-at-repair"),
+            format!("{point:?}\n"),
+        );
+    }
+    eprintln!("CAST-AT-REPAIR {point:?}");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
     }
 }
