@@ -349,6 +349,7 @@ fn failed_batch_drops_prior_snapshots_and_leaves_policy_reusable() {
     let digests = [correct_digest, wrong_digest];
     let policy = test_policy(2, 64, 128, 32);
     let sealed_descriptor = Cell::new(None::<RawFd>);
+    let sealed_identity = Cell::new(None::<(u64, u64)>);
 
     let error =
         prepare_with_policy_until_and_checkpoint(&installation, digests, policy, test_deadline(), |checkpoint| {
@@ -356,6 +357,11 @@ fn failed_batch_drops_prior_snapshots_and_leaves_policy_reusable() {
                 && digest == correct_digest
             {
                 sealed_descriptor.set(Some(descriptor));
+                sealed_identity.set(
+                    fstat(descriptor)
+                        .ok()
+                        .map(|stat| (stat.st_dev as u64, stat.st_ino as u64)),
+                );
             }
         })
         .err()
@@ -367,7 +373,21 @@ fn failed_batch_drops_prior_snapshots_and_leaves_policy_reusable() {
     let dropped = sealed_descriptor
         .get()
         .expect("the first snapshot must have been sealed");
-    assert_eq!(fcntl(dropped, FcntlArg::F_GETFD), Err(Errno::EBADF));
+    // Descriptor numbers are reused process-wide, so a live number does not
+    // prove a leak — a concurrent test may already hold this one. Only the same
+    // number still open on the same inode does.
+    match fcntl(dropped, FcntlArg::F_GETFD) {
+        Err(Errno::EBADF) => {}
+        Ok(_) => {
+            let now = fstat(dropped).ok().map(|stat| (stat.st_dev as u64, stat.st_ino as u64));
+            assert_ne!(
+                now,
+                sealed_identity.get(),
+                "sealed snapshot descriptor is still open on its original inode",
+            );
+        }
+        Err(other) => panic!("unexpected fcntl error: {other}"),
+    }
 
     let retried =
         prepare_with_policy_until(&installation, digests[..1].iter().copied(), policy, test_deadline()).unwrap();
