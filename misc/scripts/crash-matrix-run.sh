@@ -283,6 +283,13 @@ stage_and_repair() {
         return 1
     fi
     echo "DAMAGE-TARGET $victim"
+    # Record it on the durable disk so the verdict boot can ask the only
+    # question that distinguishes a completed repair from a preserved one: did
+    # this exact file come back? Counting quarantine entries cannot — a
+    # successful publish leaves the displaced wrapper there under the same
+    # `archived-repair-*` name as a preserved candidate, so the control cell
+    # scored `preserved` for a repair that actually completed.
+    echo "$victim" > /mnt/root/.cast-crash-victim
     rm -f "$victim"
     if [ -e "$victim" ]; then
         echo "DAMAGE-FAILED $victim still present"
@@ -421,7 +428,35 @@ else
         fi
         PREV_PHASE=$PHASE
     done
-    if cast -D /mnt/root list installed 2>/dev/null | grep -q bash-completion; then S=installed; else S=absent; fi
+    # `state=installed/absent` asks whether the active state carries the
+    # package, which for `repair` answers a question nobody asked: archived
+    # repair never touches the active package set, so that column reports on the
+    # setup's `remove` and reads identical whether the repair worked, was
+    # preserved, or never ran. It scored a green cell for a silent half-repair
+    # on 2026-08-10. Repair gets a probe that looks at what it actually changes.
+    if [ "$OP" = repair ]; then
+        VICTIM=$(cat /mnt/root/.cast-crash-victim 2>/dev/null)
+        ARCHIVED=$(find /mnt/root/.cast/root/1/usr/share -type f 2>/dev/null | wc -l)
+        QUARANTINED=$(ls /mnt/root/.cast/quarantine 2>/dev/null | grep -c archived-repair)
+        if [ -e /mnt/root/.cast/archived-repair-pending ]; then MARKER=yes; else MARKER=no; fi
+        if [ -n "$VICTIM" ] && [ -e "$VICTIM" ]; then RESTORED=yes; else RESTORED=no; fi
+        echo "REPAIR-EVIDENCE archived-share=$ARCHIVED quarantined=$QUARANTINED marker=$MARKER restored=$RESTORED victim=$VICTIM"
+        # Letters only: the verdict grep matches `state=[A-Za-z]+`, and the
+        # evidence line above carries the detail.
+        if [ "$MARKER" = yes ]; then
+            S=markerarmed
+        elif [ -z "$VICTIM" ]; then
+            S=nodamage
+        elif [ "$RESTORED" = yes ]; then
+            S=repaired
+        else
+            S=preserved
+        fi
+    elif cast -D /mnt/root list installed 2>/dev/null | grep -q bash-completion; then
+        S=installed
+    else
+        S=absent
+    fi
     echo "recovery=$R driver=$D state=$S"
     echo "CELL-VERDICT-END"
     poweroff -f
