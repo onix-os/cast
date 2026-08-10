@@ -62,8 +62,8 @@ phase closes that.
 ### Phase 1 — shipped (detail removed 2026-07-29)
 
 Everything below was implemented and merged; the planning detail is gone, the
-findings that outlived it are kept. Current state and open work live in
-`close_out.md`.
+findings that outlived it are kept. `close_out.md` was deleted on 2026-08-10;
+current state and open work live in the task list.
 
 - **1.1 / 1.1a-1.1e — NewState durable coordinator.** Shipped, including first
   install. 1.1e needed two fixes, not one: the namespace policy (D1.5) and the
@@ -72,8 +72,9 @@ findings that outlived it are kept. Current state and open work live in
 - **1.2 / 1.2a / 1.2b — ActivateArchived.** Phase model, archived-staging pair
   and coordinator shipped. **The route had zero callers until 2026-07-29** —
   `cast state activate` used the legacy non-journalled path, so this operation's
-  durability was theoretical. Now wired; guest-level proof still outstanding
-  (`close_out.md`).
+  durability was theoretical. Now wired, and guest-level proof landed 2026-08-10:
+  four of five crash cells recover; a cut at `ArchivedCandidateStagingIntent`
+  still stalls on a namespace-policy conflict.
 - **1.3 — Archived repair.** Interruption marker shipped. D1.3 resolved: a
   journal record was not viable because the forward chain crosses `/usr`
   unconditionally (`validation.rs:535`), so a lighter marker was correct.
@@ -197,6 +198,11 @@ evaluator VM (neither evaluator holds process-global state), and process-global
 child process; no other call site exists). No `set_current_dir` anywhere.
 
 **Partly fixed 2026-07-26.** Two distinct causes found; a third remains.
+
+**Residual resolved 2026-08-10.** The `active_reblit_boot_inputs_tests.rs` file-descriptor
+reuse bug described below is fixed, and the same defect in `asset_snapshots_tests.rs` was
+fixed in `f60c0d8b`. The class is now swept crate-wide. `make test` pins 16 threads; a bare
+`cargo test` defaults to 24 on a 24-core box and invents failures.
 
 1. **Fixed — wall-clock was hashed into evaluation identity.** All four intent
    evaluators set `limits.timeout = remaining.min(MAX_EVALUATION_TIME)`, and

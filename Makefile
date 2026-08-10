@@ -50,6 +50,10 @@ TEST_ARGS ?=
 # `plans/future_impl.md` §2.1a. 16 is verified green; 24 is not.
 #
 # Override for a bisect with: make test TEST_THREADS=1
+#
+# NOTE: TEST_ARGS does not suppress --workspace, so `make test TEST_ARGS="-p forge --lib"`
+# still runs every crate. The container crate mount tests wedge indefinitely if another
+# workspace test run is active, so never run two at once (cost ~110min on 2026-08-10).
 TEST_THREADS ?= 16
 
 test:
