@@ -246,6 +246,18 @@ impl CleanSystemStartup {
         let installation = system.installation();
         let state_db = system.state_db();
         installation.revalidate_mutable_namespace()?;
+
+        // Before the journal is taken, deliberately. Archived repair carries no
+        // journal record (`plans/future_impl.md` §1.3), so rebinding an
+        // interrupted one reopens the journal itself — and the blocking open
+        // would then wait on a lock this same call already holds. That is the
+        // writer-first lock order this module documents, and violating it hung
+        // the verdict boot for the full 600s timeout (measured on a guest
+        // 2026-08-10).
+        // One call, not an inline block: `enter` is on the deep recovery call
+        // chain, and a debug build gives every block its own stack slots. The
+        // endpoint walk already sits close to the default test stack, so
+        // widening this frame overflows it.
         let cast = installation.retained_mutable_cast_directory()?;
         after_mutable_namespace_preflight();
         let journal = transition_journal::TransitionJournalStore::open_in_retained_cast(cast, &installation.root);
@@ -747,15 +759,9 @@ impl CleanSystemStartup {
         // tree. Checked here, alongside the orphan-row audit, because both
         // answer the same question: did a previous run leave durable state that
         // no longer matches the namespace?
-        if let Some(state) =
-            super::archived_repair_marker::pending(installation).map_err(|source| Error::ArchivedRepairMarker {
-                source: Box::new(source),
-            })?
-        {
-            return Err(Error::InterruptedArchivedRepair {
-                state: i32::from(state),
-            });
-        }
+        // The marker is reconciled at the top of `enter`, before this gate takes
+        // the journal. It cannot be done here: rebinding the repair reopens the
+        // journal, and this function is holding it.
 
         let authority = startup_reconciliation::StartupRecoveryAuthority::new(installation, journal, state_db);
         let residue = transition_identity::audit_archived_state_prune_residue(installation, authority.journal());
@@ -857,8 +863,12 @@ pub(super) enum Error {
     MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]
     OrphanTransitionRow { state: i32, transition: String },
-    #[error("an archived-state repair of state {state} was interrupted and must be reconciled")]
-    InterruptedArchivedRepair { state: i32 },
+    #[error("an archived-state repair of state {state} was interrupted and could not be reconciled")]
+    InterruptedArchivedRepair {
+        state: i32,
+        #[source]
+        source: Box<super::Error>,
+    },
     #[error("read the durable archived-repair interruption marker")]
     ArchivedRepairMarker {
         #[source]

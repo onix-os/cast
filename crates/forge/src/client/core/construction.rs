@@ -62,6 +62,18 @@ impl ClientBuilder {
         self.installation.revalidate_mutable_namespace()?;
         let mut system = open_mutable_system_capabilities(self.installation)?;
 
+        // Ahead of the gate on purpose. Archived repair carries no journal
+        // record (`plans/future_impl.md` §1.3), so rebinding an interrupted one
+        // reopens the journal with the blocking open — inside the gate that
+        // waits on a lock the same call already holds. Detecting the marker
+        // without acting on it left the startup baseline permanently unusable
+        // (measured on a guest 2026-08-10).
+        crate::client::archived_repair_reconciliation::reconcile_pending(
+            system.installation(),
+            system.state_db(),
+        )?;
+        system.installation().revalidate_mutable_namespace()?;
+
         let startup_gate = startup_gate::CleanSystemStartup::enter(&system, &active_state_reservation).map_err(
             |source| Error::SystemStartupGate {
                 source: Box::new(source),

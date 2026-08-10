@@ -22,6 +22,22 @@ impl ArchivedStateRepairIdentity {
         Self::prepare_candidate(installation, state_db, expected, Some(candidate_usr))
     }
 
+    /// Rebind a repair whose in-process guard died with a crash.
+    ///
+    /// Archived repair is not journalled, so a restart has no record to resume
+    /// from — only the interruption marker and the namespace itself. Every
+    /// binding below is already derived from that namespace; the only thing
+    /// unavailable after a restart is the caller-authenticated candidate
+    /// descriptor, which exists to cross-check a live materialization and has
+    /// no meaning once that process is gone.
+    pub(crate) fn prepare_interrupted_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        expected: &state::State,
+    ) -> Result<Self, ArchivedStateRepairError> {
+        Self::prepare_candidate(installation, state_db, expected, None)
+    }
+
     fn prepare_candidate(
         installation: &Installation,
         state_db: &db::state::Database,
