@@ -37,11 +37,26 @@ pub(in crate::client) fn reconcile_pending(installation: &Installation, state_db
     reconcile_interrupted(installation, state_db, state)
 }
 
-/// Drive one interrupted repair to a decided end and clear its marker.
+/// Preserve one interrupted repair's candidate and clear its marker.
 ///
-/// Returns without acting when no marker is armed. An ambiguous publication
-/// deliberately leaves the marker armed: that is the one case where the
-/// namespace cannot be described and a human has to look.
+/// It deliberately does **not** publish. Publishing looks tempting because
+/// `publish` resumes from the on-disk `RepairLayout` — but that describes where
+/// the tree *moved*, not how much of it was *built*. A repair decorates
+/// metadata and runs transaction triggers before publication, and neither
+/// leaves a mark a later startup can read, precisely because this operation
+/// carries no journal (`plans/future_impl.md` §1.3). So a crash before either
+/// step is indistinguishable here from a crash after both, and publishing would
+/// present a half-built tree as a completed repair.
+///
+/// Measured 2026-08-10: cuts at `IdentityPrepared` — before decoration and
+/// triggers — and at `AfterTransactionTriggers` produced byte-identical
+/// "success" when this published. That uniformity is the proof that the
+/// namespace cannot answer the question.
+///
+/// The candidate is preserved rather than deleted, matching the in-process
+/// failure path and keeping the evidence a later diagnosis needs. State N stays
+/// damaged, which is true and already actionable: `cast state verify` finds it
+/// and rebuilds it from scratch, decoration and triggers included.
 fn reconcile_interrupted(
     installation: &Installation,
     state_db: &db::state::Database,
@@ -57,30 +72,26 @@ fn reconcile_interrupted(
             }),
         })?;
 
-    match identity.publish(installation, state_db) {
-        Ok(_publication) => disarm(installation),
-        Err(failure) if failure.outcome() == ArchivedStateRepairOutcome::NotApplied => {
-            // Nothing was published, so the candidate is still whole. Preserve
-            // it rather than delete it: the same choice the in-process failure
-            // path makes, and it keeps the evidence a later diagnosis needs.
-            identity
-                .preserve_failed_candidate(installation, state_db)
-                .map_err(|preservation| Error::ArchivedStateRepair {
-                    source: Box::new(super::archived_repair::RepairError::PublicationIncomplete {
-                        state,
-                        outcome: "NotApplied",
-                        source: Box::new(preservation),
-                    }),
-                })?;
-            disarm(installation)
-        }
-        Err(failure) => Err(Error::ArchivedStateRepair {
+    match identity.preserve_failed_candidate(installation, state_db) {
+        Ok(_quarantine) => disarm(installation),
+        // A sticky canonical candidate means publication already applied, so
+        // the repair completed and only the marker outlived it.
+        Err(preservation) if preservation.outcome() == ArchivedStateRepairOutcome::Applied => disarm(installation),
+        Err(preservation) => Err(Error::ArchivedStateRepair {
             source: Box::new(super::archived_repair::RepairError::PublicationIncomplete {
                 state,
-                outcome: "Ambiguous",
-                source: Box::new(failure),
+                outcome: outcome_name(preservation.outcome()),
+                source: Box::new(preservation),
             }),
         }),
+    }
+}
+
+fn outcome_name(outcome: ArchivedStateRepairOutcome) -> &'static str {
+    match outcome {
+        ArchivedStateRepairOutcome::Applied => "Applied",
+        ArchivedStateRepairOutcome::NotApplied => "NotApplied",
+        ArchivedStateRepairOutcome::Ambiguous => "Ambiguous",
     }
 }
 
