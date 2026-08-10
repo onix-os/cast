@@ -74,6 +74,7 @@ impl OperationKind {
             (Self::Archived, Phase::RootLinksComplete) => 8,
             (Self::Archived, Phase::SystemTriggersStarted) => 9,
             (Self::Archived, Phase::SystemTriggersComplete) => 10,
+            (Self::ActiveReblit, Phase::CandidatePrepared) => 3,
             (Self::ActiveReblit, Phase::UsrExchangeIntent) => 6,
             (Self::ActiveReblit, Phase::UsrExchanged) => 7,
             (Self::ActiveReblit, Phase::RootLinksComplete) => 8,
@@ -87,6 +88,8 @@ impl OperationKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // the shared rollback-only instantiation does not use IntentPost
 pub(super) enum SourceCase {
+    /// The forward crash prefix that precedes the ActiveReblit reservation.
+    CandidatePrepared,
     IntentPre,
     IntentPost,
     ExchangedPost,
@@ -98,6 +101,7 @@ pub(super) enum SourceCase {
 impl SourceCase {
     pub(super) fn phase(self) -> Phase {
         match self {
+            Self::CandidatePrepared => Phase::CandidatePrepared,
             Self::IntentPre | Self::IntentPost => Phase::UsrExchangeIntent,
             Self::ExchangedPost | Self::ExchangedPre => Phase::UsrExchanged,
             Self::RootLinksCompletePost | Self::RootLinksCompletePre => Phase::RootLinksComplete,
@@ -355,6 +359,7 @@ impl Fixture {
 
     pub(super) fn expected_plan(&self) -> RollbackPlan {
         let (source, usr_exchange) = match self.source.phase {
+            Phase::CandidatePrepared => (ForwardPhase::CandidatePrepared, RollbackAction::NotRequired),
             Phase::UsrExchangeIntent => (ForwardPhase::UsrExchangeIntent, RollbackAction::AlreadySatisfied),
             Phase::UsrExchanged => (ForwardPhase::UsrExchanged, RollbackAction::Pending),
             Phase::RootLinksComplete => (ForwardPhase::RootLinksComplete, RollbackAction::Pending),

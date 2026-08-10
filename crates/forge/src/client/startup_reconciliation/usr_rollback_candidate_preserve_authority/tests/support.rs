@@ -142,6 +142,48 @@ impl CandidatePreserveFixture {
         }
     }
 
+    /// The ActiveReblit crash prefix that precedes its wrapper reservation.
+    ///
+    /// `/usr` was never exchanged here, so the plan requires no reverse
+    /// exchange and the rollback reaches candidate preservation directly.
+    pub(super) fn active_reblit_candidate_prepared() -> Self {
+        let fixture = Fixture::new(OperationKind::ActiveReblit, SourceCase::CandidatePrepared);
+        let decision = fixture
+            .source
+            .rollback_decision(RollbackObservations {
+                allocated_candidate_id: None,
+                previous_archive: None,
+                usr_exchange: None,
+                candidate: InitialRollbackAction::Pending,
+                fresh_db: None,
+            })
+            .unwrap();
+        let journal =
+            TransitionJournalStore::open_retained(fixture.installation.root_directory(), &fixture.installation.root)
+                .unwrap();
+        journal.advance(&fixture.source, &decision).unwrap();
+        let candidate_intent = decision.rollback_successor(None).unwrap();
+        assert_eq!(candidate_intent.phase, Phase::CandidatePreserveIntent);
+        journal.advance(&decision, &candidate_intent).unwrap();
+        drop(journal);
+
+        let reserved = fixture
+            .active_reblit_reservation
+            .as_ref()
+            .expect("active-reblit fixture reserves its replacement wrapper");
+        fs::remove_dir(reserved).unwrap();
+        let mut fixture = fixture;
+        fixture.active_reblit_reservation = None;
+
+        assert_eq!(fixture.canonical_record(), candidate_intent);
+        let initial_database = fixture.database_snapshot();
+        Self {
+            fixture,
+            candidate_intent,
+            initial_database,
+        }
+    }
+
     pub(super) fn with_new_state_empty_quarantine_prefix() -> Self {
         Self::new_state_empty_quarantine_prefix(CandidateSource::Exchanged, RollbackActionOutcome::Applied)
     }

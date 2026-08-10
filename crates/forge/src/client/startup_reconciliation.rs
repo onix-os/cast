@@ -80,11 +80,14 @@ pub(in crate::client) use activation_namespace::arm_before_active_reblit_commit_
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
     ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
-    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
+    ActiveReblitCommitCleanupExchangeFault, ActiveReblitWrapperReservationFault,
+    active_reblit_commit_cleanup_exchange_attempt_count, active_reblit_wrapper_reservation_attempt_count,
     arm_active_reblit_commit_cleanup_durability_fault, arm_active_reblit_commit_cleanup_exchange_fault,
-    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    arm_active_reblit_wrapper_reservation_fault, arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    arm_before_active_reblit_wrapper_reservation_attempt,
+    arm_before_active_reblit_wrapper_reservation_reconciliation_capture,
     reset_active_reblit_commit_cleanup_durability_events, reset_active_reblit_commit_cleanup_exchange_attempt_count,
-    take_active_reblit_commit_cleanup_durability_events,
+    reset_active_reblit_wrapper_reservation_attempt_count, take_active_reblit_commit_cleanup_durability_events,
 };
 #[allow(unused_imports)] // exported for focused startup adoption and the later persistence leaf
 pub(in crate::client) use active_reblit_boot_sync_complete_authority::{

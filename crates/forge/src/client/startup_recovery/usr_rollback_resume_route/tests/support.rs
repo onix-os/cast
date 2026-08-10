@@ -28,7 +28,10 @@ impl RouteFixture {
 
     fn from_fixture(fixture: Fixture, kind: OperationKind, source: SourceCase) -> Self {
         assert!(
-            !matches!(source, SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre),
+            !matches!(
+                source,
+                SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre | SourceCase::CandidatePrepared
+            ),
             "a pre-exchange source requiring a pending reverse exchange cannot form a route fixture"
         );
         let usr_exchange = match source {
@@ -36,7 +39,9 @@ impl RouteFixture {
             SourceCase::IntentPost | SourceCase::ExchangedPost | SourceCase::RootLinksCompletePost => {
                 InitialRollbackAction::Pending
             }
-            SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre => unreachable!(),
+            SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre | SourceCase::CandidatePrepared => {
+                unreachable!()
+            }
         };
         let decision = fixture
             .source

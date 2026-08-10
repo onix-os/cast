@@ -1,5 +1,6 @@
 mod active_reblit_effect;
 mod active_reblit_post_exchange_durability;
+mod active_reblit_wrapper_reservation;
 mod admission;
 mod archived_effect;
 mod evidence;
