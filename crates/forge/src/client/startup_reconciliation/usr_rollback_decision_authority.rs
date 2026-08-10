@@ -181,22 +181,47 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             // at these phases contradicts the record — the exchange happened but
             // the journal never recorded reaching it — so defer rather than
             // guess (`plans/future_impl.md` §1.4).
+            // The archived-staging pair belongs here too. ActivateArchived
+            // traverses it *before* candidate preparation
+            // (`plans/future_impl.md` §1.2b), so `/usr` is equally untouched and
+            // the reasoning above applies unchanged. Only this operation reaches
+            // these phases, which is why nothing caught their absence until the
+            // ActivateArchived crash matrix ran (2026-08-10): a cut at
+            // `ArchivedCandidateStaged` fell through to the catch-all and
+            // aborted on every startup, leaving the system unrecoverable.
             (
-                Phase::CandidatePrepared | Phase::TransactionTriggersStarted | Phase::TransactionTriggersComplete,
+                Phase::ArchivedCandidateStagingIntent
+                | Phase::ArchivedCandidateStaged
+                | Phase::CandidatePrepared
+                | Phase::TransactionTriggersStarted
+                | Phase::TransactionTriggersComplete,
                 UsrExchangeLayout::Pre,
             ) => {
                 usr_exchange_not_required = true;
                 None
             }
             (
-                Phase::CandidatePrepared | Phase::TransactionTriggersStarted | Phase::TransactionTriggersComplete,
+                Phase::ArchivedCandidateStagingIntent
+                | Phase::ArchivedCandidateStaged
+                | Phase::CandidatePrepared
+                | Phase::TransactionTriggersStarted
+                | Phase::TransactionTriggersComplete,
                 UsrExchangeLayout::Post,
             ) => {
                 return Ok(UsrRollbackDecisionAdmission::Deferred(
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
-            _ => unreachable!("rollback-decision admission is restricted to exact /usr or ActiveReblit boot sources"),
+            // Deferral, not `unreachable!`. This runs on the recovery path, so an
+            // unmodelled source that aborts here is not a loud bug report — it
+            // panics on every startup and the system can never recover, which is
+            // strictly worse than refusing. A phase this admission does not model
+            // must decline and leave the record for a human.
+            _ => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
         };
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
