@@ -147,8 +147,9 @@ pub(super) fn dispatch<'reservation>(
                 UsrRollbackCandidatePreserveAdmission::Finish(authority) => {
                     UsrRollbackCandidatePreserveReady::Finish(authority)
                 }
-                UsrRollbackCandidatePreserveAdmission::NotApplicable
-                => return Ok(Dispatch::Unhandled { journal, record }),
+                UsrRollbackCandidatePreserveAdmission::NotApplicable => {
+                    return Ok(Dispatch::Unhandled { journal, record });
+                }
                 UsrRollbackCandidatePreserveAdmission::Deferred(reason) => {
                     // Never drop this. An unhandled dispatch becomes a
                     // recovery-pending result with no blocker, so a deferral

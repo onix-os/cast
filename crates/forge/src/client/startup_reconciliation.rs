@@ -170,11 +170,13 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
-    UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
-    UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
-    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRecordAdvanceError,
-    UsrRollbackCandidatePreserveRestartAuthority, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackActiveReblitCandidatePreserveWrapperReservationLease,
+    UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation, UsrRollbackCandidatePreserveAdmission,
+    UsrRollbackCandidatePreserveApplyAuthority, UsrRollbackCandidatePreserveApplyEffectSelection,
+    UsrRollbackCandidatePreserveAuthority, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackCandidatePreserveRecordAdvanceError, UsrRollbackCandidatePreserveRestartAuthority,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,

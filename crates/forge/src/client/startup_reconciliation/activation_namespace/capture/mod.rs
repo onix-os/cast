@@ -1,5 +1,6 @@
 mod active_reblit_candidate_preserve;
 mod active_reblit_commit_cleanup;
+mod active_reblit_wrapper_reservation;
 mod archived_candidate_preserve;
 mod model;
 mod new_state_candidate_preserve;
@@ -80,6 +81,18 @@ pub(in crate::client) use active_reblit_commit_cleanup::{
     arm_before_active_reblit_commit_cleanup_reconciliation_capture,
     reset_active_reblit_commit_cleanup_durability_events, reset_active_reblit_commit_cleanup_exchange_attempt_count,
     take_active_reblit_commit_cleanup_durability_events,
+};
+pub(in crate::client::startup_reconciliation) use active_reblit_wrapper_reservation::UsrRollbackActiveReblitWrapperReservationNamespaceEvidence;
+pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_wrapper_reservation::{
+    ActiveReblitWrapperReservationCaptureError, ActiveReblitWrapperReservationLayout,
+    ActiveReblitWrapperReservationReconciliation, ProjectedActiveReblitWrapperReservationNamespace,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_wrapper_reservation::{
+    ActiveReblitWrapperReservationFault, active_reblit_wrapper_reservation_attempt_count,
+    arm_active_reblit_wrapper_reservation_fault, arm_before_active_reblit_wrapper_reservation_attempt,
+    arm_before_active_reblit_wrapper_reservation_reconciliation_capture,
+    reset_active_reblit_wrapper_reservation_attempt_count,
 };
 pub(in crate::client::startup_reconciliation::activation_namespace) use archived_candidate_preserve::{
     AppliedArchivedCandidatePreserveMoveReconciliation, ArchivedCandidatePreserveCaptureError,

@@ -9,6 +9,7 @@
 //! quarantine-parent durability before it can reach rename.
 
 mod active_reblit_effect;
+mod active_reblit_wrapper_reservation;
 mod archived_effect;
 mod effect_reconciliation;
 mod target_creation;
@@ -23,11 +24,12 @@ use crate::{
 
 use super::{
     capture::{
-        CaptureError, NamespaceSnapshot, NewStateCandidatePreserveCaptureError,
-        NewStateCandidatePreservePostMoveDurabilityError, NewStateCandidatePreserveTargetDurabilityError,
-        ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents, TreeLocation,
-        UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
-        WrapperFingerprint, capture_snapshot,
+        ActiveReblitWrapperReservationCaptureError, CaptureError, NamespaceSnapshot,
+        NewStateCandidatePreserveCaptureError, NewStateCandidatePreservePostMoveDurabilityError,
+        NewStateCandidatePreserveTargetDurabilityError, ProjectedNewStateCandidatePreserveNamespace,
+        RetainedNewStateCandidatePreserveParents, TreeLocation,
+        UsrRollbackActiveReblitWrapperReservationNamespaceEvidence, UsrRollbackNewStateTargetCreateNamespaceEvidence,
+        UsrRollbackNewStateTargetNormalizeNamespaceEvidence, WrapperFingerprint, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
 };
@@ -38,6 +40,9 @@ pub(in crate::client::startup_reconciliation) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
+pub(in crate::client::startup_reconciliation) use active_reblit_wrapper_reservation::UsrRollbackActiveReblitWrapperReservationNamespaceReconciliation;
+#[cfg(test)]
+pub(in crate::client) use active_reblit_wrapper_reservation::arm_before_usr_rollback_active_reblit_wrapper_reservation_final_pre_capture;
 pub(in crate::client::startup_reconciliation) use archived_effect::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
@@ -115,8 +120,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveT
     NewStatePreserved,
     ArchivedStagedWithCanonicalSlot,
     ArchivedPreserved,
-    ActiveReblitStaged { wrapper_index: usize },
-    ActiveReblitPreserved { wrapper_index: usize },
+    ActiveReblitStaged {
+        wrapper_index: usize,
+    },
+    ActiveReblitPreserved {
+        wrapper_index: usize,
+    },
     /// Staged candidate whose replacement wrapper was never reserved.
     ///
     /// The reservation runs at `reserve_for_transaction_triggers`, after
@@ -255,6 +264,22 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
             return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
         }
         Ok(UsrRollbackNewStateTargetNormalizeNamespaceEvidence::capture(
+            self.after, record,
+        )?)
+    }
+
+    /// Consume only the exact ActiveReblit staged shape whose replacement
+    /// wrapper was never reserved. No other topology can reach the one
+    /// reservation attempt.
+    pub(in crate::client::startup_reconciliation) fn into_active_reblit_wrapper_reservation_evidence(
+        self,
+        record: &TransitionRecord,
+    ) -> Result<UsrRollbackActiveReblitWrapperReservationNamespaceEvidence, UsrRollbackCandidatePreserveNamespaceError>
+    {
+        if self.topology != UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation {
+            return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+        }
+        Ok(UsrRollbackActiveReblitWrapperReservationNamespaceEvidence::capture(
             self.after, record,
         )?)
     }
@@ -970,6 +995,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     TopologyChanged,
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[from] crate::installation::Error),
+}
+
+impl From<ActiveReblitWrapperReservationCaptureError> for UsrRollbackCandidatePreserveNamespaceError {
+    fn from(source: ActiveReblitWrapperReservationCaptureError) -> Self {
+        Self::ActiveReblitEffect(Box::new(source))
+    }
 }
 
 impl From<NewStateCandidatePreserveCaptureError> for UsrRollbackCandidatePreserveNamespaceError {

@@ -10,6 +10,7 @@
 //! persistence boundary; cleanup and trigger authority remain absent.
 
 mod active_reblit_effect;
+mod active_reblit_wrapper_reservation;
 mod archived_effect;
 mod effect_evidence;
 mod effect_reconciliation;
@@ -34,6 +35,7 @@ use super::{
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
     database_ownership_evidence_compatible, inspect_database, metadata_provenance_evidence_compatible,
 };
+use crate::client::startup_reconciliation::activation_namespace::UsrRollbackActiveReblitWrapperReservationNamespaceEvidence;
 
 pub(in crate::client) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
@@ -47,6 +49,7 @@ pub(in crate::client) use active_reblit_effect::{
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
     arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
 };
+pub(in crate::client) use active_reblit_wrapper_reservation::UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation;
 #[cfg(test)]
 pub(in crate::client) use archived_effect::arm_before_archived_candidate_preserve_persistence_durable_trailing_evidence;
 pub(in crate::client) use archived_effect::{
@@ -148,7 +151,30 @@ pub(in crate::client) enum UsrRollbackCandidatePreserveApplyEffectSelection<'res
     MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'reservation>),
     MoveArchived(UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>),
     ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'reservation>),
+    ReserveActiveReblitWrapper(UsrRollbackActiveReblitCandidatePreserveWrapperReservationLease<'reservation>),
     Unsupported,
+}
+
+/// Exact authority retained for one-shot absent-reservation creation.
+struct UsrRollbackActiveReblitCandidatePreserveWrapperReservationEffect<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackActiveReblitWrapperReservationNamespaceEvidence,
+    journal_record_binding: TransitionJournalRecordBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// Opaque absent-reservation capability with only a consuming reconciliation API.
+///
+/// The effect is boxed so the shared selection enum does not grow by a whole
+/// retained namespace snapshot. Every selection variant travels the deep
+/// recovery call chain by value, and widening it overflows the default test
+/// stack.
+#[must_use = "an ActiveReblit reservation lease must be reconciled"]
+pub(in crate::client) struct UsrRollbackActiveReblitCandidatePreserveWrapperReservationLease<'reservation> {
+    effect: Box<UsrRollbackActiveReblitCandidatePreserveWrapperReservationEffect<'reservation>>,
 }
 
 /// Exact authority retained for one-shot absent-target creation.
@@ -475,20 +501,15 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
                 Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
             }
-            // The effect for this shape is not written yet. Classifying it is
-            // still worth landing on its own: it turns a silent permanent
-            // deferral — which named nothing and stalled every restart — into a
-            // recognised topology reaching a known-safe outcome.
-            //
-            // It cannot reuse the NewState quarantine effect as-is:
-            // `into_new_state_move_effect_evidence` is gated on
-            // `NewStateStagedWithEmptyQuarantine` exactly
-            // (`candidate_preserve_proof.rs:264`), and widening that gate would
-            // reuse a NewState-shaped projection and parents-capture for an
-            // ActiveReblit record without proof they hold. See task #31.
-            UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation => {
-                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
-            }
+            // The candidate has no destination because the crash preceded the
+            // reservation that names one. Creating that exact wrapper restores
+            // the staged shape, so the proven exchange effect — not a second
+            // copy of it — performs the preservation on the next pass.
+            UsrRollbackCandidatePreserveTopology::ActiveReblitStagedWithoutReservation => Ok(
+                UsrRollbackCandidatePreserveApplyEffectSelection::ReserveActiveReblitWrapper(
+                    self.into_active_reblit_wrapper_reservation_after_revalidation()?,
+                ),
+            ),
         }
     }
 }

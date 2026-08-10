@@ -287,7 +287,7 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveEffect<'reservation> 
     }
 }
 
-fn require_active_reblit_pre_effect_evidence(
+pub(super) fn require_active_reblit_pre_effect_evidence(
     installation: &Installation,
     state_db: &db::state::Database,
     record: &TransitionRecord,
@@ -305,7 +305,7 @@ fn require_active_reblit_pre_effect_evidence(
     Ok(())
 }
 
-fn require_active_reblit_post_effect_evidence(
+pub(super) fn require_active_reblit_post_effect_evidence(
     installation: &Installation,
     state_db: &db::state::Database,
     record: &TransitionRecord,

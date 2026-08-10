@@ -15,6 +15,8 @@ use super::super::startup_reconciliation::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
+    UsrRollbackActiveReblitCandidatePreserveWrapperReservationLease,
+    UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation,
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation, UsrRollbackCandidatePreserveApplyAuthority,
@@ -147,6 +149,32 @@ enum CandidatePreserveDurabilityReady<'reservation> {
     ActiveReblit(ActiveReblitCandidatePreserveDurabilityReady<'reservation>),
 }
 
+/// Consume the absent-reservation lease in its own call frame.
+///
+/// The enclosing dispatch already carries every other selection arm's locals,
+/// and a debug build gives each arm its own stack slots. Keeping this arm out
+/// of that frame is what stops the recovery walk from exhausting its stack.
+fn reserve_active_reblit_wrapper_and_return(
+    lease: UsrRollbackActiveReblitCandidatePreserveWrapperReservationLease<'_>,
+    effect_seal: &UsrRollbackCandidatePreserveEffectSeal,
+    journal: TransitionJournalStore,
+    source_record: TransitionRecord,
+) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackCandidatePreserveDispatchError> {
+    match lease.reconcile(effect_seal, &journal)? {
+        UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation::RestartRequired(authority) => {
+            return_exact_unchanged_source(journal, source_record, authority)
+        }
+        UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation::NotApplied => {
+            drop(journal);
+            Err(UsrRollbackCandidatePreserveDispatchError::NotApplied)
+        }
+        UsrRollbackActiveReblitCandidatePreserveWrapperReservationReconciliation::Ambiguous => {
+            drop(journal);
+            Err(UsrRollbackCandidatePreserveDispatchError::Ambiguous)
+        }
+    }
+}
+
 /// Consume at most one candidate-preservation effect and, only when the
 /// candidate is already in its durable preserved namespace, persist its sole
 /// successor once.
@@ -244,6 +272,9 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
                             return Err(UsrRollbackCandidatePreserveDispatchError::Ambiguous);
                         }
                     }
+                }
+                UsrRollbackCandidatePreserveApplyEffectSelection::ReserveActiveReblitWrapper(lease) => {
+                    return reserve_active_reblit_wrapper_and_return(lease, &effect_seal, journal, source_record);
                 }
                 UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported => {
                     drop(journal);

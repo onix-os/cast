@@ -158,10 +158,9 @@ pub(crate) use archived_state_repair::{
 pub(crate) use fault_injection::{
     arm_after_retained_exchange_rename, arm_before_live_usr_mkdir, arm_before_previous_archive_slot_reopen,
     arm_before_previous_slot_retirement_rename, arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename,
-    arm_before_retained_previous_move_rename, arm_retained_exchange_fault,
-    arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
-    reset_retained_exchange_syscall_count, retained_exchange_fault_armed, retained_exchange_syscall_count,
-    retained_previous_move_faults_remaining,
+    arm_before_retained_previous_move_rename, arm_retained_exchange_fault, arm_retained_exchange_syscall_fault,
+    arm_retained_previous_move_fault, arm_retained_previous_move_faults, reset_retained_exchange_syscall_count,
+    retained_exchange_fault_armed, retained_exchange_syscall_count, retained_previous_move_faults_remaining,
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
@@ -174,9 +173,8 @@ pub(crate) use staging_wrapper_rotation::{
 };
 #[cfg(test)]
 pub(crate) use staging_wrapper_rotation::{
-    RetainedStagingWrapperRotationFaultPoint,
-    arm_before_staging_wrapper_final_preparation_revalidation, arm_before_staging_wrapper_journal_validation,
-    arm_staging_wrapper_rotation_faults,
+    RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_final_preparation_revalidation,
+    arm_before_staging_wrapper_journal_validation, arm_staging_wrapper_rotation_faults,
 };
 #[cfg(test)]
 pub(crate) use tree_lifecycle::arm_after_candidate_mutable_namespace_preflight;

@@ -332,11 +332,8 @@ impl RetainedFixedStaging {
     }
 
     fn create_private_candidate_usr(&self) -> Result<(CString, PathBuf, std::fs::File), FixedStagingError> {
-        let temporary_name = random_private_name(
-            ".cast-usr-",
-            "generate private candidate /usr name",
-            &self.staging_path,
-        )?;
+        let temporary_name =
+            random_private_name(".cast-usr-", "generate private candidate /usr name", &self.staging_path)?;
         let temporary_path = self.staging_path.join(temporary_name.to_string_lossy().as_ref());
         // SAFETY: the retained staging descriptor and private component remain
         // live. mkdirat neither follows nor replaces the temporary name.
@@ -708,18 +705,12 @@ fn reclaim_displaced_placeholder(staging: &std::fs::File, staging_path: &Path) -
     // may replace `usr` between the check above and any unlink, so the retained
     // descriptor and an unguessable name are what make the removal exact — the
     // same discipline `previous_tree_move.rs` documents for retained inodes.
-    let private = random_private_name(
-        ".cast-reclaim-",
-        "generate placeholder reclamation name",
-        staging_path,
-    )?;
+    let private = random_private_name(".cast-reclaim-", "generate placeholder reclamation name", staging_path)?;
     let private_path = staging_path.join(private.to_string_lossy().as_ref());
-    linux_fs::renameat2_noreplace_once(staging, c"usr", staging, &private).map_err(|source| {
-        FixedStagingError::Io {
-            operation: "retire displaced staging /usr to a private name",
-            path: private_path.clone(),
-            source,
-        }
+    linux_fs::renameat2_noreplace_once(staging, c"usr", staging, &private).map_err(|source| FixedStagingError::Io {
+        operation: "retire displaced staging /usr to a private name",
+        path: private_path.clone(),
+        source,
     })?;
 
     // Re-authenticate through the private name: only now is it certain the

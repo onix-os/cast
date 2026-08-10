@@ -191,18 +191,19 @@ pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
 pub(super) use candidate_preserve_proof::{
-    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
-    UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
-    UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
-    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
-};
-pub(super) use candidate_preserve_proof::{
-    UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
-    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackActiveReblitWrapperReservationNamespaceReconciliation, UsrRollbackCandidatePreserveNamespaceError,
+    UsrRollbackCandidatePreserveNamespaceInspection, UsrRollbackCandidatePreserveNamespaceProof,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackNewStateCandidatePreserveAppliedNamespace, UsrRollbackNewStateCandidatePreserveDurableNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceReconciliation,
+};
+pub(super) use candidate_preserve_proof::{
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
+    UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
 };
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
@@ -241,8 +242,8 @@ pub(in crate::client) use capture::{
 pub(super) use capture::{
     ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
-    PendingActiveReblitCommitCleanupDurability, UsrRollbackNewStateTargetCreateNamespaceEvidence,
-    UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+    PendingActiveReblitCommitCleanupDurability, UsrRollbackActiveReblitWrapperReservationNamespaceEvidence,
+    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
 };
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 #[cfg(test)]

@@ -167,9 +167,7 @@ pub(crate) fn arm_next_delete_directory_sync_fault() {
 pub(crate) fn assert_delete_directory_sync_fault_consumed() {
     assert_storage_fault_consumed();
 }
-pub(crate) use validation::{
-    boot_rollback_is_possible, expected_forward_generation, rollback_evidence_is_on_chain,
-};
+pub(crate) use validation::{boot_rollback_is_possible, expected_forward_generation, rollback_evidence_is_on_chain};
 #[cfg(test)]
 use validation::{next_forward_phase, next_rollback_phase, rollback_allowed, validate_advance};
 
