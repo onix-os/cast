@@ -208,6 +208,13 @@ if [ -n "$CRASH_PHASE" ]; then
     # witness written there cannot be read by the verdict boot that follows.
     export CAST_CRASH_AT_PHASE_WITNESS=/mnt/root
 fi
+# Archived repair is deliberately not journalled, so it has no phase to cut at
+# and needs its own checkpoint-keyed hook.
+CRASH_REPAIR=$(sed -n 's/.*cell_repair=\([A-Za-z]*\).*/\1/p' /proc/cmdline)
+if [ -n "$CRASH_REPAIR" ]; then
+    export CAST_CRASH_AT_REPAIR="$CRASH_REPAIR"
+    export CAST_CRASH_AT_PHASE_WITNESS=/mnt/root
+fi
 stage_and_activate() {
     stage_and_install
     # The install created state *1*, not state 2 — this is a fresh root. So
@@ -260,6 +267,32 @@ stage_and_reblit() {
     # Unpiped: this is the command that parks. See the note in stage_and_activate.
     cast -D /mnt/root -y state verify 2>&1
 }
+stage_and_repair() {
+    stage_and_install
+    # Archived repair runs only for an *inactive* state (`client/verify.rs:302`),
+    # so state 1 has to stop being active first. Removing the package creates
+    # state 2 and archives state 1 — the same move `stage_and_activate` uses,
+    # for the same reason.
+    cast -D /mnt/root -y remove bash-completion 2>&1 | tail -2
+    # Damage the archived wrapper, not the live tree: damaging /mnt/root/usr
+    # would make the *active* state the issue and drive ActiveReblit instead,
+    # which is a different operation and already covered by the reblit cell.
+    victim=$(find /mnt/root/.cast/root/1/usr/share -type f 2>/dev/null | head -1)
+    if [ -z "$victim" ]; then
+        echo "CELL-FAIL no package file to damage under /mnt/root/.cast/root/1/usr/share"
+        return 1
+    fi
+    echo "DAMAGE-TARGET $victim"
+    rm -f "$victim"
+    if [ -e "$victim" ]; then
+        echo "DAMAGE-FAILED $victim still present"
+    else
+        echo "DAMAGE-OK $victim removed"
+    fi
+    echo "DAMAGE-ARCHIVED-TREE archived-share-count=$(find /mnt/root/.cast/root/1/usr/share -type f 2>/dev/null | wc -l)"
+    # Unpiped: this is the command that parks. See the note in stage_and_activate.
+    cast -D /mnt/root -y state verify 2>&1
+}
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
@@ -301,6 +334,7 @@ if [ "$MODE" = write ]; then
     case "$OP" in
         activate) stage_and_activate 2>&1 ;;
         reblit) stage_and_reblit 2>&1 ;;
+        repair) stage_and_repair 2>&1 ;;
         *) stage_and_install 2>&1 ;;
     esac
     echo "CELL-OP-DONE"
@@ -309,7 +343,7 @@ elif [ "$MODE" = control ]; then
     # No cut: let the operation finish and shut down cleanly. Without this the
     # `state` column cannot be read — an absent package could equally mean the
     # cut worked or the install never works in this guest.
-    case "$OP" in activate) stage_and_activate ;; reblit) stage_and_reblit ;; *) stage_and_install ;; esac
+    case "$OP" in activate) stage_and_activate ;; reblit) stage_and_reblit ;; repair) stage_and_repair ;; *) stage_and_install ;; esac
     sync
     echo "CELL-OP-DONE"
     poweroff -f
@@ -398,7 +432,7 @@ chmod +x "$W/ir/init"
 
 run() { exec qemu-system-x86_64 -enable-kvm -m 2048 -display none -no-reboot \
     -kernel "$KERNEL" -initrd "$W/initrd.gz" \
-    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-}" \
+    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-} cell_repair=${4:-}" \
     -drive "file=$W/d.img,format=raw,if=virtio,cache=writeback" -serial stdio -monitor none; }
 
 printf '%-20s %-6s %s\n' OPERATION CUT VERDICT
@@ -406,13 +440,34 @@ for op in "${OPS[@]}"; do
   enc=${op// /_}
   for cut in "${CUTS[@]}"; do
     case "$cut" in phase:*) PHASE_ARG=${cut#phase:} ;; *) PHASE_ARG="" ;; esac
+    case "$cut" in repair:*) REPAIR_ARG=${cut#repair:} ;; *) REPAIR_ARG="" ;; esac
     qemu-img create -f raw "$W/d.img" 256M >/dev/null; mkfs.ext4 -q -F "$W/d.img"
     if [ "$cut" = control ]; then
         timeout 240 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run control '$enc'" > "$W/o1" 2>&1 || true
     else
-    run write "$enc" "$PHASE_ARG" > "$W/o1" 2>&1 & QPID=$!
+    run write "$enc" "$PHASE_ARG" "$REPAIR_ARG" > "$W/o1" 2>&1 & QPID=$!
     for _ in $(seq 1 90); do grep -q CELL-READY "$W/o1" 2>/dev/null && break; sleep 1; done
     case "$cut" in
+        repair:*)
+            # Archived repair writes no journal record, so it has no phase to
+            # cut at; this waits on the checkpoint-keyed marker instead. Same
+            # decided-either-way loop as the phase case, for the same reason.
+            PHASE_WAIT=${PHASE_WAIT:-600}
+            for _ in $(seq 1 "$PHASE_WAIT"); do
+                grep -q "CAST-AT-REPAIR" "$W/o1" 2>/dev/null && break
+                grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null && break
+                sleep 1
+            done
+            if ! grep -q "CAST-AT-REPAIR" "$W/o1"; then
+                if grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null; then
+                    echo "NOT-ON-CHAIN: ${cut#repair:} — repair completed without reaching it"
+                else
+                    echo "TIMED-OUT: ${cut#repair:} not reached in ${PHASE_WAIT}s, and the repair had not finished"
+                    echo "  (raise PHASE_WAIT; this cell proves nothing about that checkpoint)"
+                fi
+                tail -4 "$W/o1"
+            fi
+            ;;
         phase:*)
             # Cut exactly when the record is durable at the named phase, rather
             # than after N seconds. A wall-clock cut cannot isolate one
