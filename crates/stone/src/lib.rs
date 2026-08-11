@@ -31,6 +31,109 @@ mod test {
 
     use super::*;
 
+    /// Emits the boot-capable package the crash matrix installs to make
+    /// `run_boot_sync` true. Applicability needs a systemd-boot asset and a
+    /// kernel in the same candidate; the initrd and cmdline complete the
+    /// per-version asset set. `os-info.json` is deliberately absent so the plan
+    /// takes its generated-os-release fallback.
+    #[test]
+    #[ignore = "regeneration helper for the boot-capable crash-matrix fixture"]
+    fn regenerate_boot_assets_fixture() {
+        use xxhash_rust::xxh3::Xxh3;
+
+        const KERNEL_VERSION: &str = "6.12.0-fixture";
+        let files: Vec<(String, &[u8])> = vec![
+            (
+                "lib/systemd/boot/efi/systemd-bootx64.efi".to_owned(),
+                b"crash-matrix fixture systemd-boot payload\n".as_slice(),
+            ),
+            (
+                format!("lib/kernel/{KERNEL_VERSION}/vmlinuz"),
+                b"crash-matrix fixture kernel payload\n".as_slice(),
+            ),
+            (
+                format!("lib/kernel/{KERNEL_VERSION}/fixture.initrd"),
+                b"crash-matrix fixture initrd payload\n".as_slice(),
+            ),
+            (
+                format!("lib/kernel/{KERNEL_VERSION}/fixture.cmdline"),
+                b"quiet\n".as_slice(),
+            ),
+        ];
+
+        let meta = |tag, primitive| StonePayloadMetaRecord { tag, primitive };
+        let meta_records = vec![
+            meta(
+                StonePayloadMetaTag::Name,
+                StonePayloadMetaPrimitive::String("boot-assets".to_owned()),
+            ),
+            meta(
+                StonePayloadMetaTag::Version,
+                StonePayloadMetaPrimitive::String("1.0".to_owned()),
+            ),
+            meta(StonePayloadMetaTag::Release, StonePayloadMetaPrimitive::Uint64(1)),
+            meta(StonePayloadMetaTag::BuildRelease, StonePayloadMetaPrimitive::Uint64(1)),
+            meta(
+                StonePayloadMetaTag::Architecture,
+                StonePayloadMetaPrimitive::String("x86_64".to_owned()),
+            ),
+            meta(
+                StonePayloadMetaTag::Summary,
+                StonePayloadMetaPrimitive::String("Synthetic boot assets for the crash matrix".to_owned()),
+            ),
+            meta(
+                StonePayloadMetaTag::Description,
+                StonePayloadMetaPrimitive::String(
+                    "Carries a systemd-boot asset and one kernel version so boot publication applies.".to_owned(),
+                ),
+            ),
+            meta(
+                StonePayloadMetaTag::Homepage,
+                StonePayloadMetaPrimitive::String("https://example.invalid/boot-assets".to_owned()),
+            ),
+            meta(
+                StonePayloadMetaTag::SourceID,
+                StonePayloadMetaPrimitive::String("boot-assets".to_owned()),
+            ),
+            meta(
+                StonePayloadMetaTag::License,
+                StonePayloadMetaPrimitive::String("MPL-2.0".to_owned()),
+            ),
+        ];
+
+        let layouts = files
+            .iter()
+            .map(|(target, bytes)| {
+                let mut hasher = Xxh3::new();
+                hasher.update(bytes);
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: 0o100644,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(hasher.digest128(), target.as_str().into()),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut out_stone = vec![];
+        let mut temp_content_buffer: Vec<u8> = vec![];
+        let plain_size = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+        let mut writer = StoneWriter::new(&mut out_stone, StoneHeaderV1FileType::Binary)
+            .unwrap()
+            .with_content(Cursor::new(&mut temp_content_buffer), Some(plain_size), 1)
+            .unwrap();
+        writer.add_payload(meta_records.as_slice()).unwrap();
+        for (_, bytes) in &files {
+            writer.add_content(&mut &bytes[..]).unwrap();
+        }
+        writer.add_payload(layouts.as_slice()).unwrap();
+        writer.finalize().unwrap();
+
+        std::fs::write("../../tests/fixtures/boot-assets-1.0-1-1-x86_64.stone", &out_stone).unwrap();
+        println!("wrote {} bytes", out_stone.len());
+    }
+
     #[test]
     fn roundtrip() {
         let in_stone = include_bytes!("../../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone");

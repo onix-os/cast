@@ -166,7 +166,11 @@
 # and a non-empty `state=` column.
 #
 set -euo pipefail
-W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
+W=$(mktemp -d); chmod 700 "$W"
+# The summary carries the verdict boot only. A forward operation that fails —
+# rather than being cut — reports it in the per-cell guest log, so keep the
+# workdir when asked instead of making the caller re-derive it.
+if [ "${MATRIX_KEEP:-}" = 1 ]; then echo "WORKDIR $W"; else trap "rm -rf '$W'" EXIT; fi
 # Distro kernels are `0600 root:root`, so qemu cannot open them as this user and
 # fails with "could not open kernel file ... Permission denied" — a cell that
 # never boots still prints "phase never reached", which reads as a real result.
@@ -187,6 +191,16 @@ mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
 cp /tmp/libstone.so "$W/ir/bin/"; tar xzf /tmp/nixlibs.tgz -C "$W/ir" 2>/dev/null || true
 cp /tmp/pkg.stone "$W/ir/pkg.stone"
+# `MATRIX_BOOT=1` installs the synthetic boot-assets package alongside the
+# ordinary one, which is what makes `run_boot_sync` true and puts the
+# BootSync phases on the chain. Off by default: it changes the baseline every
+# other cell was verified against.
+BOOTF=${MATRIX_BOOT:-}
+# Fixed so the guest's boot-topology intent and the image build agree on it.
+ESP_PARTUUID=11111111-2222-3333-4444-555555555555
+if [ "$BOOTF" = 1 ]; then
+    cp /tmp/boot.stone "$W/ir/boot.stone"
+fi
 cat > "$W/ir/init" <<'INIT'
 #!/bin/busybox sh
 /bin/busybox --install -s /bin
@@ -303,16 +317,65 @@ stage_and_repair() {
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
+    if [ "$BOOTF" = 1 ]; then
+        cp /boot.stone /mnt/repo/
+    fi
     cast index /mnt/repo 2>&1 | tail -1
     cast -D /mnt/root -y repo add local file:///mnt/repo/stone.index 2>&1 | tail -1
+    # Boot publication requires this machine-local intent and refuses to infer
+    # one. The locator is opaque to forge: it becomes the `root=` kernel token.
+    if [ "$BOOTF" = 1 ]; then
+        mkdir -p /mnt/root/etc/cast
+        cat > /mnt/root/etc/cast/root-filesystem.glu <<'GLU'
+let cast = import! cast.root_filesystem.v1
+
+cast.root_filesystem {
+    root = "/dev/vda2",
+}
+GLU
+        cat > /mnt/root/etc/cast/boot-topology.glu <<'GLU'
+let cast = import! cast.boot_topology.v2
+
+cast.boot_topology.aliases_esp {
+    partuuid = "11111111-2222-3333-4444-555555555555",
+    mount_point = "/efi",
+}
+GLU
+    fi
     # Unpiped for the same reason as the activate below: a NewState phase cut
     # parks inside this install, and `tail` would hold the marker forever.
-    cast -D /mnt/root -y install bash-completion 2>&1
+    # Both packages go in one transaction: a second install would create a
+    # second state, and the activate op below names state 1 explicitly.
+    if [ "$BOOTF" = 1 ]; then
+        cast -D /mnt/root -y install bash-completion boot-assets 2>&1
+    else
+        cast -D /mnt/root -y install bash-completion 2>&1
+    fi
+    # A silent install is ambiguous: a non-zero exit means it reported and the
+    # progress bar overdrew the message, a 128+N status means a signal killed it.
+    echo "INSTALL-STATUS=$?"
 }
 MODE=$(sed -n 's/.*cell_mode=\([a-z]*\).*/\1/p' /proc/cmdline)
 OP=$(sed -n 's/.*cell_op=\([a-zA-Z0-9_./-]*\).*/\1/p' /proc/cmdline | tr '_' ' ')
-mount -t ext4 /dev/vda /mnt || { echo "CELL-FAIL mount"; poweroff -f; }
+BOOTF=$(sed -n 's/.*cell_boot=\([01]\).*/\1/p' /proc/cmdline)
+if [ "$BOOTF" = 1 ]; then
+    mount -t ext4 /dev/vda2 /mnt || { echo "CELL-FAIL mount"; poweroff -f; }
+else
+    mount -t ext4 /dev/vda /mnt || { echo "CELL-FAIL mount"; poweroff -f; }
+fi
 mkdir -p /mnt/root
+# Boot publication binds the declared PARTUUID to a mounted device, so the ESP
+# has to be genuinely mounted at the declared hint before the operation runs.
+if [ "$BOOTF" = 1 ]; then
+    # The mount-point hint resolves against the task root, not the install
+    # root: an ESP is machine-level. The kernel's default NLS is utf8, a module
+    # this initramfs does not carry, so name the built-in codepage explicitly.
+    mkdir -p /efi
+    ESP_OPTS=rw,nosuid,nodev,noexec,nosymfollow,codepage=437,iocharset=cp437
+    if ! mount -t vfat -o "$ESP_OPTS" /dev/vda1 /efi; then
+        echo "CELL-FAIL esp"; ls -l /dev/vda* 2>&1; poweroff -f
+    fi
+fi
 # The journal correlates by boot_id; the campaign keys verdicts by the same value.
 echo "BOOT-ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ "$MODE" = write ]; then
@@ -467,7 +530,7 @@ chmod +x "$W/ir/init"
 
 run() { exec qemu-system-x86_64 -enable-kvm -m 2048 -display none -no-reboot \
     -kernel "$KERNEL" -initrd "$W/initrd.gz" \
-    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-} cell_repair=${4:-}" \
+    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-} cell_repair=${4:-} cell_boot=${BOOTF:-}" \
     -drive "file=$W/d.img,format=raw,if=virtio,cache=writeback" -serial stdio -monitor none; }
 
 printf '%-20s %-6s %s\n' OPERATION CUT VERDICT
@@ -476,9 +539,20 @@ for op in "${OPS[@]}"; do
   for cut in "${CUTS[@]}"; do
     case "$cut" in phase:*) PHASE_ARG=${cut#phase:} ;; *) PHASE_ARG="" ;; esac
     case "$cut" in repair:*) REPAIR_ARG=${cut#repair:} ;; *) REPAIR_ARG="" ;; esac
-    qemu-img create -f raw "$W/d.img" 256M >/dev/null; mkfs.ext4 -q -F "$W/d.img"
+    if [ "$BOOTF" = 1 ]; then
+        # A boot cell needs a real GPT ESP: the declared PARTUUID is bound to a
+        # mounted major:minor, so a whole-device filesystem cannot serve.
+        qemu-img create -f raw "$W/d.img" 512M >/dev/null
+        sgdisk -n "1:2048:+64M" -t 1:EF00 -u "1:$ESP_PARTUUID" -n 2:0:0 -t 2:8300 "$W/d.img" >/dev/null
+        LOOP=$(sudo losetup -Pf --show "$W/d.img")
+        sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null
+        sudo mkfs.ext4 -q -F "${LOOP}p2"
+        sudo losetup -d "$LOOP"
+    else
+        qemu-img create -f raw "$W/d.img" 256M >/dev/null; mkfs.ext4 -q -F "$W/d.img"
+    fi
     if [ "$cut" = control ]; then
-        timeout 240 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run control '$enc'" > "$W/o1" 2>&1 || true
+        timeout 240 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; BOOTF='$BOOTF'; run control '$enc'" > "$W/o1" 2>&1 || true
     else
     run write "$enc" "$PHASE_ARG" "$REPAIR_ARG" > "$W/o1" 2>&1 & QPID=$!
     for _ in $(seq 1 90); do grep -q CELL-READY "$W/o1" 2>/dev/null && break; sleep 1; done
@@ -535,7 +609,7 @@ for op in "${OPS[@]}"; do
     kill -KILL $QPID 2>/dev/null || true; wait $QPID 2>/dev/null || true
     for _ in $(seq 1 30); do kill -0 $QPID 2>/dev/null || break; sleep 1; done; sleep 2
     fi
-    timeout 600 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run check '$enc'" > "$W/o2" 2>&1 || true
+    timeout 600 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; BOOTF='$BOOTF'; run check '$enc'" > "$W/o2" 2>&1 || true
     # `|| true`: a missing verdict makes grep exit non-zero, and under `set -e`
     # the assignment inherits that and kills the run with no output at all.
     v=$(grep -oE 'recovery=[A-Za-z]+ driver=[A-Za-z0-9-]+ state=[A-Za-z]+' "$W/o2" | head -1 || true)
