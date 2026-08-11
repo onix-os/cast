@@ -528,6 +528,22 @@ fn preparing_pins_epoch_tokens_runtime_witnesses_and_operation_relationships_fai
     assert_eq!(invalid.commit_disposition(), CommitDisposition::Quarantine);
 }
 
+// The crash matrix reports these phases as NOT-ON-CHAIN for ActivateArchived
+// and ActiveReblit. That is the codec refusing them, not missing coverage: only
+// NewState allocates a fresh state, so no power cut can park a record there.
+#[test]
+fn fresh_allocation_phases_are_unreachable_for_an_existing_candidate() {
+    for phase in [Phase::FreshStateAllocating, Phase::FreshStateAllocated] {
+        assert!(encode(&new_state_record(phase)).is_ok());
+        for record in [archived_record(phase), reblit_record(phase)] {
+            assert!(matches!(
+                encode(&record),
+                Err(CodecError::FreshPhaseForExistingCandidate)
+            ));
+        }
+    }
+}
+
 #[test]
 #[ignore = "regeneration helper for the golden fixtures"]
 fn regenerate_golden_fixtures() {
