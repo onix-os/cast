@@ -190,8 +190,12 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             // `ArchivedCandidateStaged` fell through to the catch-all and
             // aborted on every startup, leaving the system unrecoverable.
             (
-                Phase::ArchivedCandidateStagingIntent
+                Phase::Preparing
+                | Phase::FreshStateAllocating
+                | Phase::FreshStateAllocated
+                | Phase::ArchivedCandidateStagingIntent
                 | Phase::ArchivedCandidateStaged
+                | Phase::CandidatePrepareStarted
                 | Phase::CandidatePrepared
                 | Phase::TransactionTriggersStarted
                 | Phase::TransactionTriggersComplete,
@@ -201,8 +205,12 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                 None
             }
             (
-                Phase::ArchivedCandidateStagingIntent
+                Phase::Preparing
+                | Phase::FreshStateAllocating
+                | Phase::FreshStateAllocated
+                | Phase::ArchivedCandidateStagingIntent
                 | Phase::ArchivedCandidateStaged
+                | Phase::CandidatePrepareStarted
                 | Phase::CandidatePrepared
                 | Phase::TransactionTriggersStarted
                 | Phase::TransactionTriggersComplete,
