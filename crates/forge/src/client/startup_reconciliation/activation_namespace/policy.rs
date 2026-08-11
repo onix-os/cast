@@ -65,6 +65,7 @@ pub(super) enum CandidatePlace {
     Live,
     Staging,
     Destination,
+    ArchivedSlot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -122,7 +123,10 @@ impl LayoutAlternative {
     }
 
     pub(super) fn usr_exchange_layout(self) -> Option<UsrExchangeLayout> {
-        if self == PRE_EXCHANGE {
+        // The archived candidate in its own slot is a pre-exchange layout: `/usr`
+        // is untouched there, exactly as in PRE_EXCHANGE. Returning None made the
+        // rollback decision defer with IncompatibleEvidence.
+        if self == PRE_EXCHANGE || self == ARCHIVED_CANDIDATE_SLOT {
             Some(UsrExchangeLayout::Pre)
         } else if self == POST_EXCHANGE {
             Some(UsrExchangeLayout::Post)
@@ -154,6 +158,10 @@ const PRE_EXCHANGE: LayoutAlternative = LayoutAlternative {
 const POST_EXCHANGE: LayoutAlternative = LayoutAlternative {
     candidate: CandidatePlace::Live,
     previous: PreviousPlace::Staging,
+};
+const ARCHIVED_CANDIDATE_SLOT: LayoutAlternative = LayoutAlternative {
+    candidate: CandidatePlace::ArchivedSlot,
+    previous: PreviousPlace::Live,
 };
 const PREVIOUS_ARCHIVED: LayoutAlternative = LayoutAlternative {
     candidate: CandidatePlace::Live,
@@ -255,8 +263,8 @@ fn expected_layouts(record: &TransitionRecord) -> Result<Vec<LayoutAlternative>,
 
 pub(super) fn forward_layouts(record: &TransitionRecord) -> Vec<LayoutAlternative> {
     match record.phase {
-        Phase::ArchivedCandidateStagingIntent
-        | Phase::ArchivedCandidateStaged
+        Phase::ArchivedCandidateStagingIntent => vec![ARCHIVED_CANDIDATE_SLOT, PRE_EXCHANGE],
+        Phase::ArchivedCandidateStaged
         | Phase::Preparing
         | Phase::FreshStateAllocating
         | Phase::FreshStateAllocated
@@ -321,12 +329,16 @@ pub(super) fn rollback_layouts(
         previous: PreviousPlace::Live,
     };
     Ok(match record.phase {
+        // The archived candidate may still sit in its own slot here: a rollback
+        // decided at ArchivedCandidateStagingIntent has nothing staged yet.
         Phase::RollbackDecided => vec![layout_at_rollback_decision(rollback)?],
         Phase::PreviousRestoreIntent => vec![PREVIOUS_ARCHIVED, POST_EXCHANGE],
         Phase::PreviousRestoredToStaging => vec![POST_EXCHANGE],
         Phase::ReverseExchangeIntent => vec![POST_EXCHANGE, PRE_EXCHANGE],
         Phase::UsrRestored => vec![PRE_EXCHANGE],
-        Phase::CandidatePreserveIntent => vec![PRE_EXCHANGE, preserved],
+        // An ActivateArchived rollback decided before staging still has its
+        // candidate in its own slot, so preservation may find it there too.
+        Phase::CandidatePreserveIntent => vec![PRE_EXCHANGE, preserved, ARCHIVED_CANDIDATE_SLOT],
         Phase::CandidatePreserved
         | Phase::FreshDbInvalidationIntent
         | Phase::FreshDbInvalidated
@@ -346,7 +358,12 @@ fn layout_at_rollback_decision(rollback: &RollbackPlan) -> Result<LayoutAlternat
     if (previous_pending && !usr_pending) || (usr_pending && !candidate_pending) {
         return Err(NamespacePolicyConflict::RollbackActions);
     }
-    if previous_pending {
+    // Checked before the pending-action branches: a rollback decided before the
+    // archived candidate was staged leaves it in its own slot whatever the
+    // candidate action says, and PRE_EXCHANGE would demand it in staging.
+    if rollback.source == crate::transition_journal::ForwardPhase::ArchivedCandidateStagingIntent {
+        Ok(ARCHIVED_CANDIDATE_SLOT)
+    } else if previous_pending {
         Ok(PREVIOUS_ARCHIVED)
     } else if usr_pending {
         Ok(POST_EXCHANGE)
@@ -365,6 +382,10 @@ fn candidate_place_matches(record: &TransitionRecord, expected: CandidatePlace, 
         CandidatePlace::Live => matches!(actual, TreeLocation::Live),
         CandidatePlace::Staging => matches!(actual, TreeLocation::Staging),
         CandidatePlace::Destination => candidate_destination(record, actual),
+        CandidatePlace::ArchivedSlot => record
+            .candidate
+            .id
+            .is_some_and(|c| matches!(actual, TreeLocation::State(s) if *s == c)),
     }
 }
 

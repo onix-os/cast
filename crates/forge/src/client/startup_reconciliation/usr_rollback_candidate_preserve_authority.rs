@@ -63,7 +63,8 @@ pub(in crate::client) use archived_effect::{
 #[cfg(test)]
 pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use effect_reconciliation::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackArchivedNeverStagedAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackCandidatePreserveRecordAdvanceError,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
@@ -497,6 +498,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                 ))
             }
             UsrRollbackCandidatePreserveTopology::NewStatePreserved
+            | UsrRollbackCandidatePreserveTopology::ArchivedNeverStaged
             | UsrRollbackCandidatePreserveTopology::ArchivedPreserved
             | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
                 Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)

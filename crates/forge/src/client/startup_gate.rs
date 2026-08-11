@@ -487,8 +487,8 @@ impl CleanSystemStartup {
                 startup_reconciliation::UsrRollbackDecisionAdmission::ParentDurabilityRequired(authority) => Some(
                     super::startup_recovery::normalize_usr_exchange_parent_durability(&journal, authority)?,
                 ),
-                startup_reconciliation::UsrRollbackDecisionAdmission::NotApplicable
-                | startup_reconciliation::UsrRollbackDecisionAdmission::Deferred(_) => None,
+                startup_reconciliation::UsrRollbackDecisionAdmission::NotApplicable => None,
+                startup_reconciliation::UsrRollbackDecisionAdmission::Deferred(_) => None,
             };
             if let Some(authority) = authority {
                 let (journal, record) =

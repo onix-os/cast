@@ -27,10 +27,14 @@ use super::Error;
 /// Called before the startup gate rather than inside it: rebinding the repair
 /// reopens the journal with the blocking open, which inside the gate waits on a
 /// lock that same call already holds.
-pub(in crate::client) fn reconcile_pending(installation: &Installation, state_db: &db::state::Database) -> Result<(), Error> {
-    let pending = super::archived_repair_marker::pending(installation).map_err(|source| Error::ArchivedRepairMarker {
-        source: Box::new(source),
-    })?;
+pub(in crate::client) fn reconcile_pending(
+    installation: &Installation,
+    state_db: &db::state::Database,
+) -> Result<(), Error> {
+    let pending =
+        super::archived_repair_marker::pending(installation).map_err(|source| Error::ArchivedRepairMarker {
+            source: Box::new(source),
+        })?;
     let Some(state) = pending else {
         return Ok(());
     };

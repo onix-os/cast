@@ -17,9 +17,28 @@ use crate::{
 
 use super::fixture::{Fixture, OperationKind, SourceCase, create_private_directory, pending};
 
+/// Runs on an explicitly larger stack.
+///
+/// This walk drives every operation through its whole rollback chain, and the
+/// recovery path is deliberately layered: each gate, authority and effect adds
+/// a frame, and a debug build gives every match arm its own slots. The sum sits
+/// just under the default 2 MiB test stack, so the test began failing for
+/// *correct* additions — a match arm, then a single call, then a new topology
+/// route (2026-08-10/11). Each cost an hour to diagnose as a stack problem
+/// rather than a logic one. There is no recursion here; the depth is real and
+/// intended, so the stack is what should change.
 #[test]
 fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_endpoints_without_second_reverse_exchange()
 {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(endpoint_walk)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn endpoint_walk() {
     for historical in [false, true] {
         for kind in OperationKind::ALL {
             let fixture = if historical {

@@ -142,8 +142,8 @@ mod active_state_snapshot;
 mod active_state_snapshot_tests;
 mod archived_repair;
 mod archived_repair_marker;
-mod archived_repair_reconciliation;
 mod archived_repair_materialization;
+mod archived_repair_reconciliation;
 #[cfg(test)]
 mod archived_repair_tests;
 mod boot;

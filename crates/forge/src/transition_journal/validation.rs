@@ -864,7 +864,6 @@ pub(super) fn next_rollback_phase(plan: &RollbackPlan, current: Phase) -> Option
         | Phase::FreshDbInvalidated => {}
         _ => return None,
     }
-
     for (action, intent) in rollback_actions(plan).into_iter().zip([
         Phase::PreviousRestoreIntent,
         Phase::ReverseExchangeIntent,

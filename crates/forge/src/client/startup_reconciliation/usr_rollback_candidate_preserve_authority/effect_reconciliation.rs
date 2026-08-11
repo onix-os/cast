@@ -29,7 +29,8 @@ use crate::client::{
 #[cfg(test)]
 pub(in crate::client) use post_move_durability::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use post_move_durability::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackArchivedNeverStagedAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackCandidatePreserveRecordAdvanceError,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };

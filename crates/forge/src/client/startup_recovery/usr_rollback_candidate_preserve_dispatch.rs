@@ -149,6 +149,22 @@ enum CandidatePreserveDurabilityReady<'reservation> {
     ActiveReblit(ActiveReblitCandidatePreserveDurabilityReady<'reservation>),
 }
 
+/// Advance a rollback whose archived candidate was never staged.
+///
+/// There is no effect to consume: the authority carries no namespace evidence
+/// because nothing was moved. Its own call frame for the same reason as the
+/// reservation arm below — the enclosing match already carries every other
+/// arm's locals.
+fn advance_never_staged_and_return(
+    authority: Box<crate::client::startup_reconciliation::UsrRollbackArchivedNeverStagedAuthority<'_>>,
+    journal: TransitionJournalStore,
+    source_record: TransitionRecord,
+) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackCandidatePreserveDispatchError> {
+    let _ = source_record;
+    let (record, _binding) = authority.advance_candidate_preserved_record_binding(&journal)?;
+    Ok((journal, record))
+}
+
 /// Consume the absent-reservation lease in its own call frame.
 ///
 /// The enclosing dispatch already carries every other selection arm's locals,
@@ -284,6 +300,13 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
         }
         UsrRollbackCandidatePreserveReady::Finish(authority) => {
             match authority.into_post_move_durability_selection(&effect_seal, &journal)? {
+                // Nothing was staged, so there is no effect to consume — only the
+                // successor. Delegated to its own fn: this match already carries
+                // every other arm's locals and the endpoint walk sits close to
+                // the default test stack.
+                UsrRollbackCandidatePreserveFinishDurabilitySelection::ArchivedNeverStaged(authority) => {
+                    return advance_never_staged_and_return(authority, journal, source_record);
+                }
                 UsrRollbackCandidatePreserveFinishDurabilitySelection::NewState(authority) => {
                     CandidatePreserveDurabilityReady::NewState(NewStateCandidatePreserveDurabilityReady::Finish(
                         authority,
@@ -392,6 +415,8 @@ pub(in crate::client) enum UsrRollbackCandidatePreserveDispatchError {
     ActiveReblitPersistence(#[from] UsrRollbackActiveReblitCandidatePreservePersistenceError),
     #[error("persist exact durable ActivateArchived candidate-preservation outcome")]
     ArchivedPersistence(#[from] UsrRollbackArchivedCandidatePreservePersistenceError),
+    #[error("advance the never-staged archived candidate-preservation successor")]
+    NeverStagedAdvance(#[from] crate::client::startup_reconciliation::UsrRollbackCandidatePreserveRecordAdvanceError),
     #[error("one-shot candidate-preservation namespace attempt was not applied")]
     NotApplied,
     #[error("one-shot candidate-preservation namespace attempt has ambiguous evidence")]

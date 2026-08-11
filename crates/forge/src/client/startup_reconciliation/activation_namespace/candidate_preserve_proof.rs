@@ -119,6 +119,10 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveT
     NewStateStagedWithEmptyQuarantine,
     NewStatePreserved,
     ArchivedStagedWithCanonicalSlot,
+    /// A rollback decided before the archived candidate was ever staged. It has
+    /// one marker link, sits in its own state wrapper, and nothing is staged —
+    /// so there is no child move to make and nothing to preserve.
+    ArchivedNeverStaged,
     ArchivedPreserved,
     ActiveReblitStaged {
         wrapper_index: usize,
@@ -138,7 +142,10 @@ impl UsrRollbackCandidatePreserveTopology {
     pub(in crate::client::startup_reconciliation) fn is_preserved(self) -> bool {
         matches!(
             self,
-            Self::NewStatePreserved | Self::ArchivedPreserved | Self::ActiveReblitPreserved { .. }
+            Self::NewStatePreserved
+                | Self::ArchivedPreserved
+                | Self::ArchivedNeverStaged
+                | Self::ActiveReblitPreserved { .. }
         )
     }
 }
@@ -357,9 +364,13 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     if record.operation != Operation::ActivateArchived {
         return Err(UsrRollbackCandidatePreserveNamespaceError::ActivateArchivedRequired);
     }
-    if candidate_preserve_topology_after_phase(record, snapshot)?
-        == UsrRollbackCandidatePreserveTopology::ArchivedPreserved
-    {
+    // Never-staged counts as preserved: nothing was moved, so the candidate
+    // already sits in its own slot and no slot marker was ever minted.
+    if matches!(
+        candidate_preserve_topology_after_phase(record, snapshot)?,
+        UsrRollbackCandidatePreserveTopology::ArchivedPreserved
+            | UsrRollbackCandidatePreserveTopology::ArchivedNeverStaged
+    ) {
         Ok(())
     } else {
         Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
@@ -381,9 +392,13 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     if record.operation != Operation::ActivateArchived {
         return Err(UsrRollbackCandidatePreserveNamespaceError::ActivateArchivedRequired);
     }
-    if candidate_preserve_topology_after_phase(record, snapshot)?
-        == UsrRollbackCandidatePreserveTopology::ArchivedPreserved
-    {
+    // Never-staged is terminal too: nothing was moved, so there is no slot
+    // marker and the candidate already rests in its own wrapper.
+    if matches!(
+        candidate_preserve_topology_after_phase(record, snapshot)?,
+        UsrRollbackCandidatePreserveTopology::ArchivedPreserved
+            | UsrRollbackCandidatePreserveTopology::ArchivedNeverStaged
+    ) {
         Ok(())
     } else {
         Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
@@ -742,6 +757,46 @@ fn archived_topology(
 ) -> Result<UsrRollbackCandidatePreserveTopology, UsrRollbackCandidatePreserveNamespaceError> {
     if transition.is_some() {
         return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+    }
+    // A rollback decided before the archived candidate was ever staged has one
+    // link, not two: the second is the state-slot marker preparation creates
+    // when it stages. Nothing was moved, so the candidate already sits where
+    // preservation would put it.
+    // The namespace alone cannot tell "never staged" from "preserved, then its
+    // state-slot marker was removed": both leave one link and an unmarked
+    // wrapper holding the candidate. Only the plan distinguishes them, so the
+    // source phase is required — a rollback decided after staging can never
+    // classify here however the namespace is corrupted.
+    if record
+        .rollback
+        .as_ref()
+        .is_some_and(|plan| plan.source == crate::transition_journal::ForwardPhase::ArchivedCandidateStagingIntent)
+        && candidate.marker_links() == 1
+        && record
+            .candidate
+            .id
+            .is_some_and(|c| candidate.location == TreeLocation::State(c))
+        && wrapper_is_empty(staging)
+        && staging.has_exact_private_permissions()
+        && transition.is_none()
+    {
+        // Still subject to the exact-wrapper guard: exactly one wrapper for this
+        // state, holding the candidate, with no state-slot marker minted. Without
+        // these a missing or extra archived wrapper would classify here and skip
+        // the refusal the complete-route and finalization proofs depend on.
+        let state = record
+            .candidate
+            .id
+            .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateStateMissing)?;
+        let own = one_wrapper(snapshot, |wrapper| match wrapper.role {
+            TreeLocation::State(canonical) => canonical == state,
+            TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+            _ => false,
+        })?
+        .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateWrapperMissing)?;
+        if wrapper_contains(own, candidate) && own.slot_identity().is_none() {
+            return Ok(UsrRollbackCandidatePreserveTopology::ArchivedNeverStaged);
+        }
     }
     if candidate.marker_links() != 2 {
         return Err(UsrRollbackCandidatePreserveNamespaceError::MarkerLinks {
