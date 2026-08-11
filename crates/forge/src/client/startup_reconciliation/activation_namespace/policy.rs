@@ -331,7 +331,7 @@ pub(super) fn rollback_layouts(
     Ok(match record.phase {
         // The archived candidate may still sit in its own slot here: a rollback
         // decided at ArchivedCandidateStagingIntent has nothing staged yet.
-        Phase::RollbackDecided => vec![layout_at_rollback_decision(rollback)?],
+        Phase::RollbackDecided => layout_at_rollback_decision(rollback)?,
         Phase::PreviousRestoreIntent => vec![PREVIOUS_ARCHIVED, POST_EXCHANGE],
         Phase::PreviousRestoredToStaging => vec![POST_EXCHANGE],
         Phase::ReverseExchangeIntent => vec![POST_EXCHANGE, PRE_EXCHANGE],
@@ -351,29 +351,32 @@ pub(super) fn rollback_layouts(
     })
 }
 
-fn layout_at_rollback_decision(rollback: &RollbackPlan) -> Result<LayoutAlternative, NamespacePolicyConflict> {
+fn layout_at_rollback_decision(rollback: &RollbackPlan) -> Result<Vec<LayoutAlternative>, NamespacePolicyConflict> {
     let previous_pending = rollback.previous_archive == RollbackAction::Pending;
     let usr_pending = rollback.usr_exchange == RollbackAction::Pending;
     let candidate_pending = rollback.candidate.action == RollbackAction::Pending;
     if (previous_pending && !usr_pending) || (usr_pending && !candidate_pending) {
         return Err(NamespacePolicyConflict::RollbackActions);
     }
-    // Checked before the pending-action branches: a rollback decided before the
-    // archived candidate was staged leaves it in its own slot whatever the
-    // candidate action says, and PRE_EXCHANGE would demand it in staging.
+    // Source-keyed cases come first: an intent phase spans a move, so the
+    // namespace may hold either side of it whatever the actions say. Staging
+    // intent leaves the candidate in its own slot where PRE_EXCHANGE would
+    // demand staging; archive intent leaves the predecessor on either side.
     if rollback.source == crate::transition_journal::ForwardPhase::ArchivedCandidateStagingIntent {
-        Ok(ARCHIVED_CANDIDATE_SLOT)
+        Ok(vec![ARCHIVED_CANDIDATE_SLOT])
+    } else if rollback.source == crate::transition_journal::ForwardPhase::PreviousArchiveIntent {
+        Ok(vec![PREVIOUS_ARCHIVED, POST_EXCHANGE])
     } else if previous_pending {
-        Ok(PREVIOUS_ARCHIVED)
+        Ok(vec![PREVIOUS_ARCHIVED])
     } else if usr_pending {
-        Ok(POST_EXCHANGE)
+        Ok(vec![POST_EXCHANGE])
     } else if candidate_pending {
-        Ok(PRE_EXCHANGE)
+        Ok(vec![PRE_EXCHANGE])
     } else {
-        Ok(LayoutAlternative {
+        Ok(vec![LayoutAlternative {
             candidate: CandidatePlace::Destination,
             previous: PreviousPlace::Live,
-        })
+        }])
     }
 }
 

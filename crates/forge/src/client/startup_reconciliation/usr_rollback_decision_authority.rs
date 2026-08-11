@@ -169,8 +169,13 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             // live and the predecessor sits in its archived slot, so the /usr
             // exchange still needs reversal (Post) after the predecessor is first
             // restored to staging (see `previous_archive` below).
-            (Phase::PreviousArchived, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),
-            (Phase::PreviousArchived, UsrExchangeLayout::Pre) => {
+            // The intent phase spans the archive, so both its layouts are post-exchange:
+            // the candidate is live either way and the predecessor is in staging or
+            // already in its slot. Omitting it left a crash there stalled forever.
+            (Phase::PreviousArchiveIntent | Phase::PreviousArchived, UsrExchangeLayout::Post) => {
+                Some(InitialRollbackAction::Pending)
+            }
+            (Phase::PreviousArchiveIntent | Phase::PreviousArchived, UsrExchangeLayout::Pre) => {
                 return Ok(UsrRollbackDecisionAdmission::Deferred(
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
@@ -469,11 +474,13 @@ fn rollback_observations(
     }
 }
 
-/// A durable `PreviousArchived` source archived its predecessor, so recovery
-/// must restore it before reversing the exchange. Every earlier phase archived
-/// nothing yet.
+/// The two archive sources archived a predecessor, so recovery must restore it
+/// before reversing the exchange. The intent phase spans the archive and counts
+/// with it: the journal derives `possible` from the source alone. Every earlier
+/// phase archived nothing yet.
 fn previous_archive_observation(phase: Phase) -> Option<InitialRollbackAction> {
-    (phase == Phase::PreviousArchived).then_some(InitialRollbackAction::Pending)
+    matches!(phase, Phase::PreviousArchiveIntent | Phase::PreviousArchived)
+        .then_some(InitialRollbackAction::Pending)
 }
 
 fn inspect_current_database(
