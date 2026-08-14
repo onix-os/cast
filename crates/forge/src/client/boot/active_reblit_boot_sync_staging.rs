@@ -328,7 +328,7 @@ fn stage_with_retained_stores_and_reservation<
     if !journal.has_record_binding(cast, &predecessor_binding, &predecessor)? {
         return Err(ActiveReblitBootSyncStagingError::PredecessorBindingChanged);
     }
-    require_active_reblit_predecessor(&predecessor)?;
+    require_boot_sync_predecessor(&predecessor)?;
 
     // Installed ownership and predecessor identity come only from one strict
     // database-authenticated current-chain snapshot. Empty means both the head
@@ -483,8 +483,15 @@ fn receipt_pair(receipt: &CanonicalBootPublicationReceipt) -> BootPublicationRec
     }
 }
 
-fn require_active_reblit_predecessor(predecessor: &TransitionRecord) -> Result<(), ActiveReblitBootSyncStagingError> {
-    if predecessor.operation != Operation::ActiveReblit {
+/// The operations that hold a boot source contract and can therefore hand off
+/// here. Staging is reached only through a sealed handoff, so this rejects a
+/// record whose chain never legitimately advances into `BootSyncStarted`.
+fn supports_boot_sync(operation: Operation) -> bool {
+    matches!(operation, Operation::NewState | Operation::ActiveReblit)
+}
+
+fn require_boot_sync_predecessor(predecessor: &TransitionRecord) -> Result<(), ActiveReblitBootSyncStagingError> {
+    if !supports_boot_sync(predecessor.operation) {
         return Err(ActiveReblitBootSyncStagingError::WrongOperation {
             actual: predecessor.operation,
         });
@@ -509,7 +516,7 @@ fn exact_successor(
         .boot_publication_receipt_correlation()
         .map_err(ActiveReblitBootSyncStagingError::Successor)?;
     if successor.phase != Phase::BootSyncStarted
-        || successor.operation != Operation::ActiveReblit
+        || successor.operation != predecessor.operation
         || successor.transition_id != predecessor.transition_id
         || successor_receipts != Some(pair)
     {
@@ -562,7 +569,7 @@ fn require_exact_record_receipt_pair(
     let actual = record
         .boot_publication_receipt_correlation()
         .map_err(ActiveReblitBootSyncPostAdvanceValidationError::RecordReceipt)?;
-    if record.operation != Operation::ActiveReblit
+    if !supports_boot_sync(record.operation)
         || record.phase != Phase::BootSyncStarted
         || &record.transition_id != receipt.body().transition_id()
         || actual != Some(expected)
@@ -775,7 +782,7 @@ pub(in crate::client) enum ActiveReblitBootSyncStagingError {
     PredecessorBindingChangedAfterStage,
     #[error("the bound publication plan does not retain the exact client installation")]
     PlanInstallationMismatch,
-    #[error("boot-sync staging requires ActiveReblit, got {actual:?}")]
+    #[error("boot-sync staging requires an operation with a boot source contract, got {actual:?}")]
     WrongOperation { actual: Operation },
     #[error("derive the exact receipt-bearing BootSyncStarted successor")]
     Successor(#[source] CodecError),
