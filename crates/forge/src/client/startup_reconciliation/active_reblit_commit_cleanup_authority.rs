@@ -162,15 +162,13 @@ impl ActiveReblitCommitCleanupAuthority {
         let receipt_pair = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::Record)?;
-        if record.operation != Operation::ActiveReblit
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
             || record.phase != Phase::CommitDecided
-            || record.generation != 13
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(record)
             || record.rollback.is_some()
-            || record.options.archive_previous
-            || !record.options.run_system_triggers
-            || !record.options.run_boot_sync
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_options_are_exact(record)
             || receipt_pair.is_none()
-            || !same_nonempty_candidate_and_previous(record)
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record)
         {
             return Err(ActiveReblitCommitCleanupAuthorityErrorKind::RetainedCommitDecisionRejected.into());
         }

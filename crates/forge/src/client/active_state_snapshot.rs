@@ -200,8 +200,30 @@ fn revalidate_proof(
     active_proof: &ActiveStateProof,
     installation: &Installation,
 ) -> Result<(), super::Error> {
+    revalidate_proof_with_discovery_pin(active, active_proof, installation, true)
+}
+
+/// Revalidate every filesystem witness without requiring the selection to
+/// still equal the one the installation was discovered with.
+///
+/// Only a forward boot completion may use this: the transition it is finishing
+/// is itself what changed the selection.
+fn revalidate_proof_unpinned(
+    active: Option<state::Id>,
+    active_proof: &ActiveStateProof,
+    installation: &Installation,
+) -> Result<(), super::Error> {
+    revalidate_proof_with_discovery_pin(active, active_proof, installation, false)
+}
+
+fn revalidate_proof_with_discovery_pin(
+    active: Option<state::Id>,
+    active_proof: &ActiveStateProof,
+    installation: &Installation,
+    pin_to_discovery: bool,
+) -> Result<(), super::Error> {
     before_active_state_revalidation();
-    if installation.active_state != active {
+    if pin_to_discovery && installation.active_state != active {
         return Err(super::Error::ActiveStateSnapshotChanged {
             expected: installation.active_state,
             actual: active,

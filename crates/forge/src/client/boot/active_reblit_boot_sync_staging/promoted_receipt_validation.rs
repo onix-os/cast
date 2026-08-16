@@ -17,7 +17,7 @@ use crate::{
     },
     db::state::BootPublicationReceiptPromotionError,
     installation,
-    transition_journal::{CodecError, Operation, Phase, StorageError, TransitionRecord},
+    transition_journal::{CodecError, Phase, StorageError, TransitionRecord},
 };
 
 use super::{Client, StagedActiveReblitBootSync};
@@ -103,7 +103,7 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
             .record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitBootSyncPromotedValidationError::RecordReceipt)?;
-        if self.record.operation != Operation::ActiveReblit
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(self.record.operation)
             || self.record.phase != Phase::BootSyncStarted
             || &self.record.transition_id != self.receipt.body().transition_id()
             || actual != Some(expected)

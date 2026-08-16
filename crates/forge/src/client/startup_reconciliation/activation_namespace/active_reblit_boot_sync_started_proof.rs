@@ -182,7 +182,7 @@ fn exact_layout(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<LayoutAlternative, ActiveReblitBootSyncStartedNamespaceError> {
-    if record.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         || record.phase != Phase::BootSyncStarted
         || record.rollback.is_some()
     {
@@ -207,7 +207,7 @@ fn require_exact_boot_sync_complete_successor(
     started: &TransitionRecord,
     successor: &TransitionRecord,
 ) -> Result<(), ActiveReblitBootSyncStartedNamespaceError> {
-    if started.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(started.operation)
         || started.phase != Phase::BootSyncStarted
         || started.rollback.is_some()
     {

@@ -486,8 +486,41 @@ fn receipt_pair(receipt: &CanonicalBootPublicationReceipt) -> BootPublicationRec
 /// The operations that hold a boot source contract and can therefore hand off
 /// here. Staging is reached only through a sealed handoff, so this rejects a
 /// record whose chain never legitimately advances into `BootSyncStarted`.
-fn supports_boot_sync(operation: Operation) -> bool {
+pub(in crate::client) fn supports_boot_sync(operation: Operation) -> bool {
     matches!(operation, Operation::NewState | Operation::ActiveReblit)
+}
+
+/// The boot tail's candidate/predecessor identity rule, per operation. A reblit
+/// replaces a state with itself; every other boot source moves to a distinct
+/// candidate. Asserting the reblit shape for all of them excluded NewState from
+/// its own forward tail.
+pub(in crate::client) fn boot_tail_identity_is_exact(record: &TransitionRecord) -> bool {
+    match record.operation {
+        Operation::ActiveReblit => record.candidate.id.is_some() && record.candidate.id == record.previous.id,
+        Operation::NewState => record.candidate.id.is_some() && record.candidate.id != record.previous.id,
+        Operation::ActivateArchived => false,
+    }
+}
+
+/// Boot and system triggers must both be enabled. Whether a predecessor is
+/// archived belongs to the operation, not to this tail: a reblit never archives
+/// one, a NewState replacing an active state always does.
+pub(in crate::client) fn boot_tail_options_are_exact(record: &TransitionRecord) -> bool {
+    record.options.run_system_triggers
+        && record.options.run_boot_sync
+        && (record.operation != Operation::ActiveReblit || !record.options.archive_previous)
+}
+
+/// The record's generation derived from its own chain rather than a constant.
+/// The constants this replaces were the ActiveReblit chain positions, so every
+/// longer chain — NewState allocates a fresh state and archives a predecessor —
+/// failed them by construction.
+pub(in crate::client) fn boot_tail_generation_is_exact(record: &TransitionRecord) -> bool {
+    record
+        .phase
+        .forward()
+        .and_then(|phase| crate::transition_journal::expected_forward_generation(record, phase))
+        == Some(record.generation)
 }
 
 fn require_boot_sync_predecessor(predecessor: &TransitionRecord) -> Result<(), ActiveReblitBootSyncStagingError> {

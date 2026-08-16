@@ -146,7 +146,9 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
         >,
     ) -> Result<ActiveReblitCompleteFinalizationCapture<'reservation>, ActiveReblitCompleteFinalizationAuthorityError>
     {
-        if record.operation != Operation::ActiveReblit || record.phase != Phase::Complete {
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
+            || record.phase != Phase::Complete
+        {
             return Ok(ActiveReblitCompleteFinalizationCapture::NotApplicable);
         }
 
@@ -593,16 +595,23 @@ fn exact_route_plan(
     record: &TransitionRecord,
     receipt_correlation: Option<crate::boot_publication::BootPublicationReceiptPair>,
 ) -> Option<ActiveReblitCompleteFinalizationRoutePlan> {
-    if record.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         || record.phase != Phase::Complete
         || record.rollback.is_some()
-        || !same_nonempty_candidate_and_previous(record)
+        || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record)
     {
         return None;
     }
     match (record.generation, record.options.run_boot_sync, receipt_correlation) {
         (_, true, Some(pair)) => Some(ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair)),
-        (13, false, None) if record.options.run_system_triggers && !record.options.archive_previous => {
+        // The no-boot route stays ActiveReblit-only: its generation and option
+        // shape describe that chain alone, and a first-install NewState could
+        // otherwise match it.
+        (13, false, None)
+            if record.operation == Operation::ActiveReblit
+                && record.options.run_system_triggers
+                && !record.options.archive_previous =>
+        {
             Some(ActiveReblitCompleteFinalizationRoutePlan::NoBoot)
         }
         _ => None,
@@ -610,17 +619,18 @@ fn exact_route_plan(
 }
 
 fn record_plan_is_exact(record: &TransitionRecord, route: &ActiveReblitCompleteFinalizationRouteEvidence) -> bool {
-    let common = record.operation == Operation::ActiveReblit
+    let common = crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         && record.phase == Phase::Complete
         && record.rollback.is_none()
-        && same_nonempty_candidate_and_previous(record);
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record);
     common
         && match route {
             ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked { pair, .. } => {
                 record.options.run_boot_sync && record.boot_publication_receipts == Some(*pair)
             }
             ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => {
-                record.generation == 13
+                record.operation == Operation::ActiveReblit
+                    && record.generation == 13
                     && record.options.run_system_triggers
                     && !record.options.run_boot_sync
                     && !record.options.archive_previous

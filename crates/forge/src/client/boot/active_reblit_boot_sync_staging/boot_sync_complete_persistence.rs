@@ -21,7 +21,7 @@ use crate::{
     db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
         TransitionRecord,
     },
 };
@@ -331,7 +331,7 @@ fn exact_boot_sync_complete_successor(
         .generation
         .checked_add(1)
         .ok_or(ActiveReblitBootSyncCompletePersistenceError::UnexpectedSuccessor)?;
-    if successor.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(successor.operation)
         || successor.phase != Phase::BootSyncComplete
         || successor.transition_id != predecessor.transition_id
         || successor.generation != expected_generation
@@ -564,7 +564,7 @@ fn require_exact_record(
     let actual = record
         .boot_publication_receipt_correlation()
         .map_err(ActiveReblitBootSyncCompleteValidationError::RecordReceipt)?;
-    if record.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         || record.phase != phase
         || &record.transition_id != receipt.body().transition_id()
         || actual != Some(pair)

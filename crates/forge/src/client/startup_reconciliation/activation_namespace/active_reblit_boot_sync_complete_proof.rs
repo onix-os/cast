@@ -177,7 +177,7 @@ fn exact_layout(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<LayoutAlternative, ActiveReblitBootSyncCompleteNamespaceError> {
-    if record.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         || record.phase != Phase::BootSyncComplete
         || record.rollback.is_some()
     {
@@ -205,10 +205,10 @@ fn require_exact_commit_decided_successor(
     let Some(successor_generation) = completed.generation.checked_add(1) else {
         return Err(ActiveReblitBootSyncCompleteNamespaceError::WrongSuccessor);
     };
-    if completed.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(completed.operation)
         || completed.phase != Phase::BootSyncComplete
         || completed.rollback.is_some()
-        || successor.operation != Operation::ActiveReblit
+        || successor.operation != completed.operation
         || successor.phase != Phase::CommitDecided
         || successor.rollback.is_some()
         || successor.generation != successor_generation

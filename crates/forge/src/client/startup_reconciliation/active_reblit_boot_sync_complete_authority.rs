@@ -149,13 +149,17 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         record: &TransitionRecord,
         capture_binding: impl FnOnce() -> Result<TransitionJournalRecordBinding, ActiveReblitBootSyncCompleteAuthorityError>,
     ) -> Result<ActiveReblitBootSyncCompleteAdmission<'reservation>, ActiveReblitBootSyncCompleteAuthorityError> {
-        if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncComplete {
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
+            || record.phase != Phase::BootSyncComplete
+        {
             return Ok(ActiveReblitBootSyncCompleteAdmission::NotApplicable);
         }
         let receipt_correlation = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitBootSyncCompleteAuthorityErrorKind::Record)?;
-        if record.rollback.is_some() || !same_nonempty_candidate_and_previous(record) {
+        if record.rollback.is_some()
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record)
+        {
             return Ok(ActiveReblitBootSyncCompleteAdmission::Deferred);
         }
         let Some(receipt_pair) = receipt_correlation else {
@@ -506,22 +510,36 @@ fn existing_state_context_is_exact(record: &TransitionRecord, evidence: &Databas
     {
         return false;
     }
-    let (Some(candidate), Some(previous)) = (
-        record.candidate.id.map(state::Id::from),
-        record.previous.id.map(state::Id::from),
-    ) else {
+    let Some(candidate) = record.candidate.id.map(state::Id::from) else {
         return false;
     };
-    candidate == previous
-        && matches!(
+    // The two boot sources present different rows here. A reblit replaces a
+    // state with itself, so its row already exists with ownership cleared. A
+    // NewState owns the fresh row it allocated, which is still matching.
+    match record.operation {
+        Operation::ActiveReblit => {
+            record.previous.id.map(state::Id::from) == Some(candidate)
+                && matches!(
+                    evidence,
+                    DatabaseEvidence::ExistingCandidate {
+                        candidate: existing,
+                        provenance: Some(_),
+                        previous: None,
+                    } if existing.state == candidate
+                        && existing.ownership == db::state::TransitionOwnership::Cleared
+                )
+        }
+        Operation::NewState => matches!(
             evidence,
-            DatabaseEvidence::ExistingCandidate {
-                candidate: existing,
+            DatabaseEvidence::CandidateOwnership {
+                state,
+                ownership: db::state::TransitionOwnership::Matching,
                 provenance: Some(_),
-                previous: None,
-            } if existing.state == candidate
-                && existing.ownership == db::state::TransitionOwnership::Cleared
-        )
+                ..
+            } if *state == candidate
+        ),
+        Operation::ActivateArchived => false,
+    }
 }
 
 fn require_exact_database(
@@ -542,11 +560,18 @@ fn capture_exact_active_state(
     installation: &Installation,
     reservation: &ActiveStateReservation,
 ) -> Result<Option<ActiveStateSnapshot>, ActiveReblitBootSyncCompleteAuthorityError> {
-    let active_state = match reservation.capture_for_startup_recovery(installation) {
+    let expected = state::Id::from(record.candidate.id.expect("checked nonempty boot-source state ID"));
+    // A reblit leaves the discovery-time selection untouched, so it keeps the
+    // stricter startup capture. A NewState published this candidate during the
+    // transaction now completing, so it pins to the candidate instead.
+    let captured = match record.operation {
+        Operation::ActiveReblit => reservation.capture_for_startup_recovery(installation),
+        _ => reservation.capture_for_forward_boot_completion(installation, expected),
+    };
+    let active_state = match captured {
         Ok(active_state) => active_state,
         Err(source) => return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveState(source).into()),
     };
-    let expected = state::Id::from(record.candidate.id.expect("checked nonempty ActiveReblit state ID"));
     if active_state.active() != Some(expected) {
         return Ok(None);
     }
@@ -561,11 +586,15 @@ fn revalidate_active_state_for_admission(
     installation: &Installation,
     active_state: &ActiveStateSnapshot,
 ) -> Result<bool, ActiveReblitBootSyncCompleteAuthorityError> {
-    let expected = state::Id::from(record.candidate.id.expect("checked nonempty ActiveReblit state ID"));
+    let expected = state::Id::from(record.candidate.id.expect("checked nonempty boot-source state ID"));
     if active_state.active() != Some(expected) {
         return Ok(false);
     }
-    match active_state.revalidate(installation) {
+    let revalidated = match record.operation {
+        Operation::ActiveReblit => active_state.revalidate(installation),
+        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    };
+    match revalidated {
         Ok(()) => Ok(true),
         Err(source) => Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveState(source).into()),
     }
@@ -583,9 +612,11 @@ fn require_exact_active_state(
             ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveSelectionMismatch { expected, actual }.into(),
         );
     }
-    active_state
-        .revalidate(installation)
-        .map_err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveState)?;
+    match record.operation {
+        Operation::ActiveReblit => active_state.revalidate(installation),
+        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    }
+    .map_err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveState)?;
     Ok(())
 }
 
@@ -601,12 +632,12 @@ fn record_plan_is_exact(
     record: &TransitionRecord,
     receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
 ) -> bool {
-    record.operation == Operation::ActiveReblit
+    crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         && record.phase == Phase::BootSyncComplete
-        && record.generation == ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION
-        && has_exact_boot_enabled_options(record)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(record)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_options_are_exact(record)
         && record.rollback.is_none()
-        && same_nonempty_candidate_and_previous(record)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record)
         && record.boot_publication_receipts == Some(receipt_pair)
 }
 
@@ -618,12 +649,12 @@ fn exact_commit_decided_successor(
     let completed_pair = completed.boot_publication_receipt_correlation()?;
     let successor_pair = successor.boot_publication_receipt_correlation()?;
     Ok(record_plan_is_exact(completed, receipt_pair)
-        && successor.operation == Operation::ActiveReblit
+        && crate::client::active_reblit_boot_sync_staging::supports_boot_sync(successor.operation)
         && successor.phase == Phase::CommitDecided
-        && successor.generation == ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION
-        && has_exact_boot_enabled_options(successor)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(successor)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_options_are_exact(successor)
         && successor.rollback.is_none()
-        && same_nonempty_candidate_and_previous(successor)
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(successor)
         && completed_pair == Some(receipt_pair)
         && successor_pair == Some(receipt_pair)
         && successor.generation == completed.generation.checked_add(1).unwrap_or(0)

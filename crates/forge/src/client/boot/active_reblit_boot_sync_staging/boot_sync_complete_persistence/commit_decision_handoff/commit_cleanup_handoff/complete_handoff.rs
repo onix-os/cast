@@ -20,7 +20,7 @@ use crate::{
     db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
         TransitionRecord,
     },
 };
@@ -100,18 +100,18 @@ impl<'plan, 'inventory, Plan> CompleteStagedActiveReblitBootSync<'plan, 'invento
         let expected = self.commit_cleanup_complete_record.forward_successor(None)?;
         let pair = receipt_pair(&self.receipt);
         if expected != self.record
-            || self.commit_cleanup_complete_record.generation != ACTIVE_REBLIT_COMMIT_CLEANUP_COMPLETE_GENERATION
-            || self.record.generation != ACTIVE_REBLIT_COMPLETE_GENERATION
-            || self.commit_cleanup_complete_record.operation != Operation::ActiveReblit
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(&self.commit_cleanup_complete_record)
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(&self.record)
+            || !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(self.commit_cleanup_complete_record.operation)
             || self.commit_cleanup_complete_record.phase != Phase::CommitCleanupComplete
-            || self.record.operation != Operation::ActiveReblit
+            || !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(self.record.operation)
             || self.record.phase != Phase::Complete
             || !exact_live_options(&self.commit_cleanup_complete_record)
             || !exact_live_options(&self.record)
             || self.commit_cleanup_complete_record.rollback.is_some()
             || self.record.rollback.is_some()
-            || !same_nonempty_candidate_and_previous(&self.commit_cleanup_complete_record)
-            || !same_nonempty_candidate_and_previous(&self.record)
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(&self.commit_cleanup_complete_record)
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(&self.record)
             || self
                 .commit_cleanup_complete_record
                 .boot_publication_receipt_correlation()?

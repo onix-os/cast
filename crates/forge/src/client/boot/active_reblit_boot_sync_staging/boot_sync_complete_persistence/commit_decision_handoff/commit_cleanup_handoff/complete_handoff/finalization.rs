@@ -17,11 +17,11 @@ use crate::{
     },
     db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation, state,
-    transition_journal::{CodecError, Operation, Phase, TransitionRecord},
+    transition_journal::{CodecError, Phase, TransitionRecord},
 };
 
 use super::{
-    CompleteStagedActiveReblitBootSync, exact_live_options, receipt_pair, same_nonempty_candidate_and_previous,
+    CompleteStagedActiveReblitBootSync, exact_live_options, receipt_pair,
 };
 
 const ACTIVE_REBLIT_COMPLETE_GENERATION: u64 = 15;
@@ -84,12 +84,12 @@ impl<'plan, 'inventory, Plan> FinalizedStagedActiveReblitBootSync<'plan, 'invent
             return Err(FinalizedStagedActiveReblitBootSyncValidationError::ClientCapabilityMismatch);
         }
         let pair = receipt_pair(&self.receipt);
-        if self.complete_record.operation != Operation::ActiveReblit
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(self.complete_record.operation)
             || self.complete_record.phase != Phase::Complete
-            || self.complete_record.generation != ACTIVE_REBLIT_COMPLETE_GENERATION
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_generation_is_exact(&self.complete_record)
             || !exact_live_options(&self.complete_record)
             || self.complete_record.rollback.is_some()
-            || !same_nonempty_candidate_and_previous(&self.complete_record)
+            || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(&self.complete_record)
             || self.complete_record.boot_publication_receipt_correlation()? != Some(pair)
         {
             return Err(FinalizedStagedActiveReblitBootSyncValidationError::UnexpectedRecord);
