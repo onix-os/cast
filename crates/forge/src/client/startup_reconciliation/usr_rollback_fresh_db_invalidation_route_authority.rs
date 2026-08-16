@@ -3,7 +3,7 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        AbortDisposition, BootRollback, Operation, Phase, RollbackAction, StorageError,
         TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
@@ -60,9 +60,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         let Some(rollback) = record.rollback.as_ref() else {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
         };
-        if !super::rollback_source_is_supported(record, rollback.source)
-            && !system_trigger_candidate_preserved_source_is_exact(record)
-        {
+        if !super::rollback_source_is_supported(record, rollback.source) {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
         }
 
@@ -178,9 +176,8 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     record.operation == Operation::NewState
         && record.phase == Phase::CandidatePreserved
-        && (super::rollback_source_is_supported(record, rollback.source)
-            || system_trigger_candidate_preserved_source_is_exact(record))
-        && rollback.previous_archive == RollbackAction::NotRequired
+        && super::rollback_source_is_supported(record, rollback.source)
+        && super::rollback_previous_archive_is_settled(record, rollback.previous_archive, rollback.source)
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
@@ -188,32 +185,16 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
         )
         && rollback.candidate.disposition == AbortDisposition::Quarantine
         && rollback.fresh_db == RollbackAction::Pending
-        && rollback.boot == BootRollback::NotRequired
+        // This route owns the fresh-database invalidation only. Boot repair is
+        // the successor's business: `next_rollback_phase` consults `plan.boot`
+        // after every pending action is drained, so a pending boot rollback
+        // here is the next phase, not a reason to refuse this one.
+        && matches!(rollback.boot, BootRollback::NotRequired | BootRollback::PendingUnverifiable)
         // Derived, not asserted. Hard-coding this to `true` required the
         // crash to have happened after the transaction triggers, so a
         // rollback that began before them reached this phase and had no
         // route out — the terminal stall measured in the VM 2026-07-31.
         && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
-}
-
-fn system_trigger_candidate_preserved_source_is_exact(record: &TransitionRecord) -> bool {
-    let Some(rollback) = record.rollback.as_ref() else {
-        return false;
-    };
-    matches!(
-        (record.operation, record.phase, rollback.source, record.generation),
-        (
-            Operation::NewState,
-            Phase::CandidatePreserved,
-            ForwardPhase::SystemTriggersStarted,
-            16,
-        ) | (
-            Operation::NewState,
-            Phase::CandidatePreserved,
-            ForwardPhase::SystemTriggersComplete,
-            17,
-        )
-    )
 }
 
 fn inspect_current_database(

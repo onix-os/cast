@@ -1037,9 +1037,36 @@ pub(super) fn rollback_source_is_supported(
     (source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal()
         || matches!(
             source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
+            ForwardPhase::UsrExchangeIntent
+                | ForwardPhase::UsrExchanged
+                | ForwardPhase::RootLinksComplete
+                | ForwardPhase::SystemTriggersStarted
+                | ForwardPhase::SystemTriggersComplete
+                | ForwardPhase::PreviousArchiveIntent
+                | ForwardPhase::PreviousArchived
+                | ForwardPhase::BootSyncStarted
         ))
         && crate::transition_journal::expected_forward_generation(record, source).is_some()
+}
+
+/// Whether a rollback plan's previous-archive action no longer needs action,
+/// derived from the journal's own possibility rule rather than asserted.
+///
+/// `NotRequired` is only coherent when no predecessor was archived. A source
+/// past the archive demonstrably archived one, so a plan claiming otherwise is
+/// inexact — the same contract `rollback_usr_exchange_is_settled` enforces for
+/// the exchange.
+pub(super) fn rollback_previous_archive_is_settled(
+    record: &TransitionRecord,
+    action: crate::transition_journal::RollbackAction,
+    source: crate::transition_journal::ForwardPhase,
+) -> bool {
+    use crate::transition_journal::RollbackAction;
+    match action {
+        RollbackAction::Applied | RollbackAction::AlreadySatisfied => true,
+        RollbackAction::NotRequired => !record.previous_restore_rollback_is_possible(source),
+        RollbackAction::Pending => false,
+    }
 }
 
 /// Whether a rollback plan's `/usr` exchange no longer needs action.

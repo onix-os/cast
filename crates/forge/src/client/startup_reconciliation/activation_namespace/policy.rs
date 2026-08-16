@@ -362,9 +362,9 @@ fn layout_at_rollback_decision(rollback: &RollbackPlan) -> Result<Vec<LayoutAlte
     // namespace may hold either side of it whatever the actions say. Staging
     // intent leaves the candidate in its own slot where PRE_EXCHANGE would
     // demand staging; archive intent leaves the predecessor on either side.
-    if rollback.source == crate::transition_journal::ForwardPhase::ArchivedCandidateStagingIntent {
+    if rollback.source == ForwardPhase::ArchivedCandidateStagingIntent {
         Ok(vec![ARCHIVED_CANDIDATE_SLOT])
-    } else if rollback.source == crate::transition_journal::ForwardPhase::PreviousArchiveIntent {
+    } else if rollback.source == ForwardPhase::PreviousArchiveIntent {
         Ok(vec![PREVIOUS_ARCHIVED, POST_EXCHANGE])
     } else if previous_pending {
         Ok(vec![PREVIOUS_ARCHIVED])

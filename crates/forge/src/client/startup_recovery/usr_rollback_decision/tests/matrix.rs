@@ -50,7 +50,7 @@ fn startup_usr_rollback_decision_admitted_matrix_persists_exact_plan() {
 }
 
 #[test]
-fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
+fn startup_new_state_previous_archived_rollback_converges_not_bricked() {
     // A NewState crash durably at PreviousArchived is not yet auto-recovered:
     // no dispatcher admits the archive phases, so startup halts fail-safe with
     // the record intact (RecoveryPending) rather than bricking or panicking.
@@ -91,13 +91,19 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
         .canonical_record()
         .rollback
         .expect("a rollback plan was persisted");
-    // Both undone: the predecessor is back in staging and the exchange that put
-    // the candidate live has been reversed onto it. The candidate and its fresh
-    // row are still outstanding, which is what keeps this a chain.
+    // The whole chain now runs to the end: predecessor restored, exchange
+    // reversed, candidate preserved, and the fresh row invalidated. The fresh
+    // row used to stay outstanding because the invalidation route demanded
+    // `previous_archive == NotRequired`, which an archived source can never
+    // satisfy, so this rollback stalled one step short of complete.
+    assert!(
+        phases.contains(&Phase::RollbackComplete),
+        "the archived-source rollback did not converge: {phases:?}"
+    );
     assert_eq!(plan.previous_archive, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.usr_exchange, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.candidate.action, RollbackAction::Applied, "plan={plan:?}");
-    assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.fresh_db, RollbackAction::Applied, "plan={plan:?}");
 }
 
 #[test]
