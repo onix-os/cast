@@ -21,6 +21,19 @@ use crate::{Installation, linux_fs, package};
 
 static FIXED_STAGING_COORDINATOR: Mutex<()> = Mutex::new(());
 
+/// Whether the process-global writer lease is held by anyone.
+///
+/// Ambiguous by construction: `std::sync::Mutex` is not reentrant, so this also
+/// reports true when the calling thread holds it. Interpret against the call
+/// site — a thread that provably holds no lease there implicates another.
+#[cfg(test)]
+pub(crate) fn coordinator_is_held_for_test() -> bool {
+    matches!(
+        FIXED_STAGING_COORDINATOR.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    )
+}
+
 const ROOTS_RELATIVE: &CStr = c".cast/root";
 const STAGING_NAME: &CStr = c"staging";
 const PRIVATE_WRAPPER_MODE: u32 = 0o700;

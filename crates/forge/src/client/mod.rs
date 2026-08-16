@@ -167,6 +167,8 @@ mod disposable_vm_gpt_topology_tests;
 mod external_materialization;
 mod fetch;
 mod fixed_staging;
+#[cfg(test)]
+pub(crate) use fixed_staging::coordinator_is_held_for_test;
 mod install;
 mod journal_usr_exchange_authority;
 #[cfg(test)]

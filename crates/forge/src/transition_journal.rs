@@ -494,7 +494,22 @@ fn open_and_lock_with_wait(directory: &std::fs::File, path: &Path, wait: bool) -
     };
     require_safe_regular_file(&file, &path.join("state-transition.lock"))
         .map_err(|source| StorageError::ValidateLock { source })?;
-    flock_exclusive(&file, wait).map_err(|source| StorageError::AcquireLock { source })?;
+    flock_exclusive(&file, wait).map_err(|source| {
+        // Diagnostic for the intermittent non-blocking `AcquireLock`: record the
+        // exact lock and whether the process-global writer lease was held when
+        // the acquire lost. A held lease means the journal owner is queued
+        // behind it rather than stuck.
+        #[cfg(test)]
+        if !wait && source.kind() == io::ErrorKind::WouldBlock {
+            eprintln!(
+                "FLOCK-CONTENTION path={} lease_held={} thread={:?}",
+                path.display(),
+                crate::client::coordinator_is_held_for_test(),
+                std::thread::current().name()
+            );
+        }
+        StorageError::AcquireLock { source }
+    })?;
 
     let named = openat2_file(
         directory.as_raw_fd(),
