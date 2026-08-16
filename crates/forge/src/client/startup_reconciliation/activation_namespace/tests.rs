@@ -672,6 +672,43 @@ fn startup_activation_policy_forward_layout_matrix_is_exact() {
     }
 }
 
+/// An ActivateArchived candidate that was never staged stays in its own state
+/// slot: `advance_never_staged_and_return` publishes `CandidatePreserved`
+/// without moving anything, and nothing moves it for the rest of the rollback.
+/// Naming only `preserved` here resolved the destination to the quarantine
+/// under a `Quarantine` disposition and stalled the rollback forever.
+#[test]
+fn startup_activation_policy_preserved_admits_never_staged_archived_candidate() {
+    let mut fixture = Fixture::archived_activation();
+    let archived_slot = LayoutAlternative {
+        candidate: CandidatePlace::ArchivedSlot,
+        previous: PreviousPlace::Live,
+    };
+    for phase in [
+        Phase::CandidatePreserved,
+        Phase::FreshDbInvalidationIntent,
+        Phase::FreshDbInvalidated,
+        Phase::RollbackComplete,
+    ] {
+        let mut rollback = rollback_plan(
+            ForwardPhase::SystemTriggersStarted,
+            RollbackAction::NotRequired,
+            RollbackAction::NotRequired,
+            RollbackAction::AlreadySatisfied,
+        );
+        rollback.candidate.disposition = AbortDisposition::Quarantine;
+        rollback.fresh_db = RollbackAction::NotRequired;
+        fixture.record.phase = phase;
+        fixture.record.rollback = Some(rollback);
+        assert!(
+            rollback_layouts(&fixture.record, fixture.record.rollback.as_ref().unwrap())
+                .unwrap()
+                .contains(&archived_slot),
+            "{phase:?}"
+        );
+    }
+}
+
 #[test]
 fn startup_activation_policy_rollback_actions_override_source_ordinal() {
     let mut fixture = Fixture::new_state(Some(41), PreviousOrigin::ActiveState);

@@ -339,6 +339,11 @@ pub(super) fn rollback_layouts(
         // An ActivateArchived rollback decided before staging still has its
         // candidate in its own slot, so preservation may find it there too.
         Phase::CandidatePreserveIntent => vec![PRE_EXCHANGE, preserved, ARCHIVED_CANDIDATE_SLOT],
+        // A never-staged archived candidate is preserved where it already sits:
+        // its phase advances with no move, and nothing moves it afterwards. The
+        // slot stays a legal layout for the rest of the rollback, which naming
+        // only `preserved` denied whenever the disposition resolved the
+        // destination to the quarantine.
         Phase::CandidatePreserved
         | Phase::FreshDbInvalidationIntent
         | Phase::FreshDbInvalidated
@@ -346,7 +351,7 @@ pub(super) fn rollback_layouts(
         | Phase::BootRepairStarted
         | Phase::BootRepairComplete
         | Phase::BootRepairUnverified
-        | Phase::RollbackComplete => vec![preserved],
+        | Phase::RollbackComplete => vec![preserved, ARCHIVED_CANDIDATE_SLOT],
         _ => Vec::new(),
     })
 }
