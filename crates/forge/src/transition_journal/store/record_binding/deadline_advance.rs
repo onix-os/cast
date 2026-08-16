@@ -189,6 +189,13 @@ impl TransitionJournalStore {
             _file: temporary.file,
             identity: temporary.identity,
         };
+        // The same hook the other two advance routes carry, for the same
+        // reason. Without it every phase reached through the deadline route is
+        // invisible to `CAST_CRASH_AT_PHASE`: the harness waits, sees the
+        // operation finish, and reports "phase never reached" for a phase the
+        // run passed straight through. That made the BootSyncComplete and
+        // CommitDecided cells inert while looking like honest verdicts.
+        super::super::park_for_phase_targeted_crash(next.operation, next.phase);
         drop(expected);
 
         super::super::public_binding_revalidation_boundary(
