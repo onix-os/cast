@@ -133,6 +133,48 @@ impl<'plan, 'inventory, Plan> CommitCleanupCompleteStagedActiveReblitBootSync<'p
 }
 
 impl<'plan, 'inventory, Plan> CommittedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
+    /// Hand a committed NewState or ActivateArchived transition to the
+    /// activation terminal route, which already owns the whole tail for the two
+    /// operations that reclaim nothing.
+    ///
+    /// The ActiveReblit chain below exists for the staging-wrapper exchange a
+    /// reblit performs; these operations have no such effect, so they finish
+    /// through the authority written for them rather than through evidence
+    /// shaped around a wrapper they never had.
+    pub(in crate::client) fn finish_activation_tail(
+        self,
+        client: &Client,
+    ) -> Result<(), CommittedStagedActiveReblitCommitCleanupError> {
+        self.revalidate_against(client)
+            .map_err(CommittedStagedActiveReblitCommitCleanupError::CommittedEvidence)?;
+        let CommittedStagedActiveReblitBootSync {
+            record,
+            record_binding,
+            journal,
+            database,
+            installation,
+            active_state_reservation,
+            ..
+        } = self;
+        // The activation route rebinds the record itself at every step.
+        drop(record_binding);
+        let journal = crate::client::startup_recovery::finish_activation_after_commit(
+            journal,
+            &database,
+            &installation,
+            record,
+            &active_state_reservation,
+        )
+        .map_err(CommittedStagedActiveReblitCommitCleanupError::ActivationTail)?;
+        crate::client::startup_gate::CleanSystemStartup::admit_clean_after_terminal_finalization(
+            &installation,
+            &database,
+            journal,
+        )
+        .map_err(CommittedStagedActiveReblitCommitCleanupError::CleanAdmission)?;
+        Ok(())
+    }
+
     /// Consume exact live `CommitDecided` authority through Apply cleanup, its
     /// fixed durability suffix, and the sole generation-14 journal successor.
     pub(in crate::client) fn persist_commit_cleanup_complete(
@@ -269,6 +311,10 @@ pub(in crate::client) enum CommittedStagedActiveReblitCommitCleanupError {
     Authority(#[source] ActiveReblitCommitCleanupAuthorityError),
     #[error("persist the journal-only first-install NewState cleanup edge")]
     NewStateCleanup(#[source] crate::client::startup_recovery::NewStateCommitCleanupPersistenceError),
+    #[error("finish the committed activation transition through its terminal route")]
+    ActivationTail(#[source] crate::client::startup_recovery::ActivationCommitCleanupPersistenceError),
+    #[error("admit clean startup after the activation terminal route")]
+    CleanAdmission(#[source] crate::client::startup_gate::Error),
     #[error("perform exact ActiveReblit cleanup and fixed durability suffix")]
     Effect(#[source] ActiveReblitCommitCleanupEffectError),
     #[error("the live Apply cleanup exchange was not applied")]

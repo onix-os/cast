@@ -123,6 +123,18 @@ where
 {
     /// Consume the exact generation-13 handoff through Apply cleanup and the
     /// sole durable generation-14 successor. This does not enter finalization.
+    /// Finish a committed NewState or ActivateArchived transition through the
+    /// activation terminal route. Those operations reclaim no staging wrapper,
+    /// so the ActiveReblit cleanup chain below does not describe them.
+    pub(in crate::client) fn finish_activation_tail(
+        self,
+        client: &Client,
+    ) -> Result<(), ActiveReblitBootCommitCleanupError> {
+        self.committed
+            .finish_activation_tail(client)
+            .map_err(ActiveReblitBootCommitCleanupError::ActivationTail)
+    }
+
     pub(in crate::client) fn persist_commit_cleanup_complete(
         self,
         client: &Client,
@@ -239,6 +251,8 @@ pub(in crate::client) enum ActiveReblitBootCommitCleanupError {
     PreCleanup(#[source] ActiveReblitBootCommitDecisionPostAdvanceError),
     #[error("perform exact ActiveReblit Apply cleanup and persist CommitCleanupComplete")]
     Persistence(#[source] CommittedStagedActiveReblitCommitCleanupError),
+    #[error("finish the committed activation transition through its terminal route")]
+    ActivationTail(#[source] CommittedStagedActiveReblitCommitCleanupError),
     #[error("revalidate exact cleanup-complete terminal handoff; durable journal is CommitCleanupComplete")]
     PostCleanup(#[source] ActiveReblitBootCommitCleanupPostAdvanceError),
 }

@@ -10,7 +10,9 @@ mod activation_commit_cleanup_complete;
 mod active_reblit_boot_sync_commit_decision;
 mod active_reblit_boot_sync_started_completion;
 mod active_reblit_commit_cleanup_complete;
-pub(in crate::client) use activation_commit_cleanup_complete::finish_activation_after_commit;
+pub(in crate::client) use activation_commit_cleanup_complete::{
+    ActivationCommitCleanupPersistenceError, finish_activation_after_commit,
+};
 mod active_reblit_commit_cleanup_complete_to_complete;
 mod active_reblit_complete_finalization;
 mod canonical_journal_reopen;

@@ -459,15 +459,12 @@ impl Client {
         let committed = completed
             .persist_commit_decided(self)
             .map_err(|source| LiveNewStateBootError::at("CommitDecided persistence", source))?;
-        let cleaned = committed
-            .persist_commit_cleanup_complete(self)
-            .map_err(|source| LiveNewStateBootError::at("commit cleanup", source))?;
-        let complete = cleaned
-            .persist_complete(self)
-            .map_err(|source| LiveNewStateBootError::at("Complete persistence", source))?;
-        let _finalized = complete
-            .finalize(self)
-            .map_err(|source| LiveNewStateBootError::at("terminal finalization", source))?;
+        // The remaining tail belongs to the activation terminal route. A
+        // NewState reclaims no staging wrapper, so the ActiveReblit chain's
+        // cleanup evidence does not describe it.
+        committed
+            .finish_activation_tail(self)
+            .map_err(|source| LiveNewStateBootError::at("activation terminal route", source))?;
         Ok(())
     }
 }
