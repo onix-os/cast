@@ -198,7 +198,7 @@ impl ActiveReblitCommitCleanupAuthority {
         record: &TransitionRecord,
         capture_binding: impl FnOnce() -> Result<TransitionJournalRecordBinding, ActiveReblitCommitCleanupAuthorityError>,
     ) -> Result<ActiveReblitCommitCleanupAdmission<'reservation>, ActiveReblitCommitCleanupAuthorityError> {
-        if record.operation != Operation::ActiveReblit || record.phase != Phase::CommitDecided {
+        if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation) || record.phase != Phase::CommitDecided {
             return Ok(ActiveReblitCommitCleanupAdmission::NotApplicable);
         }
         let receipt_correlation = record
@@ -557,22 +557,35 @@ fn existing_state_context_is_exact(record: &TransitionRecord, evidence: &Databas
     {
         return false;
     }
-    let (Some(candidate), Some(previous)) = (
-        record.candidate.id.map(state::Id::from),
-        record.previous.id.map(state::Id::from),
-    ) else {
+    let Some(candidate) = record.candidate.id.map(state::Id::from) else {
         return false;
     };
-    candidate == previous
-        && matches!(
+    // A reblit's row already exists with ownership cleared; a NewState still
+    // owns the fresh row it allocated.
+    match record.operation {
+        Operation::ActiveReblit => {
+            record.previous.id.map(state::Id::from) == Some(candidate)
+                && matches!(
+                    evidence,
+                    DatabaseEvidence::ExistingCandidate {
+                        candidate: existing,
+                        provenance: Some(_),
+                        previous: None,
+                    } if existing.state == candidate
+                        && existing.ownership == db::state::TransitionOwnership::Cleared
+                )
+        }
+        Operation::NewState => matches!(
             evidence,
-            DatabaseEvidence::ExistingCandidate {
-                candidate: existing,
+            DatabaseEvidence::CandidateOwnership {
+                state,
+                ownership: db::state::TransitionOwnership::Matching,
                 provenance: Some(_),
-                previous: None,
-            } if existing.state == candidate
-                && existing.ownership == db::state::TransitionOwnership::Cleared
-        )
+                ..
+            } if *state == candidate
+        ),
+        Operation::ActivateArchived => false,
+    }
 }
 
 fn require_exact_database(
@@ -593,10 +606,12 @@ fn capture_exact_active_state(
     installation: &Installation,
     reservation: &ActiveStateReservation,
 ) -> Result<Option<ActiveStateSnapshot>, ActiveReblitCommitCleanupAuthorityError> {
-    let active_state = reservation
-        .capture_for_startup_recovery(installation)
-        .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
-    let expected = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state ID"));
+    let expected = state::Id::from(record.candidate.id.expect("checked exact boot-source state ID"));
+    let active_state = match record.operation {
+        Operation::ActiveReblit => reservation.capture_for_startup_recovery(installation),
+        _ => reservation.capture_for_forward_boot_completion(installation, expected),
+    }
+    .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
     if active_state.active() != Some(expected) {
         return Ok(None);
     }
@@ -611,13 +626,15 @@ fn revalidate_active_state_for_admission(
     installation: &Installation,
     active_state: &ActiveStateSnapshot,
 ) -> Result<bool, ActiveReblitCommitCleanupAuthorityError> {
-    let expected = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state ID"));
+    let expected = state::Id::from(record.candidate.id.expect("checked exact boot-source state ID"));
     if active_state.active() != Some(expected) {
         return Ok(false);
     }
-    active_state
-        .revalidate(installation)
-        .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
+    match record.operation {
+        Operation::ActiveReblit => active_state.revalidate(installation),
+        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    }
+    .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
     Ok(true)
 }
 
@@ -631,30 +648,34 @@ fn require_exact_active_state(
     if actual != Some(expected) {
         return Err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveSelectionMismatch { expected, actual }.into());
     }
-    active_state
-        .revalidate(installation)
-        .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
+    match record.operation {
+        Operation::ActiveReblit => active_state.revalidate(installation),
+        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    }
+    .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::ActiveState)?;
     Ok(())
-}
-
-fn same_nonempty_candidate_and_previous(record: &TransitionRecord) -> bool {
-    record.candidate.id.is_some() && record.candidate.id == record.previous.id
 }
 
 fn exact_route_plan(
     record: &TransitionRecord,
     receipt_correlation: Option<crate::boot_publication::BootPublicationReceiptPair>,
 ) -> Option<ActiveReblitCommitCleanupRoutePlan> {
-    if record.operation != Operation::ActiveReblit
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         || record.phase != Phase::CommitDecided
         || record.rollback.is_some()
-        || !same_nonempty_candidate_and_previous(record)
+        || !crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record)
     {
         return None;
     }
     match (record.generation, record.options.run_boot_sync, receipt_correlation) {
         (_, true, Some(pair)) => Some(ActiveReblitCommitCleanupRoutePlan::PromotedBoot(pair)),
-        (11, false, None) if !record.options.archive_previous && record.options.run_system_triggers => {
+        // The no-boot route stays ActiveReblit-only: its generation and option
+        // shape describe that chain alone.
+        (11, false, None)
+            if record.operation == Operation::ActiveReblit
+                && !record.options.archive_previous
+                && record.options.run_system_triggers =>
+        {
             Some(ActiveReblitCommitCleanupRoutePlan::NoBoot)
         }
         _ => None,
@@ -662,17 +683,18 @@ fn exact_route_plan(
 }
 
 fn record_plan_is_exact(record: &TransitionRecord, route: &ActiveReblitCommitCleanupRouteEvidence) -> bool {
-    let common = record.operation == Operation::ActiveReblit
+    let common = crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         && record.phase == Phase::CommitDecided
         && record.rollback.is_none()
-        && same_nonempty_candidate_and_previous(record);
+        && crate::client::active_reblit_boot_sync_staging::boot_tail_identity_is_exact(record);
     common
         && match route {
             ActiveReblitCommitCleanupRouteEvidence::PromotedBoot { pair, .. } => {
                 record.options.run_boot_sync && record.boot_publication_receipts == Some(*pair)
             }
             ActiveReblitCommitCleanupRouteEvidence::NoBoot { .. } => {
-                record.generation == 11
+                record.operation == Operation::ActiveReblit
+                    &&                record.generation == 11
                     && !record.options.archive_previous
                     && record.options.run_system_triggers
                     && !record.options.run_boot_sync

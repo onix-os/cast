@@ -327,7 +327,7 @@ fn classify_layout(layout: LayoutAlternative) -> Option<ActiveReblitCommitCleanu
 }
 
 fn require_exact_source(record: &TransitionRecord) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
-    if record.operation == Operation::ActiveReblit
+    if crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
         && matches!(
             record.phase,
             Phase::CommitDecided | Phase::CommitCleanupComplete | Phase::Complete
