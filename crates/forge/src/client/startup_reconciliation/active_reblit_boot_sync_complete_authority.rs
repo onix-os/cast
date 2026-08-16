@@ -35,6 +35,18 @@ use super::{
     metadata_provenance_evidence_compatible,
 };
 
+/// Which active-selection rule this admission must apply.
+///
+/// Startup recovery just discovered the installation, so the live selection
+/// must still equal the discovered one. A forward boot completion is finishing
+/// the very transaction that changed the selection, so it pins to the
+/// candidate instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActiveStatePin {
+    Discovery,
+    ForwardCompletion,
+}
+
 const ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION: u64 = 12;
 const ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION: u64 = 13;
 
@@ -55,6 +67,7 @@ pub(in crate::client) struct ActiveReblitBootSyncCompleteAuthority<'reservation>
     receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitBootSyncCompleteDatabaseEvidence,
     active_state: ActiveStateSnapshot,
+    pin: ActiveStatePin,
     namespace: ActiveReblitBootSyncCompleteNamespaceProof,
     journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
@@ -72,6 +85,7 @@ pub(in crate::client) struct ActiveReblitBootSyncCompletePostAdvanceAuthority<'r
     receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitBootSyncCompleteDatabaseEvidence,
     active_state: ActiveStateSnapshot,
+    pin: ActiveStatePin,
     namespace: ActiveReblitBootSyncCompleteNamespaceProof,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
@@ -106,6 +120,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             state_db,
             active_state_reservation,
             record,
+            ActiveStatePin::Discovery,
             || {
                 installation.revalidate_mutable_namespace()?;
                 let binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
@@ -132,6 +147,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             state_db,
             active_state_reservation,
             record,
+            ActiveStatePin::ForwardCompletion,
             || Ok(journal_record_binding),
         )? {
             ActiveReblitBootSyncCompleteAdmission::Ready(authority) => Ok(authority),
@@ -147,6 +163,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         state_db: &db::state::Database,
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
+        pin: ActiveStatePin,
         capture_binding: impl FnOnce() -> Result<TransitionJournalRecordBinding, ActiveReblitBootSyncCompleteAuthorityError>,
     ) -> Result<ActiveReblitBootSyncCompleteAdmission<'reservation>, ActiveReblitBootSyncCompleteAuthorityError> {
         if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
@@ -176,7 +193,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
                 return Ok(ActiveReblitBootSyncCompleteAdmission::Deferred);
             }
         };
-        let active_state = match capture_exact_active_state(record, installation, active_state_reservation)? {
+        let active_state = match capture_exact_active_state(record, installation, active_state_reservation, pin)? {
             Some(active_state) => active_state,
             None => return Ok(ActiveReblitBootSyncCompleteAdmission::Deferred),
         };
@@ -206,7 +223,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         if !record_plan_is_exact(record, receipt_pair) {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        if !revalidate_active_state_for_admission(record, installation, &active_state)? {
+        if !revalidate_active_state_for_admission(record, installation, &active_state, pin)? {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveSelectionChanged.into());
         }
         require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
@@ -221,6 +238,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             receipt_pair,
             database: database_after,
             active_state,
+            pin,
             namespace,
             journal_record_binding,
             _active_state_reservation: active_state_reservation,
@@ -238,14 +256,14 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             &self.database,
             inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
+        require_exact_active_state(&self.record, &self.installation, &self.active_state, self.pin)?;
         self.namespace
             .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = require_exact_database(
             &self.database,
             inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
+        require_exact_active_state(&self.record, &self.installation, &self.active_state, self.pin)?;
         if database_before != database_after || !record_plan_is_exact(&self.record, self.receipt_pair) {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RouteEvidenceChanged.into());
         }
@@ -327,6 +345,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         let Self {
             installation,
             state_db,
+            pin,
             record,
             receipt_pair,
             database,
@@ -344,6 +363,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         Ok((
             successor_binding,
             ActiveReblitBootSyncCompletePostAdvanceAuthority {
+                pin,
                 installation,
                 state_db,
                 completed_record: record,
@@ -396,7 +416,7 @@ impl ActiveReblitBootSyncCompletePostAdvanceAuthority<'_> {
             &self.database,
             inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(successor, &self.installation, &self.active_state)?;
+        require_exact_active_state(successor, &self.installation, &self.active_state, self.pin)?;
         match binding_mode {
             SuccessorBindingMode::SameStore => self.namespace.revalidate_successor_same_store(
                 &self.installation,
@@ -417,7 +437,7 @@ impl ActiveReblitBootSyncCompletePostAdvanceAuthority<'_> {
             &self.database,
             inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(successor, &self.installation, &self.active_state)?;
+        require_exact_active_state(successor, &self.installation, &self.active_state, self.pin)?;
         if database_before != database_after {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RouteEvidenceChanged.into());
         }
@@ -559,14 +579,15 @@ fn capture_exact_active_state(
     record: &TransitionRecord,
     installation: &Installation,
     reservation: &ActiveStateReservation,
+    pin: ActiveStatePin,
 ) -> Result<Option<ActiveStateSnapshot>, ActiveReblitBootSyncCompleteAuthorityError> {
     let expected = state::Id::from(record.candidate.id.expect("checked nonempty boot-source state ID"));
     // A reblit leaves the discovery-time selection untouched, so it keeps the
     // stricter startup capture. A NewState published this candidate during the
     // transaction now completing, so it pins to the candidate instead.
-    let captured = match record.operation {
-        Operation::ActiveReblit => reservation.capture_for_startup_recovery(installation),
-        _ => reservation.capture_for_forward_boot_completion(installation, expected),
+    let captured = match pin {
+        ActiveStatePin::Discovery => reservation.capture_for_startup_recovery(installation),
+        ActiveStatePin::ForwardCompletion => reservation.capture_for_forward_boot_completion(installation, expected),
     };
     let active_state = match captured {
         Ok(active_state) => active_state,
@@ -575,7 +596,7 @@ fn capture_exact_active_state(
     if active_state.active() != Some(expected) {
         return Ok(None);
     }
-    if !revalidate_active_state_for_admission(record, installation, &active_state)? {
+    if !revalidate_active_state_for_admission(record, installation, &active_state, pin)? {
         return Ok(None);
     }
     Ok(Some(active_state))
@@ -585,14 +606,15 @@ fn revalidate_active_state_for_admission(
     record: &TransitionRecord,
     installation: &Installation,
     active_state: &ActiveStateSnapshot,
+    pin: ActiveStatePin,
 ) -> Result<bool, ActiveReblitBootSyncCompleteAuthorityError> {
     let expected = state::Id::from(record.candidate.id.expect("checked nonempty boot-source state ID"));
     if active_state.active() != Some(expected) {
         return Ok(false);
     }
-    let revalidated = match record.operation {
-        Operation::ActiveReblit => active_state.revalidate(installation),
-        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    let revalidated = match pin {
+        ActiveStatePin::Discovery => active_state.revalidate(installation),
+        ActiveStatePin::ForwardCompletion => active_state.revalidate_for_forward_boot_completion(installation),
     };
     match revalidated {
         Ok(()) => Ok(true),
@@ -604,6 +626,7 @@ fn require_exact_active_state(
     record: &TransitionRecord,
     installation: &Installation,
     active_state: &ActiveStateSnapshot,
+    pin: ActiveStatePin,
 ) -> Result<(), ActiveReblitBootSyncCompleteAuthorityError> {
     let expected = state::Id::from(record.candidate.id.expect("validated ActiveReblit state ID"));
     let actual = active_state.active();
@@ -612,9 +635,9 @@ fn require_exact_active_state(
             ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveSelectionMismatch { expected, actual }.into(),
         );
     }
-    match record.operation {
-        Operation::ActiveReblit => active_state.revalidate(installation),
-        _ => active_state.revalidate_for_forward_boot_completion(installation),
+    match pin {
+        ActiveStatePin::Discovery => active_state.revalidate(installation),
+        ActiveStatePin::ForwardCompletion => active_state.revalidate_for_forward_boot_completion(installation),
     }
     .map_err(ActiveReblitBootSyncCompleteAuthorityErrorKind::ActiveState)?;
     Ok(())

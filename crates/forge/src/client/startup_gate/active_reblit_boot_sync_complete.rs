@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     Installation, db,
-    transition_journal::{Operation, Phase, TransitionJournalStore, TransitionRecord},
+    transition_journal::{Phase, TransitionJournalStore, TransitionRecord},
 };
 
 use crate::client::{
@@ -49,7 +49,12 @@ pub(super) fn dispatch<'reservation>(
     journal: TransitionJournalStore,
     record: TransitionRecord,
 ) -> Result<Dispatch, Error> {
-    if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncComplete {
+    // Every operation that publishes boot state reaches this checkpoint, so a
+    // crash here needs the same roll-forward whichever one it was. Restricting
+    // the dispatch to ActiveReblit left a NewState record with no route at all.
+    if !crate::client::active_reblit_boot_sync_staging::supports_boot_sync(record.operation)
+        || record.phase != Phase::BootSyncComplete
+    {
         return Ok(Dispatch::Unhandled { journal, record });
     }
 
