@@ -11,6 +11,7 @@ use super::{
     startup_reconciliation,
 };
 
+mod activation_terminal;
 mod active_reblit_boot_sync_complete;
 mod active_reblit_boot_sync_started;
 mod active_reblit_commit_cleanup;
@@ -325,6 +326,23 @@ impl CleanSystemStartup {
                     )
                     .map_err(map_reconciliation_error)?;
                     return Err(Error::RecoveryPending(pending));
+                }
+            };
+
+            // The activation terminal tail comes first: a NewState or
+            // ActivateArchived record past its commit decision belongs to that
+            // route, and the ActiveReblit arms below would decline it and leave
+            // it stranded.
+            let (journal, record) = match activation_terminal::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+            )? {
+                activation_terminal::Dispatch::Unhandled { journal, record } => (journal, record),
+                activation_terminal::Dispatch::Finalized { journal } => {
+                    return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);
                 }
             };
 
@@ -891,6 +909,8 @@ pub(super) enum Error {
     ActiveReblitBootSyncCompleteDispatch(#[from] active_reblit_boot_sync_complete::Error),
     #[error("dispatch the exact forward startup ActiveReblit CommitDecided cleanup checkpoint")]
     ActiveReblitCommitCleanupDispatch(#[from] active_reblit_commit_cleanup::Error),
+    #[error("dispatch the activation terminal tail at startup")]
+    ActivationTerminalDispatch(#[from] activation_terminal::Error),
     #[error("dispatch the exact forward startup ActiveReblit CommitCleanupComplete checkpoint")]
     ActiveReblitCommitCleanupCompleteDispatch(#[from] active_reblit_commit_cleanup_complete::Error),
     #[error("dispatch the exact forward startup ActiveReblit Complete finalizer")]

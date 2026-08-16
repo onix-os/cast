@@ -305,6 +305,11 @@ pub(in crate::client) fn finish_activation_after_commit(
         ActivationTerminalStep::CommitCleanup,
         ActivationTerminalStep::CleanupComplete,
     ] {
+        // Resumption: a record recovered mid-tail has already crossed the
+        // earlier steps, so skip the ones it is past rather than refusing it.
+        if record.phase != step.source_phase() {
+            continue;
+        }
         let in_flight = state_db
             .audit_in_flight_transition()
             .map_err(|source| ActivationCommitCleanupPersistenceError::InFlight(Box::new(source)))?;

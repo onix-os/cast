@@ -63,6 +63,11 @@ impl ActivationTerminalStep {
         }
     }
 
+    /// The phase a record must already be at for this step to apply.
+    pub(in crate::client) const fn source_phase(self) -> Phase {
+        self.source()
+    }
+
     /// Whether this step advances the record. `Finalize` deletes it instead.
     pub(in crate::client) const fn advances(self) -> bool {
         !matches!(self, Self::Finalize)
