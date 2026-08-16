@@ -371,7 +371,11 @@ if [ "$BOOTF" = 1 ]; then
     # root: an ESP is machine-level. The kernel's default NLS is utf8, a module
     # this initramfs does not carry, so name the built-in codepage explicitly.
     mkdir -p /efi
-    ESP_OPTS=rw,nosuid,nodev,noexec,nosymfollow,codepage=437,iocharset=cp437
+    # vfat stores no per-file modes, so the mount decides them and boot
+    # publication requires exactly 0644. The default 0755 failed the publisher's
+    # identity check after it had already created its staging leaf, leaving a
+    # zero-byte residue that the retry then refused as foreign content.
+    ESP_OPTS=rw,nosuid,nodev,noexec,nosymfollow,codepage=437,iocharset=cp437,fmask=0133,dmask=0022
     if ! mount -t vfat -o "$ESP_OPTS" /dev/vda1 /efi; then
         echo "CELL-FAIL esp"; ls -l /dev/vda* 2>&1; poweroff -f
     fi
