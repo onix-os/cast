@@ -348,6 +348,38 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Require the exact NewState preserved namespace across the boot-repair tail.
+///
+/// The candidate is quarantined and the predecessor restored before any of
+/// these phases, so the topology is the same preserved one throughout and only
+/// the journal phase advances. Separate from the `CandidatePreserved` helper
+/// above so neither route widens the other's admission surface.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_new_state_boot_repair_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if !matches!(
+        record.phase,
+        Phase::FreshDbInvalidated
+            | Phase::BootRepairRequired
+            | Phase::BootRepairStarted
+            | Phase::BootRepairComplete
+            | Phase::BootRepairUnverified
+    ) {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongCandidatePreservedPhase);
+    }
+    if record.operation != Operation::NewState {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::NewStateRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::NewStatePreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
 /// Require the exact canonical-slot ActivateArchived preservation topology
 /// while the journal is at its already-persisted `CandidatePreserved`
 /// checkpoint.

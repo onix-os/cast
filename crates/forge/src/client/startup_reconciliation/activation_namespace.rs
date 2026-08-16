@@ -31,6 +31,7 @@ mod capture;
 mod decision_proof;
 mod fresh_db_invalidation_proof;
 mod fresh_db_invalidation_route_proof;
+mod new_state_boot_repair_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
@@ -266,6 +267,10 @@ pub(in crate::client) use fresh_db_invalidation_route_proof::arm_before_usr_roll
 pub(super) use fresh_db_invalidation_route_proof::{
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
     UsrRollbackFreshDbInvalidationRouteNamespaceProof,
+};
+pub(super) use new_state_boot_repair_proof::{
+    UsrRollbackNewStateBootRepairNamespaceError, UsrRollbackNewStateBootRepairNamespaceInspection,
+    UsrRollbackNewStateBootRepairNamespaceProof,
 };
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
 pub(super) use policy::{PreviousRestoreLayout, UsrExchangeLayout};

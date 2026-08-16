@@ -52,6 +52,9 @@ mod usr_rollback_active_reblit_complete_route_authority;
 mod usr_rollback_active_reblit_finalization_authority;
 mod usr_rollback_candidate_preserve_authority;
 mod usr_rollback_complete_route_authority;
+mod usr_rollback_new_state_boot_repair_required_authority;
+mod usr_rollback_new_state_boot_repair_start_authority;
+mod usr_rollback_new_state_boot_repair_unverified_authority;
 mod usr_rollback_decision_authority;
 mod usr_rollback_finalization_authority;
 mod usr_rollback_fresh_db_invalidation_authority;
@@ -190,6 +193,18 @@ pub(in crate::client) use usr_rollback_complete_route_authority::{
     UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
     UsrRollbackCompleteRouteRecordAdvanceError,
 };
+pub(in crate::client) use usr_rollback_new_state_boot_repair_required_authority::{
+    UsrRollbackNewStateBootRepairRequiredAdmission, UsrRollbackNewStateBootRepairRequiredAuthority,
+    UsrRollbackNewStateBootRepairRequiredAuthorityError, UsrRollbackNewStateBootRepairRequiredRecordAdvanceError,
+};
+pub(in crate::client) use usr_rollback_new_state_boot_repair_start_authority::{
+    UsrRollbackNewStateBootRepairStartAdmission, UsrRollbackNewStateBootRepairStartAuthority,
+    UsrRollbackNewStateBootRepairStartAuthorityError, UsrRollbackNewStateBootRepairStartRecordAdvanceError,
+};
+pub(in crate::client) use usr_rollback_new_state_boot_repair_unverified_authority::{
+    UsrRollbackNewStateBootRepairUnverifiedAdmission, UsrRollbackNewStateBootRepairUnverifiedAuthority,
+    UsrRollbackNewStateBootRepairUnverifiedAuthorityError, UsrRollbackNewStateBootRepairUnverifiedRecordAdvanceError,
+};
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
 pub(in crate::client) use usr_rollback_decision_authority::{
@@ -261,7 +276,9 @@ use activation_namespace::{
     UsrRollbackFinalizationNamespaceProof, UsrRollbackFreshDbInvalidationNamespaceError,
     UsrRollbackFreshDbInvalidationNamespaceInspection, UsrRollbackFreshDbInvalidationNamespaceProof,
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
-    UsrRollbackFreshDbInvalidationRouteNamespaceProof, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
+    UsrRollbackFreshDbInvalidationRouteNamespaceProof, UsrRollbackNewStateBootRepairNamespaceError,
+    UsrRollbackNewStateBootRepairNamespaceInspection, UsrRollbackNewStateBootRepairNamespaceProof,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
     UsrRollbackPreviousRestoreNamespaceEffectEvidence, UsrRollbackPreviousRestoreNamespaceError,
     UsrRollbackPreviousRestoreNamespaceInspection, UsrRollbackPreviousRestoreNamespaceProof,

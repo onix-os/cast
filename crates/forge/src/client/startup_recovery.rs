@@ -30,6 +30,9 @@ mod usr_rollback_active_reblit_finalization;
 mod usr_rollback_candidate_preserve_dispatch;
 mod usr_rollback_candidate_preserve_persistence;
 mod usr_rollback_complete_route;
+mod usr_rollback_new_state_boot_repair_required;
+mod usr_rollback_new_state_boot_repair_start;
+mod usr_rollback_new_state_boot_repair_unverified;
 mod usr_rollback_decision;
 mod usr_rollback_finalization;
 mod usr_rollback_fresh_db_invalidation_dispatch;
@@ -320,6 +323,17 @@ pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
 
 pub(super) use usr_rollback_complete_route::{
     UsrRollbackCompleteRoutePersistenceError, persist_usr_rollback_complete_route_and_reopen,
+};
+pub(super) use usr_rollback_new_state_boot_repair_required::{
+    UsrRollbackNewStateBootRepairRequiredPersistenceError,
+    persist_usr_rollback_new_state_boot_repair_required_and_reopen,
+};
+pub(super) use usr_rollback_new_state_boot_repair_start::{
+    UsrRollbackNewStateBootRepairStartPersistenceError, persist_usr_rollback_new_state_boot_repair_start_and_reopen,
+};
+pub(super) use usr_rollback_new_state_boot_repair_unverified::{
+    UsrRollbackNewStateBootRepairUnverifiedPersistenceError,
+    persist_usr_rollback_new_state_boot_repair_unverified_and_reopen,
 };
 
 pub(super) use usr_rollback_finalization::{UsrRollbackFinalizationError, finalize_usr_rollback};

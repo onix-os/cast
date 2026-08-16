@@ -19,6 +19,9 @@ use crate::client::{
     startup_reconciliation::{
         UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
         UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackFinalizationAdmission,
+        UsrRollbackNewStateBootRepairRequiredAdmission, UsrRollbackNewStateBootRepairRequiredAuthority,
+        UsrRollbackNewStateBootRepairStartAdmission, UsrRollbackNewStateBootRepairStartAuthority,
+        UsrRollbackNewStateBootRepairUnverifiedAdmission, UsrRollbackNewStateBootRepairUnverifiedAuthority,
         UsrRollbackFinalizationAuthority, UsrRollbackFreshDbInvalidationAdmission,
         UsrRollbackFreshDbInvalidationAuthority, UsrRollbackFreshDbInvalidationRouteAdmission,
         UsrRollbackFreshDbInvalidationRouteAuthority,
@@ -27,6 +30,9 @@ use crate::client::{
         UsrRollbackCandidatePreserveReady, UsrRollbackFreshDbInvalidationReady,
         dispatch_usr_rollback_candidate_preserve_and_reopen, dispatch_usr_rollback_fresh_db_invalidation_and_reopen,
         finalize_usr_rollback, persist_usr_rollback_complete_route_and_reopen,
+        persist_usr_rollback_new_state_boot_repair_required_and_reopen,
+        persist_usr_rollback_new_state_boot_repair_start_and_reopen,
+        persist_usr_rollback_new_state_boot_repair_unverified_and_reopen,
         persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
     },
 };
@@ -55,6 +61,57 @@ pub(in crate::client) struct UsrRollbackFreshDbInvalidationSeal {
 }
 
 impl UsrRollbackFreshDbInvalidationSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting the journal-only route from
+/// `FreshDbInvalidated` to `BootRepairRequired` to this exact orchestrator.
+pub(in crate::client) struct UsrRollbackNewStateBootRepairRequiredSeal {
+    _private: (),
+}
+
+impl UsrRollbackNewStateBootRepairRequiredSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting the journal-only route from
+/// `BootRepairRequired` to `BootRepairStarted` to this exact orchestrator.
+pub(in crate::client) struct UsrRollbackNewStateBootRepairStartSeal {
+    _private: (),
+}
+
+impl UsrRollbackNewStateBootRepairStartSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting the journal-only route from
+/// `BootRepairStarted` to `BootRepairUnverified` to this exact orchestrator.
+pub(in crate::client) struct UsrRollbackNewStateBootRepairUnverifiedSeal {
+    _private: (),
+}
+
+impl UsrRollbackNewStateBootRepairUnverifiedSeal {
     fn new() -> Self {
         Self { _private: () }
     }
@@ -204,6 +261,23 @@ pub(super) fn dispatch<'reservation>(
             Ok(Dispatch::Handled { journal, record })
         }
         Phase::FreshDbInvalidated => {
+            // Boot repair first: the two admissions are disjoint on the plan's
+            // boot action, and only the completion route ends the rollback. A
+            // plan with repair outstanding must not reach it.
+            let boot_repair_seal = UsrRollbackNewStateBootRepairRequiredSeal::new();
+            let boot_repair = UsrRollbackNewStateBootRepairRequiredAuthority::capture(
+                &boot_repair_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            if let UsrRollbackNewStateBootRepairRequiredAdmission::Ready(authority) = boot_repair {
+                let (journal, record) =
+                    persist_usr_rollback_new_state_boot_repair_required_and_reopen(journal, authority)?;
+                return Ok(Dispatch::Handled { journal, record });
+            }
             let seal = UsrRollbackCompleteRouteSeal::new();
             let admission = UsrRollbackCompleteRouteAuthority::capture(
                 &seal,
@@ -217,6 +291,39 @@ pub(super) fn dispatch<'reservation>(
                 return Ok(Dispatch::Unhandled { journal, record });
             };
             let (journal, record) = persist_usr_rollback_complete_route_and_reopen(journal, authority)?;
+            Ok(Dispatch::Handled { journal, record })
+        }
+        Phase::BootRepairRequired => {
+            let seal = UsrRollbackNewStateBootRepairStartSeal::new();
+            let admission = UsrRollbackNewStateBootRepairStartAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackNewStateBootRepairStartAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let (journal, record) = persist_usr_rollback_new_state_boot_repair_start_and_reopen(journal, authority)?;
+            Ok(Dispatch::Handled { journal, record })
+        }
+        Phase::BootRepairStarted => {
+            let seal = UsrRollbackNewStateBootRepairUnverifiedSeal::new();
+            let admission = UsrRollbackNewStateBootRepairUnverifiedAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackNewStateBootRepairUnverifiedAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let (journal, record) =
+                persist_usr_rollback_new_state_boot_repair_unverified_and_reopen(journal, authority)?;
             Ok(Dispatch::Handled { journal, record })
         }
         Phase::RollbackComplete => {
@@ -261,6 +368,30 @@ pub(in crate::client) enum Error {
     ),
     #[error("dispatch exact startup NewState fresh-database invalidation")]
     FreshDbInvalidationDispatch(#[from] crate::client::startup_recovery::UsrRollbackFreshDbInvalidationDispatchError),
+    #[error("capture exact startup NewState boot-repair-start authority")]
+    BootRepairStartAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackNewStateBootRepairStartAuthorityError,
+    ),
+    #[error("persist exact startup NewState boot-repair-start route")]
+    BootRepairStartPersistence(
+        #[from] crate::client::startup_recovery::UsrRollbackNewStateBootRepairStartPersistenceError,
+    ),
+    #[error("capture exact startup NewState boot-repair-unverified authority")]
+    BootRepairUnverifiedAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackNewStateBootRepairUnverifiedAuthorityError,
+    ),
+    #[error("persist exact startup NewState boot-repair-unverified route")]
+    BootRepairUnverifiedPersistence(
+        #[from] crate::client::startup_recovery::UsrRollbackNewStateBootRepairUnverifiedPersistenceError,
+    ),
+    #[error("capture exact startup NewState boot-repair-required authority")]
+    BootRepairRequiredAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackNewStateBootRepairRequiredAuthorityError,
+    ),
+    #[error("persist exact startup NewState boot-repair-required route")]
+    BootRepairRequiredPersistence(
+        #[from] crate::client::startup_recovery::UsrRollbackNewStateBootRepairRequiredPersistenceError,
+    ),
     #[error("capture exact startup NewState rollback-completion route authority")]
     RollbackCompleteRouteAuthority(
         #[from] crate::client::startup_reconciliation::UsrRollbackCompleteRouteAuthorityError,

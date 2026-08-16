@@ -38,7 +38,8 @@ pub(in crate::client) use usr_rollback_active_reblit::{
 };
 pub(in crate::client) use usr_rollback_new_state::{
     UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,
-    UsrRollbackFreshDbInvalidationSeal,
+    UsrRollbackFreshDbInvalidationSeal, UsrRollbackNewStateBootRepairRequiredSeal,
+    UsrRollbackNewStateBootRepairStartSeal, UsrRollbackNewStateBootRepairUnverifiedSeal,
 };
 
 /// Unforgeable safe-code token limiting candidate-preservation authority
