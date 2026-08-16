@@ -536,22 +536,34 @@ fn existing_state_context_is_exact(record: &TransitionRecord, evidence: &Databas
     {
         return false;
     }
-    let (Some(candidate), Some(previous)) = (
-        record.candidate.id.map(state::Id::from),
-        record.previous.id.map(state::Id::from),
-    ) else {
+    let Some(candidate) = record.candidate.id.map(state::Id::from) else {
         return false;
     };
-    candidate == previous
-        && matches!(
+    // A reblit row is already cleared; a NewState still owns its fresh row.
+    match record.operation {
+        Operation::ActiveReblit => {
+            record.previous.id.map(state::Id::from) == Some(candidate)
+                && matches!(
+                    evidence,
+                    DatabaseEvidence::ExistingCandidate {
+                        candidate: existing,
+                        provenance: Some(_),
+                        previous: None,
+                    } if existing.state == candidate
+                        && existing.ownership == db::state::TransitionOwnership::Cleared
+                )
+        }
+        Operation::NewState => matches!(
             evidence,
-            DatabaseEvidence::ExistingCandidate {
-                candidate: existing,
+            DatabaseEvidence::CandidateOwnership {
+                state,
+                ownership: db::state::TransitionOwnership::Matching,
                 provenance: Some(_),
-                previous: None,
-            } if existing.state == candidate
-                && existing.ownership == db::state::TransitionOwnership::Cleared
-        )
+                ..
+            } if *state == candidate
+        ),
+        Operation::ActivateArchived => false,
+    }
 }
 
 fn capture_exact_active_state(
@@ -559,16 +571,20 @@ fn capture_exact_active_state(
     installation: &Installation,
     reservation: &ActiveStateReservation,
 ) -> Result<Option<ActiveStateSnapshot>, ActiveReblitCompleteFinalizationAuthorityError> {
-    let snapshot = reservation
-        .capture_for_startup_recovery(installation)
-        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
-    let expected = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state"));
+    let expected = state::Id::from(record.candidate.id.expect("checked exact boot-source state"));
+    let snapshot = match record.operation {
+        Operation::ActiveReblit => reservation.capture_for_startup_recovery(installation),
+        _ => reservation.capture_for_forward_boot_completion(installation, expected),
+    }
+    .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
     if snapshot.active() != Some(expected) {
         return Ok(None);
     }
-    snapshot
-        .revalidate(installation)
-        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
+    match record.operation {
+        Operation::ActiveReblit => snapshot.revalidate(installation),
+        _ => snapshot.revalidate_for_forward_boot_completion(installation),
+    }
+    .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
     Ok(Some(snapshot))
 }
 
@@ -581,9 +597,11 @@ fn require_exact_active_state(
     if snapshot.active() != Some(expected) {
         return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveSelectionChanged.into());
     }
-    snapshot
-        .revalidate(installation)
-        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
+    match record.operation {
+        Operation::ActiveReblit => snapshot.revalidate(installation),
+        _ => snapshot.revalidate_for_forward_boot_completion(installation),
+    }
+    .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ActiveState)?;
     Ok(())
 }
 

@@ -98,19 +98,29 @@ impl<'plan, 'inventory, Plan> FinalizedStagedActiveReblitBootSync<'plan, 'invent
         let _clean_startup = &self.clean_startup;
         self.installation.revalidate_mutable_namespace()?;
         self.database.require_promoted_boot_publication_receipt(&self.receipt)?;
-        let active_state = self
-            .active_state_reservation
-            .capture_for_startup_recovery(&self.installation)?;
         let expected = state::Id::from(
             self.complete_record
                 .candidate
                 .id
                 .expect("checked exact live Complete state"),
         );
+        // A NewState published this selection during the transaction just
+        // finalized, so it cannot be compared against discovery.
+        let active_state = match self.complete_record.operation {
+            crate::transition_journal::Operation::ActiveReblit => self
+                .active_state_reservation
+                .capture_for_startup_recovery(&self.installation)?,
+            _ => self
+                .active_state_reservation
+                .capture_for_forward_boot_completion(&self.installation, expected)?,
+        };
         if active_state.active() != Some(expected) {
             return Err(FinalizedStagedActiveReblitBootSyncValidationError::ActiveSelectionChanged);
         }
-        active_state.revalidate(&self.installation)?;
+        match self.complete_record.operation {
+            crate::transition_journal::Operation::ActiveReblit => active_state.revalidate(&self.installation)?,
+            _ => active_state.revalidate_for_forward_boot_completion(&self.installation)?,
+        }
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -142,18 +152,33 @@ impl<'plan, 'inventory, Plan> CompleteStagedActiveReblitBootSync<'plan, 'invento
             installation,
             active_state_reservation,
         } = self;
-        let authority = ActiveReblitCompleteFinalizationAuthority::capture_retained_binding(
-            seal,
-            &installation,
-            &journal,
-            &database,
-            &active_state_reservation,
+        // A first install reclaimed no predecessor wrapper, so there is no
+        // completed-cleanup namespace to prove before the terminal deletion.
+        let journal = if crate::client::startup_reconciliation::new_state_boot_tail_terminal_is_admissible(
             &complete_record,
-            record_binding,
-        )
-        .map_err(CompleteStagedActiveReblitFinalizationError::Authority)?;
-        let journal = finalize_active_reblit_complete(journal, authority)
-            .map_err(CompleteStagedActiveReblitFinalizationError::Finalization)?;
+        ) {
+            crate::client::startup_recovery::finalize_new_state_boot_tail_terminal(
+                &installation,
+                &database,
+                journal,
+                &complete_record,
+                record_binding,
+            )
+            .map_err(CompleteStagedActiveReblitFinalizationError::NewStateTerminal)?
+        } else {
+            let authority = ActiveReblitCompleteFinalizationAuthority::capture_retained_binding(
+                seal,
+                &installation,
+                &journal,
+                &database,
+                &active_state_reservation,
+                &complete_record,
+                record_binding,
+            )
+            .map_err(CompleteStagedActiveReblitFinalizationError::Authority)?;
+            finalize_active_reblit_complete(journal, authority)
+                .map_err(CompleteStagedActiveReblitFinalizationError::Finalization)?
+        };
         let clean_startup =
             CleanSystemStartup::admit_clean_after_terminal_finalization(&installation, &database, journal)
                 .map_err(CompleteStagedActiveReblitFinalizationError::CleanAdmission)?;
@@ -182,6 +207,8 @@ pub(in crate::client) enum CompleteStagedActiveReblitFinalizationError {
     CompleteEvidence(#[source] super::CompleteStagedActiveReblitBootSyncValidationError),
     #[error("admit retained exact generation-15 terminal finalization authority")]
     Authority(#[source] ActiveReblitCompleteFinalizationAuthorityError),
+    #[error("delete the journal-only first-install NewState terminal record")]
+    NewStateTerminal(#[source] crate::client::startup_recovery::NewStateCommitCleanupPersistenceError),
     #[error("delete the exact retained generation-15 terminal journal")]
     Finalization(#[source] ActiveReblitCompleteFinalizationError),
     #[error("admit clean startup on the same terminal-finalization journal store")]
