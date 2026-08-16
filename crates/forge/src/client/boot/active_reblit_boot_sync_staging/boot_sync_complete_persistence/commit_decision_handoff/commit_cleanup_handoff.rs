@@ -202,37 +202,6 @@ impl<'plan, 'inventory, Plan> CommittedStagedActiveReblitBootSync<'plan, 'invent
             active_state_reservation,
         } = self;
 
-        // A first-install NewState has no predecessor tree, so there is no
-        // staging wrapper to reclaim and the edge is journal-only. Every other
-        // shape keeps the reclaiming route below.
-        if crate::client::startup_reconciliation::new_state_boot_tail_edge_is_admissible(
-            &commit_decided_record,
-            Phase::CommitCleanupComplete,
-        ) {
-            let (journal, record, record_binding) =
-                crate::client::startup_recovery::persist_new_state_boot_tail_edge_retaining_binding(
-                    &installation,
-                    journal,
-                    &commit_decided_record,
-                    record_binding,
-                    Phase::CommitCleanupComplete,
-                )
-                .map_err(CommittedStagedActiveReblitCommitCleanupError::NewStateCleanup)?;
-            return Ok(CommitCleanupCompleteStagedActiveReblitBootSync {
-                commit_decided_record,
-                record,
-                record_binding,
-                receipt,
-                plan,
-                inventory,
-                staging_outcome,
-                journal,
-                database,
-                installation,
-                active_state_reservation,
-            });
-        }
-
         let authority = ActiveReblitCommitCleanupAuthority::capture_retained_binding(
             seal,
             &installation,
@@ -309,8 +278,6 @@ pub(in crate::client) enum CommittedStagedActiveReblitCommitCleanupError {
     CommittedEvidence(#[source] super::CommittedStagedActiveReblitBootSyncValidationError),
     #[error("admit retained exact generation-13 Apply cleanup authority")]
     Authority(#[source] ActiveReblitCommitCleanupAuthorityError),
-    #[error("persist the journal-only first-install NewState cleanup edge")]
-    NewStateCleanup(#[source] crate::client::startup_recovery::NewStateCommitCleanupPersistenceError),
     #[error("finish the committed activation transition through its terminal route")]
     ActivationTail(#[source] crate::client::startup_recovery::ActivationCommitCleanupPersistenceError),
     #[error("admit clean startup after the activation terminal route")]

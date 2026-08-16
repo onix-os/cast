@@ -52,7 +52,6 @@ mod usr_rollback_active_reblit_complete_route_authority;
 mod usr_rollback_active_reblit_finalization_authority;
 mod usr_rollback_candidate_preserve_authority;
 mod usr_rollback_complete_route_authority;
-mod new_state_commit_cleanup_authority;
 mod usr_rollback_new_state_boot_repair_required_authority;
 mod usr_rollback_new_state_boot_repair_start_authority;
 mod usr_rollback_new_state_boot_repair_unverified_authority;
@@ -193,13 +192,6 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
 pub(in crate::client) use usr_rollback_complete_route_authority::{
     UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
     UsrRollbackCompleteRouteRecordAdvanceError,
-};
-pub(in crate::client) use new_state_commit_cleanup_authority::{
-    new_state_boot_tail_edge_is_admissible, new_state_boot_tail_terminal_is_admissible,
-};
-#[cfg(test)]
-pub(in crate::client) use new_state_commit_cleanup_authority::{
-    new_state_boot_tail_edge_is_admissible_for_test, new_state_boot_tail_terminal_is_admissible_for_test,
 };
 pub(in crate::client) use usr_rollback_new_state_boot_repair_required_authority::{
     UsrRollbackNewStateBootRepairRequiredAdmission, UsrRollbackNewStateBootRepairRequiredAuthority,

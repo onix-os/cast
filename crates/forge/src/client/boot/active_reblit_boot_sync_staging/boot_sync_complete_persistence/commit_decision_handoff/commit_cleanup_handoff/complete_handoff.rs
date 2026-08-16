@@ -161,35 +161,19 @@ impl<'plan, 'inventory, Plan> CommitCleanupCompleteStagedActiveReblitBootSync<'p
             active_state_reservation,
         } = self;
 
-        // Journal-only for a first install, for the same reason as the cleanup
-        // edge before it: there is no predecessor tree to reclaim.
+        let authority = ActiveReblitCommitCleanupCompleteAuthority::capture_retained_binding(
+            seal,
+            &installation,
+            &journal,
+            &database,
+            &active_state_reservation,
+            &commit_cleanup_complete_record,
+            record_binding,
+        )
+        .map_err(CommitCleanupCompleteStagedActiveReblitCompleteError::Authority)?;
         let (journal, record, record_binding) =
-            if crate::client::startup_reconciliation::new_state_boot_tail_edge_is_admissible(
-                &commit_cleanup_complete_record,
-                Phase::Complete,
-            ) {
-                crate::client::startup_recovery::persist_new_state_boot_tail_edge_retaining_binding(
-                    &installation,
-                    journal,
-                    &commit_cleanup_complete_record,
-                    record_binding,
-                    Phase::Complete,
-                )
-                .map_err(CommitCleanupCompleteStagedActiveReblitCompleteError::NewStateEdge)?
-            } else {
-                let authority = ActiveReblitCommitCleanupCompleteAuthority::capture_retained_binding(
-                    seal,
-                    &installation,
-                    &journal,
-                    &database,
-                    &active_state_reservation,
-                    &commit_cleanup_complete_record,
-                    record_binding,
-                )
-                .map_err(CommitCleanupCompleteStagedActiveReblitCompleteError::Authority)?;
-                persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(journal, authority)
-                    .map_err(CommitCleanupCompleteStagedActiveReblitCompleteError::Persistence)?
-            };
+            persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(journal, authority)
+                .map_err(CommitCleanupCompleteStagedActiveReblitCompleteError::Persistence)?;
 
         let completed = CompleteStagedActiveReblitBootSync {
             commit_cleanup_complete_record,
@@ -228,8 +212,6 @@ pub(in crate::client) enum CommitCleanupCompleteStagedActiveReblitCompleteError 
     CleanupCompleteEvidence(#[source] super::CommitCleanupCompleteStagedActiveReblitBootSyncValidationError),
     #[error("admit retained exact generation-14 Finish authority")]
     Authority(#[source] ActiveReblitCommitCleanupCompleteAuthorityError),
-    #[error("persist the journal-only first-install NewState Complete edge")]
-    NewStateEdge(#[source] crate::client::startup_recovery::NewStateCommitCleanupPersistenceError),
     #[error("persist exact generation-15 Complete successor")]
     Persistence(#[source] ActiveReblitCommitCleanupCompletePersistenceError),
     #[error("revalidate exact retained generation-15 Complete handoff")]
