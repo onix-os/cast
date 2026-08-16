@@ -92,8 +92,6 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         record: &TransitionRecord,
         initial_in_flight: Option<db::state::InFlightTransition>,
     ) -> Result<UsrRollbackDecisionAdmission<'reservation>, UsrRollbackDecisionAuthorityError> {
-        let active_reblit_boot_sync =
-            record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted;
         if !rollback_decision_source_is_supported(record) {
             return Ok(UsrRollbackDecisionAdmission::NotApplicable);
         }
@@ -157,10 +155,11 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
-            (Phase::BootSyncStarted, UsrExchangeLayout::Post) if active_reblit_boot_sync => {
-                Some(InitialRollbackAction::Pending)
-            }
-            (Phase::BootSyncStarted, UsrExchangeLayout::Pre) if active_reblit_boot_sync => {
+            // Every operation reaching this phase crossed the exchange to get
+            // here, so the layout rule is the same for all of them. Restricting
+            // it to ActiveReblit left a NewState boot sync stalled forever.
+            (Phase::BootSyncStarted, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),
+            (Phase::BootSyncStarted, UsrExchangeLayout::Pre) => {
                 return Ok(UsrRollbackDecisionAdmission::Deferred(
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
@@ -259,12 +258,12 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                 observations: rollback_observations(
                     record.operation,
                     Some(usr_exchange),
-                    previous_archive_observation(record.phase),
+                    previous_archive_observation(record),
                 ),
                 evidence,
             }),
             (None, true) => UsrRollbackDecisionAdmission::Ready(Self {
-                observations: rollback_observations(record.operation, None, previous_archive_observation(record.phase)),
+                observations: rollback_observations(record.operation, None, previous_archive_observation(record)),
                 evidence,
             }),
             (None, false) => {
@@ -474,12 +473,14 @@ fn rollback_observations(
     }
 }
 
-/// The two archive sources archived a predecessor, so recovery must restore it
-/// before reversing the exchange. The intent phase spans the archive and counts
-/// with it: the journal derives `possible` from the source alone. Every earlier
-/// phase archived nothing yet.
-fn previous_archive_observation(phase: Phase) -> Option<InitialRollbackAction> {
-    matches!(phase, Phase::PreviousArchiveIntent | Phase::PreviousArchived)
+/// Derived from the journal's own possibility rule rather than a phase list.
+/// The plan must agree with it exactly: a source the journal calls possible but
+/// the plan calls NotRequired is refused. Hand-listing the phases here drifted
+/// out of step three times, each time stalling a crash at the missing phase.
+fn previous_archive_observation(record: &TransitionRecord) -> Option<InitialRollbackAction> {
+    let source = record.phase.forward()?;
+    record
+        .previous_restore_rollback_is_possible(source)
         .then_some(InitialRollbackAction::Pending)
 }
 
