@@ -186,6 +186,8 @@ fi
 OPS=(${MATRIX_OPS:-activate})
 # When to cut, relative to the operation starting. 0 = as early as possible.
 CUTS=(${MATRIX_CUTS:-phase:ActivateArchived.CandidatePrepared})
+# Passed to the guest on the kernel cmdline; host env never reaches it.
+SKIPBOOT=${MATRIX_ACTIVATE_SKIP_BOOT:-}
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -224,6 +226,7 @@ if [ -n "$CRASH_PHASE" ]; then
 fi
 # Archived repair is deliberately not journalled, so it has no phase to cut at
 # and needs its own checkpoint-keyed hook.
+SKIP_BOOT_FLAG=$(sed -n "s/.*cell_skipboot=\([A-Za-z01]*\).*/\1/p" /proc/cmdline)
 CRASH_REPAIR=$(sed -n 's/.*cell_repair=\([A-Za-z]*\).*/\1/p' /proc/cmdline)
 if [ -n "$CRASH_REPAIR" ]; then
     export CAST_CRASH_AT_REPAIR="$CRASH_REPAIR"
@@ -250,7 +253,18 @@ stage_and_activate() {
     # Same family as the `>/dev/null 2>&1` bug recorded above and the BusyBox
     # `grep` bug below: three separate ways this harness has hidden the marker
     # from itself. Any command that can park must write straight to the console.
-    cast -D /mnt/root -y state activate 1 2>&1
+    # `run_boot_sync` picks ActivateArchived's commit route
+    # (`new_state_boot_transition.rs:236`). Only the `!run_boot_sync` arm reaches
+    # `commit_new_state_without_boot`, which writes CommitDecided ->
+    # CommitCleanupComplete -> Complete. Without `--skip-boot` the boot-sync path
+    # applies, refuses anything but ActiveReblit, and rolls back, so those three
+    # phases are never written and cuts at them are silently inert — they return
+    # the control verdict and read as coverage (2026-08-17).
+    if [ "${SKIP_BOOT_FLAG:-}" = 1 ]; then
+        cast -D /mnt/root -y state activate 1 --skip-boot 2>&1
+    else
+        cast -D /mnt/root -y state activate 1 2>&1
+    fi
 }
 stage_and_reblit() {
     stage_and_install
@@ -534,7 +548,7 @@ chmod +x "$W/ir/init"
 
 run() { exec qemu-system-x86_64 -enable-kvm -m 2048 -display none -no-reboot \
     -kernel "$KERNEL" -initrd "$W/initrd.gz" \
-    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-} cell_repair=${4:-} cell_boot=${BOOTF:-}" \
+    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-} cell_repair=${4:-} cell_boot=${BOOTF:-} cell_skipboot=${SKIPBOOT:-}" \
     -drive "file=$W/d.img,format=raw,if=virtio,cache=writeback" -serial stdio -monitor none; }
 
 printf '%-20s %-6s %s\n' OPERATION CUT VERDICT
