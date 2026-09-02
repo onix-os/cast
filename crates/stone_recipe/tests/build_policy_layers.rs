@@ -31,36 +31,38 @@ fn evaluate_with_inputs(
 }
 
 fn authored(body: &str) -> Source {
-    Source::new(
-        "policy.glu",
-        format!("let layers = import! cast.build_policy.layers.v1\n{body}"),
-    )
+    Source::new("policy.lua", format!("return {body}"))
 }
 
-#[test]
-fn retired_boulder_layer_abi_is_not_a_compatibility_alias() {
-    let error = evaluate(&Source::new(
-        "retired-policy-layers.glu",
-        "import! boulder.build_policy.layers.v1",
-    ))
-    .unwrap_err();
+/// One layer entry: an operation tag and the module it names.
+fn entry(operation: &str, origin: &str) -> String {
+    format!(r#"{{ operation = {{ kind = "{operation}" }}, origin = "{origin}" }}"#)
+}
 
-    assert!(error.to_string().contains("boulder.build_policy.layers.v1"));
+/// A layer manifest naming `layers`, each a `(name, entries)` pair.
+fn manifest(name: &str, layers: &[(&str, Vec<String>)]) -> String {
+    let layers = layers
+        .iter()
+        .map(|(layer, entries)| {
+            format!(r#"{{ name = "{layer}", entries = {{ {} }} }}"#, entries.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"{{ name = "{name}", layers = {{ {layers} }} }}"#)
 }
 
 #[test]
 fn ordered_layer_manifest_preserves_every_authored_operation() {
-    let evaluated = evaluate(&authored(
-        r#"layers.policy "repository" [
-    layers.layer "foundation" [
-        layers.add "default.glu",
-        layers.modify "layers/local.glu",
-    ],
-    layers.layer "replacement" [
-        layers.replace "replacement.glu",
-    ],
-]"#,
-    ))
+    let evaluated = evaluate(&authored(&manifest(
+        "repository",
+        &[
+            (
+                "foundation",
+                vec![entry("add", "default.lua"), entry("modify", "layers/local.lua")],
+            ),
+            ("replacement", vec![entry("replace", "replacement.lua")]),
+        ],
+    )))
     .unwrap();
 
     assert_eq!(
@@ -73,11 +75,11 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
                     entries: vec![
                         BuildPolicyLayerEntrySpec {
                             operation: BuildPolicyOperation::Add,
-                            origin: "default.glu".to_owned(),
+                            origin: "default.lua".to_owned(),
                         },
                         BuildPolicyLayerEntrySpec {
                             operation: BuildPolicyOperation::Modify,
-                            origin: "layers/local.glu".to_owned(),
+                            origin: "layers/local.lua".to_owned(),
                         },
                     ],
                 },
@@ -85,29 +87,20 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
                     name: "replacement".to_owned(),
                     entries: vec![BuildPolicyLayerEntrySpec {
                         operation: BuildPolicyOperation::Replace,
-                        origin: "replacement.glu".to_owned(),
+                        origin: "replacement.lua".to_owned(),
                     }],
                 },
             ],
         }
     );
-    assert!(
-        evaluated
-            .identity
-            .modules
-            .iter()
-            .any(|module| module.logical_name == "cast.build_policy.layers.v1")
-    );
 }
 
 #[test]
 fn manifest_validation_rejects_ambiguous_layers_and_origins() {
-    let duplicate = evaluate(&authored(
-        r#"layers.policy "repository" [
-    layers.layer "same" [],
-    layers.layer "same" [],
-]"#,
-    ))
+    let duplicate = evaluate(&authored(&manifest(
+        "repository",
+        &[("same", Vec::new()), ("same", Vec::new())],
+    )))
     .unwrap_err();
     assert!(matches!(
         duplicate,
@@ -115,9 +108,10 @@ fn manifest_validation_rejects_ambiguous_layers_and_origins() {
             if name == "same"
     ));
 
-    for origin in ["", "/absolute.glu", "../escape.glu", "nested//module.glu"] {
-        let error = evaluate(&authored(&format!(
-            "layers.policy \"repository\" [layers.layer \"one\" [layers.add {origin:?}]]"
+    for origin in ["", "/absolute.lua", "../escape.lua", "nested//module.lua"] {
+        let error = evaluate(&authored(&manifest(
+            "repository",
+            &[("one", vec![entry("add", origin)])],
         )))
         .unwrap_err();
         assert!(matches!(
@@ -131,11 +125,10 @@ fn manifest_validation_rejects_ambiguous_layers_and_origins() {
 
 #[test]
 fn composed_module_input_changes_the_manifest_fingerprint() {
-    let source = authored(
-        r#"layers.policy "repository" [
-    layers.layer "foundation" [layers.add "default.glu"],
-]"#,
-    );
+    let source = authored(&manifest(
+        "repository",
+        &[("foundation", vec![entry("add", "default.lua")])],
+    ));
     let first = evaluate_with_inputs(&source, b"module-a").unwrap();
     let repeated = evaluate_with_inputs(&source, b"module-a").unwrap();
     let changed = evaluate_with_inputs(&source, b"module-b").unwrap();
