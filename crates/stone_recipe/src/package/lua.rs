@@ -825,6 +825,21 @@ impl LuaPackageEvaluator {
             self.engine.evaluate_as::<LuaAuthoredPackage>(source)?.value.into();
         Ok(lower(authored))
     }
+
+    /// Decode a minimal-form authored recipe, retaining its evaluation
+    /// identity. Callers that record provenance need the identity alongside the
+    /// lowered value.
+    pub fn evaluate_authored_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<PackageSpec, EvaluationIdentity>, Diagnostic> {
+        let evaluation = self.engine.evaluate_within_as::<LuaAuthoredPackage>(source, deadline)?;
+        Ok(Evaluation {
+            value: lower(AuthoredPackage::from(evaluation.value)),
+            identity: evaluation.identity,
+        })
+    }
 }
 
 impl DeclarationEvaluator<PackageSpec> for LuaPackageEvaluator {

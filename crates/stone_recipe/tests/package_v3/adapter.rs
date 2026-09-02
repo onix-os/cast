@@ -21,12 +21,20 @@ pub(super) fn rooted_package_evaluator(
     )
 }
 
+/// Decode a minimal-form authored recipe and lower it.
+///
+/// These tests exercise the authored ABI and the shared lowering, not the
+/// fully-lowered decode path, so they evaluate through the authored entry point.
 pub(super) fn evaluate_package(
     evaluator: &LuaPackageEvaluator,
     source: &Source,
 ) -> Result<PackageEvaluation, PackageDeclarationError> {
-    DeclarationEvaluator::<PackageSpec>::evaluate(evaluator, source)
+    evaluator
+        .evaluate_authored_within(source, declarative_config::EvaluationDeadline::start(TIMEOUT))
+        .map_err(PackageDeclarationError::Evaluation)
 }
+
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub(super) fn evaluate_default_package(
     source: &Source,

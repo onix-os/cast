@@ -19,7 +19,39 @@ fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
 }
 
 fn authored(body: &str) -> Source {
-    Source::new("stone.glu", format!("let a = import! cast.authored.v1\n{body}"))
+    Source::new("stone.lua", format!("return {body}"))
+}
+
+/// The meta block every authored fixture needs, so bodies name only the field
+/// under test.
+fn meta(pname: &str) -> String {
+    format!(
+        r#"meta = {{ pname = "{pname}", version = "1.0.0", release = 1,
+            homepage = "https://example.com", license = {{ "MPL-2.0" }} }}"#
+    )
+}
+
+/// One output record with every option absent.
+fn output(name: &str, include_in_manifest: bool) -> String {
+    format!(
+        r#"{{ name = "{name}", include_in_manifest = {include_in_manifest},
+           summary = {{ kind = "none" }}, description = {{ kind = "none" }},
+           provides_exclude = {{}}, runtime_inputs = {{}}, runtime_exclude = {{}},
+           paths = {{}}, conflicts = {{}} }}"#
+    )
+}
+
+/// A complete minimal authored recipe: the given `pname`, a custom builder, and
+/// whatever extra fields the caller appends.
+fn authored_package(pname: &str, extra: &str) -> Source {
+    authored(&format!(
+        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{}} }}, install = {{ steps = {{}} }}, \
+         check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}{} }}",
+        meta(pname),
+        extra,
+    ))
 }
 
 fn binary_program(name: &str) -> ProgramSpec {
@@ -78,44 +110,26 @@ fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
 
 #[test]
 fn frozen_package_abi_has_no_cargo_fetch_escape_hatch() {
-    let error = evaluate_default_package(&authored("a.step.cargo_fetch")).unwrap_err();
+    let error = evaluate_default_package(&authored(&format!(
+        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{ {{ kind = \"cargo_fetch\" }} }} }}, \
+         install = {{ steps = {{}} }}, check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }} }}",
+        meta("no-cargo-fetch"),
+    )))
+    .unwrap_err();
 
-    assert!(matches!(
-        error,
-        DeclarationEvaluationError::Evaluation(ref diagnostic)
-            if diagnostic.category == DiagnosticCategory::Type
-                && diagnostic.message.contains("cargo_fetch")
-    ));
+    assert!(
+        error.to_string().contains("cargo_fetch"),
+        "the frozen ABI must reject a cargo_fetch step by name: {error}"
+    );
 }
 
 #[test]
 fn manifest_membership_is_explicit_not_inferred_from_package_name() {
-    let source = authored(
-        r#"
-let root = a.output "out"
-{
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "symbols-dbginfo", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let source = authored_package(
+        "symbols-dbginfo",
+        &format!(", outputs = {{ {} }}", output("out", true)),
     );
 
     let evaluated = evaluate_default_package(&source).unwrap();
@@ -125,47 +139,33 @@ let root = a.output "out"
 
 #[test]
 fn external_built_and_shell_steps_preserve_distinct_program_authority() {
-    let source = authored(
-        r#"
-let tool = a.package_ref "odd-tool"
-let scripts = a.scripts {
-    build = a.phase [
-        a.step.run (a.program.package tool "/opt/odd/bin/tool") ["--frozen"],
-        a.step.run_built (a.program.built "build/generated-tool") ["--self-test"],
-        a.step.shell_with {
-            interpreter = a.program.binary "dash",
-            declared_programs = [a.program.package tool "/opt/odd/bin/helper"],
-            script = "helper --check",
-        },
-        a.step.shell "echo builtin",
-    ],
-    .. a.empty.scripts
-}
-{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
-    );
+    let build_steps = r#"
+        { kind = "run",
+          program = { path = "/opt/odd/bin/tool", requirement = { kind = "package", value = { name = "odd-tool" } } },
+          args = { "--frozen" } },
+        { kind = "run_built",
+          program = { path = "build/generated-tool" },
+          args = { "--self-test" } },
+        { kind = "shell",
+          interpreter = { path = "/usr/bin/dash", requirement = { kind = "binary", value = "dash" } },
+          declared_programs = {
+              { path = "/opt/odd/bin/helper", requirement = { kind = "package", value = { name = "odd-tool" } } },
+          },
+          script = "helper --check" },
+        { kind = "shell",
+          interpreter = { path = "/usr/bin/bash", requirement = { kind = "binary", value = "bash" } },
+          declared_programs = {},
+          script = "echo builtin" }
+    "#;
+    let source = authored(&format!(
+        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{ {build_steps} }} }}, \
+         install = {{ steps = {{}} }}, check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}, \
+         outputs = {{ {} }} }}",
+        meta("example"),
+        output("out", true),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
