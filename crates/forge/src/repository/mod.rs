@@ -14,11 +14,13 @@ use config::Config;
 use crate::{db::meta, request};
 
 pub use self::format::Format;
-pub use self::gluon::{GLUON_REPOSITORY_ABI, REPOSITORY_ABI_VERSION, RepositoryCodec, RepositoryConversionError};
+pub use self::conversion::{REPOSITORY_ABI_VERSION, RepositoryConversionError};
+pub use self::gluon::{GLUON_REPOSITORY_ABI, RepositoryCodec};
 pub use self::handle_outdated::{OutdatedRepoIndexUri, handle_outdated_index_uris};
 pub use self::lua::{LuaRepositoryCodec, RepositoryEvaluator};
 pub use self::manager::Manager;
 
+pub mod conversion;
 pub mod format;
 pub mod gluon;
 pub mod handle_outdated;

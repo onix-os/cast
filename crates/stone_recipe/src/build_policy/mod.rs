@@ -6,10 +6,13 @@
 
 use stone::relation::{Dependency, Kind as RelationKind, ParseError};
 
-pub use self::gluon::{
-    BUILD_POLICY_ABI_VERSION, GLUON_BUILD_POLICY_ABI,
-    GluonBuildPolicyEvaluator,
-};
+/// Version of the typed repository build-policy ABI.
+///
+/// Versions the Rust type contract (`BuildPolicySpec` and friends), not any one
+/// declaration language, so it is owned here rather than by an adapter.
+pub const BUILD_POLICY_ABI_VERSION: u32 = 5;
+
+pub use self::gluon::{GLUON_BUILD_POLICY_ABI, GluonBuildPolicyEvaluator};
 pub use self::lua::{BuildPolicyEvaluator, LuaBuildPolicyEvaluator, encode_lua_policy};
 
 mod gluon;

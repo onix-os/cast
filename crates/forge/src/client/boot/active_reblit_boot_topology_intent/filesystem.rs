@@ -331,7 +331,7 @@ fn discover_source(
 }
 
 fn declaration_slot() -> RootDeclarationSlot {
-    RootDeclarationSlot::new("boot-topology", super::gluon::SOURCE_LOGICAL_NAME)
+    RootDeclarationSlot::new("boot-topology", super::topology::SOURCE_LOGICAL_NAME)
         .expect("the fixed boot-topology declaration slot is canonical")
 }
 

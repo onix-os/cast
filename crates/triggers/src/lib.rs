@@ -13,10 +13,13 @@ pub mod lua;
 pub mod registry;
 pub mod spec;
 
-pub use self::gluon::{
-    GLUON_TRIGGER_ABI, GluonTriggerConversionError, GluonTriggerEvaluator,
-    TRIGGER_ABI_VERSION,
-};
+/// Version of the typed trigger ABI.
+///
+/// Versions the engine-neutral `TriggerSpec`/`Trigger` contract, so it is owned
+/// here rather than by an adapter.
+pub const TRIGGER_ABI_VERSION: u32 = 1;
+
+pub use self::gluon::{GLUON_TRIGGER_ABI, GluonTriggerConversionError, GluonTriggerEvaluator};
 pub use self::spec::{
     HandlerSpec, InhibitorsSpec, KeyValueSpec, PathDefinitionSpec, PathKindSpec, TriggerConversionError, TriggerSpec,
 };

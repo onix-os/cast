@@ -21,7 +21,8 @@ use lua_config::{
 use serde::Deserialize;
 
 use super::Map;
-use super::gluon::{RepositoryCodec, decode_specs, repository_to_spec};
+use super::conversion::{decode_specs, repository_to_spec};
+use super::gluon::RepositoryCodec;
 use crate::repository::RepositoryConversionError;
 use crate::system_model::spec::{RepositorySourceSpec, RepositorySpec};
 

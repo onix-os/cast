@@ -331,7 +331,7 @@ fn discover_source(
 }
 
 fn declaration_slot() -> RootDeclarationSlot {
-    RootDeclarationSlot::new("root-filesystem", super::gluon::SOURCE_LOGICAL_NAME)
+    RootDeclarationSlot::new("root-filesystem", super::normalization::SOURCE_LOGICAL_NAME)
         .expect("the fixed root-filesystem declaration slot is canonical")
 }
 

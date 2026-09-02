@@ -11,10 +11,13 @@ use thiserror::Error;
 mod gluon;
 mod lua;
 
-pub use self::gluon::{
-    BUILD_POLICY_LAYERS_ABI_VERSION, GLUON_BUILD_POLICY_LAYERS_ABI,
-    GluonBuildPolicyRootEvaluator,
-};
+/// Version of the ordered build-policy layer ABI.
+///
+/// Versions `BuildPolicyRootSpec` and its entries, which are engine-neutral, so
+/// it is owned here rather than by an adapter.
+pub const BUILD_POLICY_LAYERS_ABI_VERSION: u32 = 1;
+
+pub use self::gluon::{GLUON_BUILD_POLICY_LAYERS_ABI, GluonBuildPolicyRootEvaluator};
 
 /// One total state transition in an authored policy layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

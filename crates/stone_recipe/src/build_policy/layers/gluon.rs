@@ -13,9 +13,6 @@ use super::{
     BuildPolicyRootConversionError, BuildPolicyRootSpec,
 };
 
-/// Version of the ordered build-policy layer ABI.
-pub const BUILD_POLICY_LAYERS_ABI_VERSION: u32 = 1;
-
 /// Pure helpers imported as `cast.build_policy.layers.v1`.
 pub const GLUON_BUILD_POLICY_LAYERS_ABI: &str =
     include_str!("../../../gluon/build_policy_layers.glu");

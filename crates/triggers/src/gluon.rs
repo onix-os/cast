@@ -16,7 +16,6 @@ use crate::{
     format::Trigger,
 };
 
-pub const TRIGGER_ABI_VERSION: u32 = 1;
 pub const GLUON_TRIGGER_ABI: &str = include_str!("../gluon/trigger.glu");
 
 /// Owned trigger conversion failures after Gluon has evaluated successfully.

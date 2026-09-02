@@ -1,5 +1,11 @@
 use super::{ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue};
 
+/// Logical name of the fixed machine-local root-filesystem slot.
+///
+/// The slot identity is the same whichever language authored it, so every
+/// adapter and the filesystem loader read it from here.
+pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/root-filesystem.glu";
+
 const MAX_ROOT_DIAGNOSTIC_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

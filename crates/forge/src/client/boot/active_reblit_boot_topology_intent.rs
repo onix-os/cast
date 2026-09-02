@@ -49,6 +49,8 @@ mod filesystem;
 mod gluon;
 #[path = "active_reblit_boot_topology_intent/lua.rs"]
 mod lua;
+#[path = "active_reblit_boot_topology_intent/topology.rs"]
+mod topology;
 
 const KIB: usize = 1024;
 const MAX_BOOT_TOPOLOGY_SOURCE_BYTES: usize = 64 * KIB;

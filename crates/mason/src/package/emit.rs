@@ -38,7 +38,11 @@ mod artifact_sink;
 mod artifact_verification;
 mod manifest;
 
-const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "gluon-evaluation-sha256:";
+/// Tags the recipe evaluation fingerprint recorded in every emitted package.
+///
+/// The fingerprint is the neutral evaluation identity of whichever language
+/// authored the recipe, so the tag does not name one.
+const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "recipe-evaluation-sha256:";
 const DERIVATION_ID_SOURCE_REF_PREFIX: &str = "derivation-sha256:";
 const EMISSION_STAGE_NAME: &[u8] = b".mason-emission";
 const EMISSION_SCRATCH_NAME: &[u8] = b".content-scratch";

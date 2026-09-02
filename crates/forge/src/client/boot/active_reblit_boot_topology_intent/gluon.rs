@@ -8,6 +8,7 @@ use declarative_config::{
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
+use super::topology::{BootTargetInput, SOURCE_LOGICAL_NAME, assemble_boot_topology};
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
     ActiveReblitBootTopologyTarget, BootTopologyIntentBudget,
@@ -16,15 +17,9 @@ use super::{
 pub(super) const BOOT_TOPOLOGY_ABI_NAME: &str = "cast.boot_topology.v2";
 pub(super) const BOOT_TOPOLOGY_ABI_VERSION: u32 = 2;
 pub(super) const BOOT_TOPOLOGY_ABI: &str = include_str!("../../../../gluon/boot_topology.glu");
-pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/boot-topology.glu";
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const MAX_EVALUATION_TIME: Duration = Duration::from_secs(2);
-const MAX_PARTUUID_DIAGNOSTIC_BYTES: usize = 64;
-const MAX_MOUNT_POINT_BYTES: usize = 4_095;
-const MAX_MOUNT_POINT_COMPONENTS: usize = 128;
-const MAX_MOUNT_POINT_COMPONENT_BYTES: usize = 255;
-const MAX_MOUNT_POINT_DIAGNOSTIC_BYTES: usize = 256;
 
 pub(super) fn language_spec() -> LanguageSpec {
     GluonEngine::default().language_spec().clone()
@@ -171,13 +166,6 @@ fn require_fingerprint_contract(fingerprint: &EvaluationIdentity) -> Result<(), 
     Ok(())
 }
 
-/// Engine-neutral boot destination selection, decoded from either engine before
-/// the shared canonicalization and cross-selector checks run.
-pub(super) enum BootTargetInput {
-    AliasEsp,
-    DistinctXbootldr { partuuid: String, mount_point: String },
-}
-
 impl TryFrom<GluonBootTopologyIntent> for ActiveReblitBootTopologyIntentValue {
     type Error = ActiveReblitBootTopologyIntentError;
 
@@ -193,179 +181,6 @@ impl TryFrom<GluonBootTopologyIntent> for ActiveReblitBootTopologyIntentValue {
     }
 }
 
-/// Shared, engine-neutral assembly: canonicalize the ESP and boot selectors and
-/// enforce the distinct-target cross-checks. Both the Gluon and Lua adapters
-/// decode their own DTOs into raw strings and a [`BootTargetInput`], then call
-/// this so equivalent sources reach the identical validated intent value.
-pub(super) fn assemble_boot_topology(
-    esp_partuuid: String,
-    esp_mount_point: String,
-    boot: BootTargetInput,
-) -> Result<ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyIntentError> {
-    let esp = validated_partition_selector("esp.partuuid", "esp.mount_point", esp_partuuid, esp_mount_point)?;
-    let boot = match boot {
-        BootTargetInput::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
-        BootTargetInput::DistinctXbootldr { partuuid, mount_point } => {
-            let xbootldr =
-                validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", partuuid, mount_point)?;
-            if xbootldr.partuuid == esp.partuuid {
-                return Err(invalid_partuuid(
-                    "xbootldr.partuuid",
-                    &xbootldr.partuuid,
-                    "distinct ESP and XBOOTLDR PARTUUIDs must not be equal",
-                ));
-            }
-            if xbootldr.mount_point_hint == esp.mount_point_hint {
-                return Err(invalid_mount_point_selector(
-                    "xbootldr.mount_point",
-                    &xbootldr.mount_point_hint,
-                    "distinct ESP and XBOOTLDR mount-point selectors must not be equal",
-                ));
-            }
-            ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr)
-        }
-    };
-    Ok(ActiveReblitBootTopologyIntentValue { esp, boot })
-}
-
-fn validated_partition_selector(
-    partuuid_field: &'static str,
-    mount_point_field: &'static str,
-    partuuid: String,
-    mount_point: String,
-) -> Result<ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError> {
-    Ok(ActiveReblitBootPartitionSelector {
-        partuuid: canonical_partuuid(partuuid_field, partuuid)?,
-        mount_point_hint: lexical_mount_point_hint(mount_point_field, mount_point)?,
-    })
-}
-
-fn canonical_partuuid(field: &'static str, value: String) -> Result<Box<str>, ActiveReblitBootTopologyIntentError> {
-    let bytes = value.as_bytes();
-    let canonical = bytes.len() == 36
-        && bytes.iter().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                *byte == b'-'
-            } else {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
-            }
-        });
-    if !canonical {
-        return Err(invalid_partuuid(
-            field,
-            &value,
-            "expected one lowercase canonical 8-4-4-4-12 UUID",
-        ));
-    }
-    if bytes.iter().filter(|byte| **byte != b'-').all(|byte| *byte == b'0') {
-        return Err(invalid_partuuid(
-            field,
-            &value,
-            "the nil UUID is not a partition identity",
-        ));
-    }
-    Ok(value.into_boxed_str())
-}
-
-fn invalid_partuuid(field: &'static str, value: &str, reason: &'static str) -> ActiveReblitBootTopologyIntentError {
-    let mut preview_bytes = value.len().min(MAX_PARTUUID_DIAGNOSTIC_BYTES);
-    while !value.is_char_boundary(preview_bytes) {
-        preview_bytes -= 1;
-    }
-    ActiveReblitBootTopologyIntentError::InvalidPartUuid {
-        field,
-        value_preview: value[..preview_bytes].to_owned().into_boxed_str(),
-        actual_bytes: value.len(),
-        reason,
-    }
-}
-
-fn lexical_mount_point_hint(
-    field: &'static str,
-    value: String,
-) -> Result<Box<str>, ActiveReblitBootTopologyIntentError> {
-    let bytes = value.as_bytes();
-    if bytes.len() > MAX_MOUNT_POINT_BYTES {
-        return Err(invalid_mount_point_selector(
-            field,
-            &value,
-            "mount-point selector exceeds 4095 bytes",
-        ));
-    }
-    if bytes.first() != Some(&b'/') {
-        return Err(invalid_mount_point_selector(
-            field,
-            &value,
-            "mount-point selector must be absolute",
-        ));
-    }
-    if bytes == b"/" {
-        return Err(invalid_mount_point_selector(
-            field,
-            &value,
-            "the filesystem root is not a boot destination selector",
-        ));
-    }
-    if bytes.contains(&0) {
-        return Err(invalid_mount_point_selector(
-            field,
-            &value,
-            "mount-point selector contains a NUL byte",
-        ));
-    }
-
-    let mut component_count = 0usize;
-    for component in value[1..].split('/') {
-        component_count += 1;
-        if component_count > MAX_MOUNT_POINT_COMPONENTS {
-            return Err(invalid_mount_point_selector(
-                field,
-                &value,
-                "mount-point selector exceeds 128 components",
-            ));
-        }
-        if component.is_empty() {
-            return Err(invalid_mount_point_selector(
-                field,
-                &value,
-                "mount-point selector contains an empty component, repeated slash, or trailing slash",
-            ));
-        }
-        if matches!(component, "." | "..") {
-            return Err(invalid_mount_point_selector(
-                field,
-                &value,
-                "mount-point selector contains a dot or dot-dot component",
-            ));
-        }
-        if component.len() > MAX_MOUNT_POINT_COMPONENT_BYTES {
-            return Err(invalid_mount_point_selector(
-                field,
-                &value,
-                "mount-point selector component exceeds 255 bytes",
-            ));
-        }
-    }
-
-    Ok(value.into_boxed_str())
-}
-
-fn invalid_mount_point_selector(
-    field: &'static str,
-    value: &str,
-    reason: &'static str,
-) -> ActiveReblitBootTopologyIntentError {
-    let mut preview_bytes = value.len().min(MAX_MOUNT_POINT_DIAGNOSTIC_BYTES);
-    while !value.is_char_boundary(preview_bytes) {
-        preview_bytes -= 1;
-    }
-    ActiveReblitBootTopologyIntentError::InvalidMountPointSelector {
-        field,
-        value_preview: value[..preview_bytes].to_owned().into_boxed_str(),
-        actual_bytes: value.len(),
-        reason,
-    }
-}
 
 #[cfg(test)]
 pub(super) fn gluon_value_for_test(

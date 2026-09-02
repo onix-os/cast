@@ -11,7 +11,7 @@ fn assert_frozen_provenance(
             _ => None,
         })
         .collect::<Vec<_>>();
-    let recipe = format!("gluon-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
+    let recipe = format!("recipe-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
     let derivation = format!("derivation-sha256:{}", planned.plan.derivation_id());
     assert_eq!(
         actual,

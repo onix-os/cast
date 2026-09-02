@@ -23,7 +23,7 @@ use declarative_config::{
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
-use super::gluon::{BootTargetInput, SOURCE_LOGICAL_NAME, assemble_boot_topology};
+use super::topology::{BootTargetInput, SOURCE_LOGICAL_NAME, assemble_boot_topology};
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
     ActiveReblitBootTopologyTarget, BootTopologyIntentBudget,

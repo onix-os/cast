@@ -8,6 +8,7 @@ use declarative_config::{
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
+use super::normalization::SOURCE_LOGICAL_NAME;
 use super::{
     ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue, normalization,
 };
@@ -15,7 +16,6 @@ use super::{
 pub(super) const ROOT_FILESYSTEM_ABI_NAME: &str = "cast.root_filesystem.v1";
 pub(super) const ROOT_FILESYSTEM_ABI_VERSION: u32 = 1;
 pub(super) const ROOT_FILESYSTEM_ABI: &str = include_str!("../../../../gluon/root_filesystem.glu");
-pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/root-filesystem.glu";
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const MAX_EVALUATION_TIME: Duration = Duration::from_secs(2);

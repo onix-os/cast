@@ -21,9 +21,6 @@ use super::{
     ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
-/// Version of the typed repository build-policy ABI.
-pub const BUILD_POLICY_ABI_VERSION: u32 = 5;
-
 /// Pure helpers imported by policy roots as `cast.build_policy.v5`.
 pub const GLUON_BUILD_POLICY_ABI: &str = include_str!("../../gluon/build_policy.glu");
 

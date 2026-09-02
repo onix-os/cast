@@ -25,7 +25,7 @@ use declarative_config::{
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
-use super::gluon::SOURCE_LOGICAL_NAME;
+use super::normalization::SOURCE_LOGICAL_NAME;
 use super::normalization::materialize_root_argument;
 use super::{ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue};
 
