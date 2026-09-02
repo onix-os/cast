@@ -54,7 +54,7 @@ mod tests {
         check = { steps = {} },
         workload = { steps = { {
             kind = "run",
-            program = { path = "run-workload", requirement = { kind = "binary", value = "run-workload" } },
+            program = { path = "/usr/bin/run-workload", requirement = { kind = "binary", value = "run-workload" } },
             args = {},
         } } },
     }"#;
@@ -73,7 +73,7 @@ mod tests {
         pname = "example", version = "1.0.0", release = 1,
         homepage = "https://example.invalid", license = {{ "MPL-2.0" }},
     }},
-    builder = {{
+    builder = {{ kind = "custom", spec = {{
         required_tools = {{}},
         environment = {{}},
         phases = {{
@@ -84,10 +84,9 @@ mod tests {
             workload = {{ steps = {{}} }},
         }},
         supported_hooks = {ALL_HOOKS},
-    }},
+    }} }},
     hooks = {EMPTY_HOOKS},
     native_build_inputs = {{}}, build_inputs = {{}}, check_inputs = {{}},
-    outputs = {{}},
     options = {{
         toolchain = "llvm",
         cspgo = true,

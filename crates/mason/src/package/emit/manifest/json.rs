@@ -124,7 +124,7 @@ mod tests {
         homepage = "https://example.invalid",
         license = { "MPL-2.0" },
     },
-    builder = {
+    builder = { kind = "custom", spec = {
         required_tools = {},
         environment = {},
         phases = {
@@ -135,7 +135,7 @@ mod tests {
             workload = { steps = {} },
         },
         supported_hooks = { setup = false, build = false, check = false, install = false, workload = false },
-    },
+    } },
     hooks = {
         pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {},
         pre_check = {}, post_check = {}, pre_install = {}, post_install = {},
@@ -144,7 +144,6 @@ mod tests {
     native_build_inputs = {},
     build_inputs = {},
     check_inputs = {},
-    outputs = {},
     options = {
         toolchain = "llvm",
         cspgo = false,
