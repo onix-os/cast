@@ -190,12 +190,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 .fingerprint
                 .modules
                 .iter()
-                .find(|module| module.logical_name == "factory.glu")
-                .expect("factory-override: local Gluon factory is absent from recipe provenance");
+                .find(|module| module.logical_name == "factory.lua")
+                .expect("factory-override: local factory is absent from recipe provenance");
             assert_eq!(
                 factory.sha256,
                 hex::encode(Sha256::digest(
-                    fs::read(packages.join(name).join("factory.glu")).unwrap()
+                    fs::read(packages.join(name).join("factory.lua")).unwrap()
                 )),
                 "factory-override: recipe provenance does not bind the exact imported factory"
             );

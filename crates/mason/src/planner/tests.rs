@@ -178,7 +178,7 @@ const EXECUTION_FIXTURES: [&str; 28] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 28] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -206,15 +206,12 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
     "relation-policy",
     "split",
     "system-integration-assets",
+    "userspace-profile",
 ];
 
 fn execution_fixture_package_directory(name: &str) -> PathBuf {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution");
-    if name == "userspace-profile" {
-        fixtures.join(name)
-    } else {
-        fixtures.join("packages").join(name)
-    }
+    fixtures.join("packages").join(name)
 }
 
 #[path = "tests/bootstrap.rs"]
