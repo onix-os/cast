@@ -8,7 +8,7 @@
     version = "1.2.3",
     release = 1,
     homepage = "https://example.com",
-    license = ["MPL-2.0"],
+    license = { "MPL-2.0" },
 }"#;
 
     const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
@@ -22,23 +22,34 @@
         LuaSourceLockCodec::default().encode(lock).unwrap()
     }
 
-    fn gluon_recipe(source: &str) -> String {
+    /// A complete recipe carrying `source` as its meta block. The recipe root
+    /// ABI is the fully-lowered package spec, so every field is named.
+    fn authored_recipe(source: &str) -> String {
+        let phases = ["setup", "build", "install", "check", "workload"]
+            .into_iter()
+            .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let hooks = ["setup", "build", "check", "install", "workload"]
+            .into_iter()
+            .flat_map(|phase| [format!("pre_{phase} = {{}}"), format!("post_{phase} = {{}}")])
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(
-            "let a = import! cast.authored.v1\n{{\n    \
-             meta = {source},\n    \
-             builder = a.builder.custom a.empty.builder,\n    \
-             sources = [],\n    \
-             native_build_inputs = [],\n    \
-             build_inputs = [],\n    \
-             check_inputs = [],\n    \
-             outputs = a.outputs.default,\n    \
-             options = a.unset,\n    \
-             profiles = [],\n    \
-             architectures = [],\n    \
-             tuning = [],\n    \
-             emul32 = a.false,\n    \
-             mold = a.false,\n    \
-             hooks = a.unset,\n}}"
+            "return {{\n    meta = {source},\n    \
+             builder = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
+             supported_hooks = {{ setup = false, build = false, check = false, install = false, \
+             workload = false }} }},\n    \
+             hooks = {{ {hooks} }},\n    \
+             native_build_inputs = {{}}, build_inputs = {{}}, check_inputs = {{}},\n    \
+             outputs = {{ {{ name = \"out\", include_in_manifest = true, \
+             summary = {{ kind = \"none\" }}, description = {{ kind = \"none\" }}, \
+             provides_exclude = {{}}, runtime_inputs = {{}}, runtime_exclude = {{}}, \
+             paths = {{}}, conflicts = {{}} }} }},\n    \
+             options = {{ toolchain = \"llvm\", cspgo = false, samplepgo = false, debug = true, \
+             strip = true, networking = false, compressman = false, lastrip = true }},\n    \
+             profiles = {{}}, sources = {{}}, architectures = {{}}, tuning = {{}},\n    \
+             emul32 = false, mold = false,\n}}\n"
         )
     }
 
@@ -55,114 +66,49 @@
 
     fn minimal_recipe() -> Recipe {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), authored_recipe(SOURCE_SPEC)).unwrap();
         Recipe::load(root.path()).unwrap()
     }
 
-    fn find_stone_glu(dir: &Path, found: &mut Vec<PathBuf>) {
+    fn find_stone_lua(dir: &Path, found: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                find_stone_glu(&path, found);
+                find_stone_lua(&path, found);
             } else if path.file_name().and_then(|name| name.to_str()) == Some("stone.lua") {
                 found.push(path);
             }
         }
     }
 
+    /// Every documented recipe re-encodes to Lua that loads back to the same
+    /// package value, so the emitter and the authoring surface agree.
     #[test]
-    fn every_gluon_recipe_example_round_trips_through_lua() {
-        // Pair the authored `stone.lua` documentation corpus with generated Lua
-        // by emitting each loaded recipe and re-loading it through the `.lua`
-        // path; every example must normalize to the same package value.
-        let examples =
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/examples/gluon"));
+    fn every_recipe_example_round_trips_through_the_emitter() {
+        let examples = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/examples/lua"));
         let mut recipes = Vec::new();
-        find_stone_glu(examples, &mut recipes);
-        assert!(!recipes.is_empty(), "the Gluon recipe corpus is non-empty");
+        find_stone_lua(examples, &mut recipes);
+        assert!(!recipes.is_empty(), "the recipe corpus is non-empty");
 
         for recipe_path in recipes {
             let directory = recipe_path.parent().unwrap();
-            let gluon = Recipe::load_authored(directory)
+            let loaded = Recipe::load_authored(directory)
                 .unwrap_or_else(|error| panic!("load {recipe_path:?}: {error}"));
-            let emitted = encode_lua_recipe(&gluon.declaration);
+            let emitted = encode_lua_recipe(&loaded.declaration);
 
             let temporary = tempfile::tempdir().unwrap();
             fs::write(temporary.path().join("stone.lua"), &emitted).unwrap();
-            let lua = Recipe::load_authored(temporary.path())
+            let reloaded = Recipe::load_authored(temporary.path())
                 .unwrap_or_else(|error| panic!("reload emitted {recipe_path:?}: {error}"));
 
-            assert_eq!(lua.declaration, gluon.declaration, "recipe {recipe_path:?}");
+            assert_eq!(reloaded.declaration, loaded.declaration, "recipe {recipe_path:?}");
         }
     }
 
     fn recipe_from(source: &str) -> Recipe {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe(source)).unwrap();
+        fs::write(root.path().join("stone.lua"), authored_recipe(source)).unwrap();
         Recipe::load(root.path()).unwrap()
-    }
-
-    /// One-shot corpus converter: generate the Lua mirror of every `packages/`
-    /// recipe example, verifying each round-trips before writing. Run explicitly
-    /// with `cargo test -p mason generate_lua_recipe_example_mirror -- --ignored`.
-    #[test]
-    #[ignore = "one-shot corpus conversion tool"]
-    fn generate_lua_recipe_example_mirror() {
-        let gluon_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
-        let lua_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
-
-        let mut recipes = Vec::new();
-        find_stone_glu(&gluon_root, &mut recipes);
-        assert!(!recipes.is_empty(), "recipe corpus is non-empty");
-
-        for stone_glu in &recipes {
-            let dir = stone_glu.parent().unwrap();
-            let gluon = Recipe::load_authored(dir)
-                .unwrap_or_else(|error| panic!("load {stone_glu:?}: {error}"));
-            let lua = encode_lua_recipe(&gluon.declaration);
-
-            // Verify the emitted Lua re-decodes to the same package value.
-            let scratch = tempfile::tempdir().unwrap();
-            fs::write(scratch.path().join("stone.lua"), &lua).unwrap();
-            let reloaded = Recipe::load_authored(scratch.path())
-                .unwrap_or_else(|error| panic!("reload emitted {stone_glu:?}: {error}"));
-            assert_eq!(reloaded.declaration, gluon.declaration, "round-trip {stone_glu:?}");
-
-            let relative = dir.strip_prefix(&gluon_root).unwrap();
-            let destination = lua_root.join(relative);
-            fs::create_dir_all(&destination).unwrap();
-            fs::write(destination.join("stone.lua"), &lua).unwrap();
-        }
-        eprintln!("converted {} recipe examples to Lua", recipes.len());
-    }
-
-    /// One-shot: convert the complete top-level recipe examples (the canonical
-    /// `stone` and the layered `composed-stone`) to verified Lua. The remaining
-    /// top-level files are other domain ABIs (repository, trigger, system,
-    /// boot topology), not package recipes, and are handled as doc prose
-    /// rather than mechanically converted.
-    #[test]
-    #[ignore = "one-shot corpus conversion tool"]
-    fn generate_top_level_lua_recipe_examples() {
-        let gluon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
-        let lua_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua");
-
-        for name in ["stone", "composed-stone"] {
-            let source = gluon_dir.join(format!("{name}.glu"));
-            let gluon = Recipe::load_authored(&source)
-                .unwrap_or_else(|error| panic!("load {source:?}: {error}"));
-            let lua = encode_lua_recipe(&gluon.declaration);
-
-            let scratch = tempfile::tempdir().unwrap();
-            fs::write(scratch.path().join("stone.lua"), &lua).unwrap();
-            let reloaded = Recipe::load_authored(scratch.path())
-                .unwrap_or_else(|error| panic!("reload emitted {name}: {error}"));
-            assert_eq!(reloaded.declaration, gluon.declaration, "round-trip {name}");
-
-            fs::write(lua_dir.join(format!("{name}.lua")), &lua).unwrap();
-        }
     }
 
 
@@ -196,34 +142,25 @@
         }
     }
 
-    fn gluon_recipe_with_upstreams() -> String {
-        format!(
-            r#"let a = import! cast.authored.v1
-{{
-    meta = {SOURCE_SPEC},
-    builder = a.builder.custom a.empty.builder,
-    sources = [
-        a.source.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
-        a.source.git "{GIT_URL}" "{GIT_REF}",
-    ],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}"#
+    fn recipe_with_upstreams() -> String {
+        let archive = format!(
+            r#"{{ kind = "archive", url = "{ARCHIVE_URL}", hash = "{ARCHIVE_HASH}",
+               rename = {{ kind = "none" }}, strip_dirs = {{ kind = "none" }}, unpack = true,
+               unpack_dir = {{ kind = "none" }} }}"#
+        );
+        let git = format!(
+            r#"{{ kind = "git", url = "{GIT_URL}", git_ref = "{GIT_REF}",
+               clone_dir = {{ kind = "none" }} }}"#
+        );
+        authored_recipe(SOURCE_SPEC).replace(
+            "sources = {}",
+            &format!("sources = {{ {archive}, {git} }}"),
         )
     }
 
     #[test]
     fn documented_recipe_examples_remain_loadable() {
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua");
 
         let minimal = Recipe::load(examples.join("stone.lua")).unwrap();
         assert_eq!(minimal.declaration.meta.pname, "hello");
@@ -308,16 +245,16 @@
     }
 
     #[test]
-    fn recipe_directory_resolves_registered_gluon_root() {
+    fn recipe_directory_resolves_the_registered_root() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.yaml"), "ignored").unwrap();
 
         let missing = resolve_path(root.path()).unwrap_err();
         assert!(matches!(missing, Error::MissingRecipe(path) if path.ends_with("stone.lua")));
 
-        let gluon = root.path().join("stone.lua");
-        fs::write(&gluon, "{}").unwrap();
-        assert_eq!(resolve_path(root.path()).unwrap(), gluon.canonicalize().unwrap());
+        let recipe = root.path().join("stone.lua");
+        fs::write(&recipe, "return {}").unwrap();
+        assert_eq!(resolve_path(root.path()).unwrap(), recipe.canonicalize().unwrap());
     }
 
     #[test]
@@ -359,7 +296,7 @@
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target.glu");
         let recipe = root.path().join(RECIPE_ROOT_LOGICAL_NAME_LUA);
-        fs::write(&target, gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&target, authored_recipe(SOURCE_SPEC)).unwrap();
         symlink(&target, &recipe).unwrap();
 
         let error = resolve_path(root.path()).unwrap_err();
@@ -374,10 +311,10 @@
     }
 
     #[test]
-    fn explicit_gluon_file_loads_and_records_provenance() {
+    fn an_explicit_recipe_file_loads_and_records_provenance() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("custom.glu");
-        fs::write(&path, gluon_recipe(SOURCE_SPEC)).unwrap();
+        let path = root.path().join("custom.lua");
+        fs::write(&path, authored_recipe(SOURCE_SPEC)).unwrap();
 
         let recipe = Recipe::load(&path).unwrap();
 
@@ -386,21 +323,16 @@
         assert!(recipe.source_lock.is_none());
         let fingerprint = recipe.fingerprint;
         assert_eq!(fingerprint.root_source_sha256.len(), 64);
-        assert!(
-            fingerprint
-                .modules
-                .iter()
-                .any(|module| module.logical_name == "cast.authored.v1")
-        );
+        assert_eq!(fingerprint.root_logical_name, "custom.lua");
     }
 
     #[test]
-    fn explicit_unknown_extension_never_selects_a_sibling_gluon_recipe() {
+    fn explicit_unknown_extension_never_selects_a_sibling_authored_recipe() {
         let root = tempfile::tempdir().unwrap();
-        let gluon = root.path().join("custom.glu");
+        let sibling = root.path().join("custom.lua");
         let unknown = root.path().join("custom.yaml");
-        fs::write(&gluon, gluon_recipe(SOURCE_SPEC)).unwrap();
-        fs::write(&unknown, gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&sibling, authored_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&unknown, authored_recipe(SOURCE_SPEC)).unwrap();
 
         let error = Recipe::load(&unknown).unwrap_err();
 
@@ -408,31 +340,16 @@
     }
 
     #[test]
-    fn directory_gluon_loads_contained_relative_imports() {
+    fn a_recipe_directory_loads_contained_relative_imports() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("source.glu"), SOURCE_SPEC).unwrap();
+        fs::write(
+            root.path().join("source.lua"),
+            format!("return {SOURCE_SPEC}\n"),
+        )
+        .unwrap();
         fs::write(
             root.path().join("stone.lua"),
-            r#"
-let a = import! cast.authored.v1
-let source = import! "source.glu"
-{
-    meta = source,
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
+            authored_recipe(r#"cast.import("source.lua")"#),
         )
         .unwrap();
 
@@ -450,49 +367,25 @@ let source = import! "source.glu"
         // v2 identity orders modules by canonical graph identity; assert
         // membership independent of that ordering.
         modules.sort_unstable();
-        assert_eq!(
-            modules,
-            [
-                "cast.authored.v1",
-                "source.glu",
-                "std.string.prim",
-                "std.types",
-            ]
-        );
+        assert_eq!(modules, ["source.lua"]);
     }
 
     #[test]
-    fn invalid_gluon_preserves_source_diagnostics() {
+    /// A recipe whose field has the wrong type is a typed diagnostic naming its
+    /// source, not a silent default.
+    #[test]
+    fn a_mistyped_field_preserves_source_diagnostics() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(
-            root.path().join("stone.lua"),
-            r#"
-let a = import! cast.authored.v1
-{
-    meta = {
+        let recipe = authored_recipe(
+            r#"{
         pname = "example",
         version = "1.2.3",
         release = 1,
         homepage = 42,
-        license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-        )
-        .unwrap();
+        license = { "MPL-2.0" },
+    }"#,
+        );
+        fs::write(root.path().join("stone.lua"), recipe).unwrap();
 
         let error = Recipe::load(root.path()).unwrap_err();
         let Error::EvaluateRecipe(DeclarationEvaluationError::Evaluation(diagnostic)) = error else {
@@ -501,7 +394,10 @@ let a = import! cast.authored.v1
 
         assert_eq!(diagnostic.category, declarative_config::DiagnosticCategory::Type);
         assert_eq!(diagnostic.source_name.as_deref(), Some("stone.lua"));
-        assert!(diagnostic.span.is_some());
+        assert!(
+            diagnostic.message.contains("meta"),
+            "diagnostic did not locate the field: {diagnostic}"
+        );
     }
 
     #[test]
@@ -523,7 +419,7 @@ let a = import! cast.authored.v1
     #[test]
     fn valid_source_lock_is_decoded_and_retained() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), recipe_with_upstreams()).unwrap();
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
             canonical_source_lock(&matching_source_lock()),
@@ -540,7 +436,7 @@ let a = import! cast.authored.v1
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         let limit = Limits::default().max_source_bytes;
         fs::File::create(&lock_path)
@@ -578,7 +474,7 @@ let a = import! cast.authored.v1
     #[test]
     fn malformed_schema_and_commit_lock_errors_include_the_lock_path() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
 
         let mut wrong_schema = matching_source_lock();
@@ -590,7 +486,7 @@ let a = import! cast.authored.v1
         git.commit = "abc123d".to_owned();
 
         let cases = [
-            ("{".to_owned(), "Unexpected end of file"),
+            ("{".to_owned(), "does not parse"),
             (canonical_source_lock(&wrong_schema), "unsupported schema"),
             (
                 canonical_source_lock(&short_commit),
@@ -614,20 +510,20 @@ let a = import! cast.authored.v1
         let root = tempfile::tempdir().unwrap();
         let recipe_path = root.path().join("stone.lua");
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
-        fs::write(&recipe_path, gluon_recipe(SOURCE_SPEC)).unwrap();
-        fs::write(&lock_path, "not valid Gluon").unwrap();
+        fs::write(&recipe_path, authored_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&lock_path, "not valid Lua").unwrap();
 
         let recipe = Recipe::load_authored(root.path()).unwrap();
 
         assert_eq!(recipe.declaration.meta.pname, "example");
         assert!(recipe.source_lock.is_none());
-        assert_eq!(fs::read_to_string(lock_path).unwrap(), "not valid Gluon");
+        assert_eq!(fs::read_to_string(lock_path).unwrap(), "not valid Lua");
     }
 
     #[test]
     fn stale_source_lock_rejects_count_kind_url_hash_and_requested_ref() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
 
         let mut count = matching_source_lock();
@@ -680,7 +576,7 @@ let a = import! cast.authored.v1
     #[test]
     fn recipe_and_lock_fingerprints_are_deterministic() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), authored_recipe(SOURCE_SPEC)).unwrap();
         let lock = canonical_source_lock(&SourceLock::default());
         fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), &lock).unwrap();
 
@@ -693,7 +589,7 @@ let a = import! cast.authored.v1
 
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
-            format!("{lock}// semantically inert fingerprint change\n"),
+            format!("{lock}-- semantically inert fingerprint change\n"),
         )
         .unwrap();
         let changed = Recipe::load(root.path()).unwrap();
@@ -710,7 +606,7 @@ let a = import! cast.authored.v1
     #[test]
     fn explicit_build_timestamp_is_deterministic_and_ambient_free() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), authored_recipe(SOURCE_SPEC)).unwrap();
         let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
 
         let first = Recipe::load_at(root.path(), timestamp).unwrap();
