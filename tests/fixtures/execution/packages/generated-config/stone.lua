@@ -50,7 +50,7 @@ return {
                                     }
                                 }
                             },
-                            script = "\nprintf '%s\\n' \\\n    'format = 1' \\\n    'profile = \"stone-native\"' \\\n    'source = \"gluon\"' \\\n    > generated-config.conf\ninstall -Dm644 generated-config.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf\"\n"
+                            script = "\nprintf '%s\\n' \\\n    'format = 1' \\\n    'profile = \"stone-native\"' \\\n    'source = \"authored\"' \\\n    > generated-config.conf\ninstall -Dm644 generated-config.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf\"\n"
                         }
                     }
                 },

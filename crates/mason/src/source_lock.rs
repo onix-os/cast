@@ -673,11 +673,11 @@ type SourceLock = {
         assert_eq!(fs::read_to_string(path).unwrap(), "authored lock\n");
     }
 
-    /// The Lua adapter must round-trip the same lock the Gluon adapter does and
-    /// reach an equal domain value, so the generated slot can move languages
+    /// The adapter must round-trip a lock and
+    /// reach an equal domain value, so the generated slot survives a rewrite
     /// without changing what the lock means.
     #[test]
-    fn lua_source_lock_round_trips_and_matches_the_gluon_domain_value() {
+    fn lua_source_lock_round_trips_to_an_equal_domain_value() {
         let lock = sample_lock();
         let encoded = LuaSourceLockCodec::default().encode(&lock).unwrap();
 

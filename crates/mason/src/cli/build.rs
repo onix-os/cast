@@ -215,7 +215,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_recipe_is_gluon() {
+    fn default_recipe_is_the_lua_recipe() {
         let command =
             Command::try_parse_from(["build", "--target", "x86_64", "--source-date-epoch", "1700000000"]).unwrap();
 

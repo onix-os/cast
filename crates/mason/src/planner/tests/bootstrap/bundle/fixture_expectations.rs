@@ -209,7 +209,7 @@ fn assert_cargo_features_fixture(planned: &super::super::Planned, packages: &BTr
 fn assert_generated_config_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
     const FIXTURE: &str = "generated-config";
     const TARGET: &str = "share/cast/generated-config.conf";
-    const CONTENT: &[u8] = b"format = 1\nprofile = \"stone-native\"\nsource = \"gluon\"\n";
+    const CONTENT: &[u8] = b"format = 1\nprofile = \"stone-native\"\nsource = \"authored\"\n";
 
     let [root_plan] = planned.plan.outputs.as_slice() else {
         panic!("{FIXTURE}: source-less package must freeze exactly one output");
@@ -254,7 +254,7 @@ fn assert_generated_shell_fixture(planned: &super::super::Planned, packages: &BT
     assert!(root_plan.include_in_manifest);
     assert_eq!(
         root_plan.summary.as_deref(),
-        Some("Gluon-authored shell application fixture")
+        Some("Authored shell application fixture")
     );
     assert_eq!(root_plan.description, None);
     assert!(root_plan.conflicts.is_empty());

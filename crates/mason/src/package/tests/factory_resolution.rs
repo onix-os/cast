@@ -34,7 +34,7 @@ fn package_factory_defaults_resolve_directly() {
     );
 
     let root = &packages["hello"];
-    assert_eq!(root.summary.as_deref(), Some("Minimal Gluon recipe example"));
+    assert_eq!(root.summary.as_deref(), Some("Minimal recipe example"));
     assert!(root.include_in_manifest);
     assert_eq!(
         rules

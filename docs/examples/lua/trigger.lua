@@ -1,4 +1,3 @@
--- Paired Lua form of docs/examples/gluon/trigger.glu (Phase L7).
 return {
     name = "refresh-example",
     description = "Refresh generated example data",

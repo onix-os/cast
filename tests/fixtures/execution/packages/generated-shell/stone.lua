@@ -117,7 +117,7 @@ return {
             include_in_manifest = true,
             summary = {
                 kind = "some",
-                value = "Gluon-authored shell application fixture"
+                value = "Authored shell application fixture"
             },
             description = {
                 kind = "none"

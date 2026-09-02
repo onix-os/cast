@@ -61,7 +61,7 @@ return {
             include_in_manifest = true,
             summary = {
                 kind = "some",
-                value = "Minimal Gluon recipe example"
+                value = "Minimal recipe example"
             },
             description = {
                 kind = "none"
