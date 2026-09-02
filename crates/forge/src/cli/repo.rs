@@ -17,7 +17,7 @@ use url::Url;
 
 /// Control flow for the subcommands
 enum Action {
-    // Root, canonical (emit the generated Gluon fragment instead of the summary)
+    // Root, canonical (emit the generated fragment instead of the summary)
     List(bool),
     // Root, Id, Url, Comment, Root index enabled options
     Add(String, Url, String, Priority, Option<RootIndexOptions>),
@@ -83,9 +83,8 @@ pub fn command() -> Command {
                 .arg(
                     Arg::new("canonical")
                         .long("canonical")
-                        .alias("gluon")
                         .action(ArgAction::SetTrue)
-                        .help("Emit the canonical generated Gluon fragment instead of the human summary"),
+                        .help("Emit the canonical generated fragment instead of the human summary"),
                 ),
         )
         .subcommand(
@@ -328,7 +327,7 @@ pub enum Error {
     #[error("encode canonical repositories")]
     RepositoryEncode(#[from] repository::RepositoryConversionError),
     #[error(
-        "`cast repo {command}` is not allowed while authored Gluon system intent is active; edit repositories in {path:?}"
+        "`cast repo {command}` is not allowed while authored system intent is active; edit repositories in {path:?}"
     )]
     SystemIntentDisallowed { command: String, path: PathBuf },
     #[error("repository {0} was not found")]

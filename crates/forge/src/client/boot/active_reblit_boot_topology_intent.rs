@@ -17,7 +17,7 @@
 //! grant no pathname, mount, filesystem, or mutation authority.
 //!
 //! Preparation retains every fixed pathname component, the exact regular-file
-//! inode and bytes, the evaluated value, and the complete Gluon fingerprint.
+//! inode and bytes, the evaluated value, and the complete evaluation identity.
 //! Only a two-pass, same-thread revalidation exposes borrowed semantic views.
 //! No path or mount discovery, filesystem mutation, or publication occurs.
 

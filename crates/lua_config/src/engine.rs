@@ -80,7 +80,7 @@ impl LuaEngine {
     /// Deserialize the root value into `T` while binding `explicit_inputs` into
     /// the evaluation identity, under one caller-established budget. Domain
     /// adapters that admit external inputs (hashed into provenance) use this so
-    /// the Lua identity commits to the same inputs the Gluon adapter does.
+    /// the Lua identity commits to the same inputs every adapter does.
     pub fn evaluate_with_inputs_within_as<T>(
         &self,
         source: &Source,
@@ -256,8 +256,8 @@ where
 }
 
 /// A typed decoder that runs the authored root chunk and deserializes its final
-/// value into `T` via serde. Domain adapters use this to reach the same shared
-/// wire types the Gluon adapters decode into.
+/// value into `T` via serde. Domain adapters use this to reach the shared wire
+/// types every configuration-language adapter decodes into.
 pub struct LuaSerdeDecoder<T>(PhantomData<fn() -> T>);
 
 impl<T> LuaSerdeDecoder<T> {
@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_and_gluon_style_identities_differ_by_engine() {
+    fn an_evaluation_identity_is_deterministic_and_names_its_engine() {
         let engine = LuaEngine::default();
         let first = engine
             .evaluate::<i64>(&Source::new("root.lua", "return 7"))

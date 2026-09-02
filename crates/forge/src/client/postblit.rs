@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn packaged_transaction_triggers_load_from_gluon_fragments() {
+    fn packaged_transaction_triggers_load_from_packaged_fragments() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("tx.d/depmod.glu");
         fs_err::create_dir_all(path.parent().unwrap()).unwrap();

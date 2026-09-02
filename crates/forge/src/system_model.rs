@@ -312,7 +312,7 @@ impl SystemModel {
     }
 
     /// Sync package selections through domain values and regenerate a
-    /// canonical snapshot. No authored Gluon source is modified.
+    /// canonical snapshot. No authored declaration source is modified.
     pub fn sync_packages(self, packages: &[Package]) -> Result<SystemModel, UpdateError> {
         let source_fingerprint = self.source_fingerprint;
         let selected = self.packages;
@@ -591,7 +591,7 @@ let cast = import! cast.system.v1
     }
 
     #[test]
-    fn fixed_loader_accepts_only_the_registered_gluon_extension() {
+    fn fixed_loader_accepts_only_the_registered_extension() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("system.lua");
         fs::write(&path, authored_source()).unwrap();

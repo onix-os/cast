@@ -1,11 +1,11 @@
 //! Lua declaration adapter for the system-model domain (Phase L5).
 //!
-//! Decodes an authored Lua system declaration into the same shared
-//! [`SystemParts`](spec) the Gluon adapter produces, reusing the neutral
-//! `spec::into_domain` conversion and `SystemModel::from_generated`. The
-//! repository records use the shared Lua repository encoding; equivalent Gluon
-//! and Lua sources normalize to equal semantic values with intentionally
-//! distinct evaluation identities.
+//! Decodes an authored Lua system declaration into the shared
+//! [`SystemParts`](spec), reusing the neutral `spec::into_domain` conversion
+//! and `SystemModel::from_generated`. The repository records use the shared Lua
+//! repository encoding; equivalent sources in any configuration language
+//! normalize to equal semantic values with intentionally distinct evaluation
+//! identities.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -175,8 +175,8 @@ impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
 
 /// Emit a decoded [`SystemModel`] as canonical generated-marked Lua source that
 /// re-decodes through [`LuaSystemEvaluator`] to the same semantic value. This is
-/// the system-model write path — what a Gluon→Lua declaration migration emits
-/// for the `etc/cast/system.lua` slot. Repository records reuse the shared
+/// the system-model write path — what a declaration migration emits for the
+/// `etc/cast/system.lua` slot. Repository records reuse the shared
 /// repository encoding, so a system model and a standalone repositories
 /// document canonicalize their repositories identically.
 #[cfg_attr(not(test), allow(dead_code))]

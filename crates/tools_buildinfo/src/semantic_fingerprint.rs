@@ -75,7 +75,7 @@ impl SemanticFingerprint {
 /// Discovery is deliberately independent of Git so dirty worktrees and source
 /// archives have exactly the same semantics.  Production package roots are
 /// narrow: package manifests, build scripts/configuration, and the `src`,
-/// `gluon`, and `data` trees.  Documentation, examples, benches, fixtures, and
+/// `data`, and `build` trees.  Documentation, examples, benches, fixtures, and
 /// generated output trees therefore cannot perturb the implementation ID.
 pub(crate) fn calculate(
     root: &Path,
@@ -144,7 +144,7 @@ fn collect_package_group(
         for file in ["build.rs", "cbindgen.toml"] {
             collect_optional_file(root, &relative_package.join(file), inputs, watched_paths)?;
         }
-        for directory in ["src", "gluon", "data", "build"] {
+        for directory in ["src", "data", "build"] {
             collect_optional_tree(root, &relative_package.join(directory), inputs, watched_paths)?;
         }
     }

@@ -376,7 +376,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_filename_uses_the_gluon_snapshot_extension() {
+    fn export_filename_uses_the_snapshot_extension() {
         let id = state::Id::from(42);
 
         assert_eq!(export_filename(id, Some("host")), "system-model-host-fstxn-42.glu");

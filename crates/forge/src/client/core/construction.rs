@@ -15,7 +15,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Import user-authored Gluon system intent from the provided path.
+    /// Import user-authored system intent from the provided path.
     pub fn system_intent_path(mut self, path: impl Into<PathBuf>) -> ClientBuilder {
         self.system_intent_path = Some(path.into());
         self
@@ -166,7 +166,7 @@ fn render_system_intent_notice(client: &Client, verbose: bool) -> Option<String>
     }
     let path = system_model.path();
     let first_line = format!(
-        "{}: authored Gluon system intent at {path:?} is active.",
+        "{}: authored system intent at {path:?} is active.",
         "INFO".green()
     );
     if system_model.disable_warning {

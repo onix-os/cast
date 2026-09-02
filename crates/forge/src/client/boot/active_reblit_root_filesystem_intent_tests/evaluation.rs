@@ -31,7 +31,7 @@ fn root_locator_is_an_opaque_authored_scalar_not_device_or_filesystem_proof() {
     let revalidated = prepared.revalidate(&fixture.installation).unwrap();
 
     assert_eq!(revalidated.kernel_argument(), format!("root={opaque}"));
-    // Acceptance proves only the authenticated bytes and closed Gluon type.
+    // Acceptance proves only the authenticated bytes and closed declaration type.
     // This module intentionally performs no device, filesystem, or mount lookup.
 }
 

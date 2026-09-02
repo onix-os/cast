@@ -28,7 +28,7 @@ cast.system
         .sha256
         .clone();
 
-    let created = client.new_state(&[], "Gluon state creation").unwrap().unwrap();
+    let created = client.new_state(&[], "declared state creation").unwrap().unwrap();
     let snapshot_path = system_model::snapshot_path(temporary.path());
     let recorded = fs::read_to_string(&snapshot_path).unwrap();
     assert!(recorded.starts_with(lua_config::GENERATED_LUA_MARKER));

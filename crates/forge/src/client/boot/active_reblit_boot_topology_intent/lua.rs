@@ -2,15 +2,15 @@
 //!
 //! Decodes an authored Lua boot-topology declaration into raw selector strings
 //! and the engine-neutral [`BootTargetInput`], then runs the *same*
-//! `assemble_boot_topology` canonicalization and cross-checks the Gluon adapter
-//! runs. Equivalent Gluon and Lua sources reach the identical validated intent
-//! value; only the evaluation identity differs by engine.
+//! `assemble_boot_topology` canonicalization and cross-checks every adapter
+//! runs. Equivalent sources in any configuration language reach the identical
+//! validated intent value; only the evaluation identity differs by engine.
 //!
-//! This is the budget-integrated adapter registered alongside the Gluon one, so
-//! a retained `etc/cast/boot-topology.lua` is discovered by extension and
+//! This is a budget-integrated registered adapter, so a retained
+//! `etc/cast/boot-topology.lua` is discovered by extension and
 //! evaluated under the same absolute deadline and byte bounds. Its evaluation
-//! contract mirrors the Gluon adapter's strictness: the fixed Lua source name,
-//! no admitted external inputs, and — because the Lua boot declaration imports
+//! contract keeps the shared strictness: the fixed Lua source name, no
+//! admitted external inputs, and — because the Lua boot declaration imports
 //! nothing — an empty module set.
 
 use std::fmt::Write as _;
@@ -71,8 +71,8 @@ impl From<LuaBootTarget> for BootTargetInput {
 
 /// Budget-integrated Lua adapter for the closed boot-topology declaration.
 ///
-/// Like the Gluon adapter it borrows the caller-owned absolute budget so the
-/// typed evaluation boundary cannot replace ActiveReblit's deadline with a fresh
+/// It borrows the caller-owned absolute budget so the typed evaluation
+/// boundary cannot replace ActiveReblit's deadline with a fresh
 /// relative timeout.
 pub(super) struct LuaBootTopologyIntentEvaluator<'budget> {
     engine: LuaEngine,

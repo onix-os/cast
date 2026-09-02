@@ -1,11 +1,11 @@
 //! Lua declaration adapter for the trigger domain (Phase L2, private).
 //!
-//! This decodes an authored Lua trigger into the *same* shared
-//! [`TriggerSpec`]/[`Trigger`] the Gluon adapter produces. Options and closed
-//! variants use the Lua tagged encoding (`{ kind = "some", value = ... }`);
-//! the conversion into the shared wire type mirrors the Gluon conversion
-//! exactly, so equivalent Gluon and Lua sources normalize to equal domain
-//! values. It is not yet registered for `.lua` discovery.
+//! This decodes an authored Lua trigger into the shared
+//! [`TriggerSpec`]/[`Trigger`]. Options and closed variants use the Lua tagged
+//! encoding (`{ kind = "some", value = ... }`); the conversion into the shared
+//! wire type is the neutral one, so equivalent sources in any configuration
+//! language normalize to equal domain values. It is not yet registered for
+//! `.lua` discovery.
 
 use std::fmt::Write as _;
 
@@ -28,9 +28,8 @@ use crate::spec::{
 /// Stateful read-only Lua adapter for the trigger declaration boundary.
 ///
 /// It decodes an authored Lua trigger into the shared [`TriggerSpec`] and runs
-/// the same [`Trigger`] validation the Gluon adapter uses, so both engines
-/// reach identical domain values with intentionally distinct evaluation
-/// identities.
+/// the shared [`Trigger`] validation, so every engine reaches identical domain
+/// values with intentionally distinct evaluation identities.
 #[derive(Debug, Clone, Default)]
 pub struct LuaTriggerEvaluator {
     engine: LuaEngine,
@@ -263,20 +262,6 @@ mod tests {
 
     use super::*;
     use crate::format::Trigger;
-
-    const GLUON_TRIGGER: &str = r#"
-let cast = import! cast.trigger.v1
-let base = cast.trigger "depmod" "Rebuild kernel module dependencies"
-{
-    paths = [
-        cast.path "/usr/lib/modules/(version:*)" ["depmod"] cast.optional.unset,
-    ],
-    handlers = [
-        cast.handler.named "depmod" (cast.handler.run "/usr/bin/depmod" ["$(version)"]),
-    ],
-    .. base
-}
-"#;
 
     const LUA_TRIGGER: &str = r#"
 return {

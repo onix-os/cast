@@ -93,7 +93,7 @@ pub(in crate::client) fn validated_boot_filesystem_evidence_fixture(
 
 /// Borrowed input facts for one target in one complete observation pass.
 ///
-/// The declarative selector has already crossed the restricted Gluon intent
+/// The declarative selector has already crossed the restricted intent
 /// boundary. The descriptor-retained coordinator supplies the remaining
 /// scalars from one authenticated attachment/sysfs observation; this pure type
 /// does not establish that provenance itself.

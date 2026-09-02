@@ -2,15 +2,16 @@
 //!
 //! Decodes an authored Lua root-filesystem declaration into the single root
 //! locator string, then runs the *same* `materialize_root_argument` bounded
-//! normalization the Gluon adapter runs — under the caller-owned budget, so the
+//! normalization every adapter runs — under the caller-owned budget, so the
 //! byte-limit, work-reservation, and deadline authority is identical. Equivalent
-//! Gluon and Lua sources reach the identical validated intent value.
+//! sources in any configuration language reach the identical validated intent
+//! value.
 //!
-//! This is the budget-integrated adapter registered alongside the Gluon one, so
-//! a retained `etc/cast/root-filesystem.lua` is discovered by extension and
+//! This is a budget-integrated registered adapter, so a retained
+//! `etc/cast/root-filesystem.lua` is discovered by extension and
 //! normalized under the same absolute deadline, byte limits, and work
-//! reservation. Its evaluation contract mirrors the Gluon adapter's strictness:
-//! the fixed slot name, no admitted external inputs, and — because the Lua root
+//! reservation. Its evaluation contract keeps the shared strictness: the fixed
+//! slot name, no admitted external inputs, and — because the Lua root
 //! declaration imports nothing — an empty module set.
 
 use std::cell::RefCell;

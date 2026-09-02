@@ -1,10 +1,10 @@
 //! Lua declaration adapter for the repository domain (Phase L4).
 //!
-//! Decodes authored Lua repository fragments into the same shared `Map` the
-//! Gluon adapter produces, reusing the shared `decode_specs` validation. Options
-//! use the Lua tagged encoding; the conversion into the shared wire types
-//! mirrors the Gluon conversion, so equivalent sources normalize to equal domain
-//! values with intentionally distinct evaluation identities. Registration and
+//! Decodes authored Lua repository fragments into the shared `Map`, reusing the
+//! shared `decode_specs` validation. Options use the Lua tagged encoding; the
+//! conversion into the shared wire types is the neutral one, so equivalent
+//! sources normalize to equal domain values with intentionally distinct
+//! evaluation identities. Registration and
 //! the canonical Lua emitter are added in a later slice.
 
 use std::fmt::Write as _;
@@ -87,8 +87,8 @@ fn decode_lua_specs(specs: Vec<LuaRepositorySpec>) -> Result<Map, RepositoryConv
 }
 
 /// Stateful Lua adapter for the repository declaration boundary. Decodes an
-/// authored `.lua` fragment into the same shared [`Map`] the Gluon codec
-/// produces, with an intentionally distinct evaluation identity.
+/// authored `.lua` fragment into the shared [`Map`], with an intentionally
+/// distinct evaluation identity.
 #[derive(Debug, Clone, Default)]
 pub struct LuaRepositoryCodec {
     engine: LuaEngine,
@@ -207,8 +207,8 @@ impl DeclarationCodec<Map> for RepositoryEvaluator {
 
 /// Emit a repository [`Map`] as canonical, generated-marked Lua source that
 /// re-decodes through [`decode_lua_specs`] into the same map. The specs are
-/// derived by the shared `repository_to_spec`, so the Lua and Gluon emitters
-/// canonicalize identical domain values.
+/// derived by the shared `repository_to_spec`, so every emitter canonicalizes
+/// identical domain values.
 /// Emit the live repositories as a canonical, round-trippable generated
 /// authority fragment. Feeding the result back through the repository codec
 /// reproduces the same [`Map`]. Backs `cast repo list --canonical`.

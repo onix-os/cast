@@ -150,7 +150,7 @@ mod tests {
             logical_slot: "etc/cast/system.lua".to_owned(),
             catalog_schema_version: CATALOG_SCHEMA_VERSION,
             state_tree_marker: vec![1u8; 32],
-            original_language: "gluon".to_owned(),
+            original_language: "legacy".to_owned(),
             original_logical_path: "etc/cast/system.lua".to_owned(),
             original_sha256: vec![2u8; 32],
             migrated_language: "lua".to_owned(),

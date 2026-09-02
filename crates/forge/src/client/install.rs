@@ -538,7 +538,7 @@ mod tests {
         let installation_root = temporary.path().join("installation");
         let intent_path = system_model::intent_path(&installation_root);
         fs_err::create_dir_all(intent_path.parent().unwrap()).unwrap();
-        fs_err::write(&intent_path, b"this is deliberately invalid Gluon").unwrap();
+        fs_err::write(&intent_path, b"this is deliberately invalid declaration source").unwrap();
         fs_err::create_dir_all(installation_root.join("usr")).unwrap();
         fs_err::write(installation_root.join("usr/.stateID"), b"42").unwrap();
 

@@ -30,9 +30,9 @@ pub struct Command {
     #[arg(long)]
     dry_run: bool,
 
-    /// Sync against the provided Gluon system intent
+    /// Sync against the provided system intent
     ///
-    /// The supplied .glu expression is evaluated, and only its repositories and packages
+    /// The supplied declaration is evaluated, and only its repositories and packages
     /// will be used to create the new state
     #[arg(value_name = "system.lua", long)]
     import: Option<PathBuf>,
