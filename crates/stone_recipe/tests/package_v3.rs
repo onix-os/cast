@@ -137,6 +137,15 @@ fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
     format!(r#"{{ name = "{name}", {body} }}"#)
 }
 
+/// An archive upstream with the given hash and optional rename/unpack_dir.
+fn archive(hash: &str, rename: &str, unpack_dir: &str) -> String {
+    format!(
+        r#"{{ kind = "archive", url = "https://example.com/source.tar.xz", hash = "{hash}",
+           rename = {rename}, strip_dirs = {{ kind = "none" }}, unpack = true,
+           unpack_dir = {unpack_dir} }}"#
+    )
+}
+
 /// Every hook slot empty.
 fn empty_hooks() -> String {
     let slots = ["setup", "build", "check", "install", "workload"]
@@ -566,36 +575,18 @@ fn evaluator_rejects_typed_kind_mismatches_in_a_selected_profile() {
 
 #[test]
 fn missing_local_output_reference_has_an_indexed_field() {
-    let source = authored(
-        r#"
-let root = {
-    runtime_inputs = [a.dep.output (a.package_ref "example") "missing"],
-    .. a.output "out"
-}
-{
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let root = output_with(
+        "out",
+        &[(
+            "runtime_inputs",
+            &format!("{{ {} }}", output_dep("example", "missing")),
+        )],
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {root} }} }}",
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -608,29 +599,11 @@ let root = {
 
 #[test]
 fn evaluator_validates_the_concrete_package() {
-    let source = authored(
-        r#"
-{
-    meta = {
-        pname = "example", version = "v1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-    );
+    let source = authored(&format!(
+        r#"{{ meta = {{ pname = "example", version = "v1.0.0", release = 1,
+            homepage = "https://example.com", license = {{ "MPL-2.0" }} }}, builder = {} }}"#,
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -644,66 +617,36 @@ fn evaluator_validates_the_concrete_package() {
 fn evaluator_rejects_malformed_source_fields_before_planning() {
     for (source, expected_field, expected_message) in [
         (
-            r#"a.source.archive "https://example.com/source.tar.xz" "short""#,
+            archive("short", "{ kind = \"none\" }", "{ kind = \"none\" }"),
             "sources[0].hash",
             "64 lowercase ASCII hexadecimal",
         ),
         (
-            r#"a.source.archive_with {
-                url = "https://example.com/source.tar.xz",
-                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                rename = a.optional.set "../escape",
-                strip_dirs = a.optional.unset,
-                unpack = a.true,
-                unpack_dir = a.optional.unset,
-            }"#,
+            archive(&"a".repeat(64), r#"{ kind = "some", value = "../escape" }"#, "{ kind = \"none\" }"),
             "sources[0].rename",
             "normalized filename component",
         ),
         (
-            r#"a.source.archive_with {
-                url = "https://example.com/source.tar.xz",
-                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                rename = a.optional.unset,
-                strip_dirs = a.optional.unset,
-                unpack = a.true,
-                unpack_dir = a.optional.set "../../escape",
-            }"#,
+            archive(
+                &"a".repeat(64),
+                "{ kind = \"none\" }",
+                r#"{ kind = "some", value = "../../escape" }"#,
+            ),
             "sources[0].unpack_dir",
             "normalized, non-empty relative path",
         ),
         (
-            r#"a.source.git "https://example.com/source.git" """#,
+            r#"{ kind = "git", url = "https://example.com/source.git", git_ref = "",
+               clone_dir = { kind = "none" } }"#
+                .to_owned(),
             "sources[0].git_ref",
             "must be non-empty",
         ),
     ] {
         let source = authored(&format!(
-            r#"
-let base = {{
-    meta = {{
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-{{
-    sources = [{source}],
-    .. base
-}}
-"#
+            "{{ {}, builder = {}, sources = {{ {source} }} }}",
+            meta("example"),
+            custom_builder("", ""),
         ));
 
         let error = evaluate_default_package(&source).unwrap_err();
