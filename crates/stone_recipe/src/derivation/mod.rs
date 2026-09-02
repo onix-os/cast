@@ -17,7 +17,8 @@ pub use self::build_lock::{
     AnalyzerRole, BUILD_LOCK_FILE_NAME, BUILD_LOCK_GENERATED_GLUON_MARKER,
     BUILD_LOCK_SCHEMA_VERSION, BuildLock,
     BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole, InputOrigin, JobExecutableRole,
-    GluonBuildLockCodec, JobStepSection, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection,
+    GluonBuildLockCodec, JobStepSection, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
+    LuaBuildLockCodec, PackageInputSelection,
     Platform, RepositorySnapshot, RequestedInput, requested_inputs_digest,
 };
 pub use self::provenance::{

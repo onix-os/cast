@@ -10,18 +10,19 @@ use super::CanonicalEncoder;
 use self::closure_validation::{detect_dependency_cycles, require_nonempty, require_reachable_packages};
 pub use self::{
     gluon_codec::{BUILD_LOCK_GENERATED_GLUON_MARKER, GluonBuildLockCodec},
+    lua::{LuaBuildLockCodec, encode_lua_lock},
     validation_errors::BuildLockValidationError,
 };
 
 mod closure_validation;
 mod gluon_codec;
-mod lua;
+pub mod lua;
 mod validation_errors;
 
 #[cfg(test)]
 mod tests;
 
-pub const BUILD_LOCK_FILE_NAME: &str = "build.lock.glu";
+pub const BUILD_LOCK_FILE_NAME: &str = "build.lock.lua";
 pub const BUILD_LOCK_SCHEMA_VERSION: u32 = 6;
 
 const BUILD_LOCK_HASH_DOMAIN: &[u8] = b"os-tools-build-lock\0";

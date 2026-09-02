@@ -6,9 +6,9 @@ use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Source,
 };
+use lua_config::GENERATED_LUA_MARKER;
 use stone_recipe::derivation::{
-    BUILD_LOCK_FILE_NAME, BUILD_LOCK_GENERATED_GLUON_MARKER, BuildLock,
-    BuildLockValidationError, GluonBuildLockCodec, LockedIdentity, Platform,
+    BUILD_LOCK_FILE_NAME, BuildLock, BuildLockValidationError, LockedIdentity, LuaBuildLockCodec, Platform,
     RequestedInput,
 };
 use thiserror::Error;
@@ -32,7 +32,7 @@ pub fn path_for_recipe(recipe: &Path) -> PathBuf {
 }
 
 pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
-    let codec = GluonBuildLockCodec::default();
+    let codec = LuaBuildLockCodec::default();
     let bytes = match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() => return Ok(Status::Missing),
@@ -198,7 +198,7 @@ fn require_selected_value(path: &Path, field: &str, expected: &str, found: &str)
 /// bytes leave the existing inode untouched.
 pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
     lock.validate()?;
-    let codec = GluonBuildLockCodec::default();
+    let codec = LuaBuildLockCodec::default();
     let encoded = codec.encode(lock)?;
     match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
@@ -216,7 +216,7 @@ pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
         path,
         BUILD_LOCK_FILE_NAME,
         codec.language_spec(),
-        BUILD_LOCK_GENERATED_GLUON_MARKER,
+        GENERATED_LUA_MARKER,
         codec.limits().max_source_bytes,
     )
     .map_err(|source| Error::Write {
@@ -300,7 +300,7 @@ mod tests {
     use super::*;
 
     fn canonical_build_lock(lock: &BuildLock) -> String {
-        GluonBuildLockCodec::default().encode(lock).unwrap()
+        LuaBuildLockCodec::default().encode(lock).unwrap()
     }
 
     fn platform() -> Platform {
@@ -441,7 +441,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(BUILD_LOCK_FILE_NAME);
-        let limit = GluonBuildLockCodec::default().limits().max_source_bytes;
+        let limit = LuaBuildLockCodec::default().limits().max_source_bytes;
         fs::File::create(&path)
             .unwrap()
             .set_len(u64::try_from(limit).unwrap() + 1)

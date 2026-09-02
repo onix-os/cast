@@ -10,6 +10,7 @@
 use std::fmt::Write as _;
 
 use declarative_config::{
+    DeclarationCodec,
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
@@ -25,8 +26,8 @@ use super::{
 /// through this adapter into the same [`BuildLock`]. This is the lock's write
 /// path — what a generated-slot authority switch writes when it converts a
 /// `build.lock.glu` to `build.lock.lua`.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn encode_lua_lock(lock: &BuildLock) -> String {
+
+pub fn encode_lua_lock(lock: &BuildLock) -> String {
     let mut output = String::from(GENERATED_LUA_MARKER);
     let _ = write!(
         output,
@@ -225,7 +226,7 @@ fn input_origin(origin: &InputOrigin) -> String {
 ///
 /// Proven by the parity tests below; the `.lua` build-lock loader wiring that
 /// constructs it in production is a later slice.
-#[cfg_attr(not(test), allow(dead_code))]
+
 #[derive(Debug, Clone, Default)]
 pub struct LuaBuildLockCodec {
     engine: LuaEngine,
@@ -366,5 +367,11 @@ return {
             .expect("lua build lock evaluates")
             .identity;
         assert_eq!(identity.engine.implementation(), "lua");
+    }
+}
+
+impl DeclarationCodec<BuildLock> for LuaBuildLockCodec {
+    fn encode(&self, lock: &BuildLock) -> Result<String, Self::Error> {
+        Ok(encode_lua_lock(lock))
     }
 }

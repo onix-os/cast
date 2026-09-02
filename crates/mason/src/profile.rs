@@ -27,6 +27,7 @@ mod gluon;
 mod lua;
 
 pub use gluon::ProfileCodec;
+pub use lua::LuaProfileCodec;
 
 /// A unique [`Profile`] identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Display)]
@@ -381,7 +382,7 @@ impl<'a> Manager<'a> {
 
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile)]);
-        let codec = ProfileCodec::default();
+        let codec = LuaProfileCodec::default();
         let active_language = codec.language_spec().clone();
         let evaluators = DeclarationEvaluatorSet::new([codec])
             .expect("one validated profile adapter has no extension collision");

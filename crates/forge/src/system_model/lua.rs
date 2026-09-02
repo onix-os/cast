@@ -44,6 +44,29 @@ impl From<LuaSystemSpec> for spec::SystemSpec {
     }
 }
 
+/// Records which authored source produced a generated snapshot, written using
+/// Lua comment syntax.
+const SOURCE_FINGERPRINT_PREFIX: &str = "-- Authored source fingerprint: ";
+
+pub(super) fn is_generated_snapshot(source: &str) -> bool {
+    source.starts_with(GENERATED_LUA_MARKER)
+}
+
+pub(super) fn generated_source_fingerprint(source: &str) -> Option<String> {
+    source
+        .lines()
+        .find_map(|line| line.strip_prefix(SOURCE_FINGERPRINT_PREFIX))
+        .filter(|fingerprint| fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(ToOwned::to_owned)
+}
+
+pub(super) fn with_source_fingerprint(generated: &str, source_fingerprint: &str) -> String {
+    let generated = generated
+        .strip_prefix(GENERATED_LUA_MARKER)
+        .expect("Cast-generated system snapshots always carry the generated marker");
+    format!("{GENERATED_LUA_MARKER}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}")
+}
+
 /// Stateful read-only Lua adapter for authored system declarations.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LuaSystemEvaluator {
