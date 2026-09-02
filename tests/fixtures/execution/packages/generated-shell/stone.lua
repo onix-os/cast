@@ -10,87 +10,90 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "\nprintf '%s\\n' \\\n    '#!/usr/bin/bash' \\\n    'set -euo pipefail' \\\n    '' \\\n    'if [[ \"$#\" -eq 0 ]]; then' \\\n    \"    printf '%s\\\\n' 'cast-generated-shell'\" \\\n    'elif [[ \"$#\" -eq 1 && \"$1\" == --self-test ]]; then' \\\n    \"    printf '%s\\\\n' 'cast-generated-shell: self-test passed'\" \\\n    'else' \\\n    \"    printf '%s\\\\n' 'usage: cast-generated-shell [--self-test]' >&2\" \\\n    '    exit 64' \\\n    'fi' \\\n    > cast-generated-shell\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "install -Dm755 cast-generated-shell \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell\""
+                            },
+                            declared_programs = {},
+                            script = "\nprintf '%s\\n' \\\n    '#!/usr/bin/bash' \\\n    'set -euo pipefail' \\\n    '' \\\n    'if [[ \"$#\" -eq 0 ]]; then' \\\n    \"    printf '%s\\\\n' 'cast-generated-shell'\" \\\n    'elif [[ \"$#\" -eq 1 && \"$1\" == --self-test ]]; then' \\\n    \"    printf '%s\\\\n' 'cast-generated-shell: self-test passed'\" \\\n    'else' \\\n    \"    printf '%s\\\\n' 'usage: cast-generated-shell [--self-test]' >&2\" \\\n    '    exit 64' \\\n    'fi' \\\n    > cast-generated-shell\n"
+                        }
                     }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 cast-generated-shell \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "\nactual=\"$(source ./cast-generated-shell --self-test)\"\nif [[ \"${actual}\" != 'cast-generated-shell: self-test passed' ]]; then\n    printf '%s\\n' 'generated shell self-test output differed' >&2\n    exit 1\nfi\n\nset +e\n(source ./cast-generated-shell --unexpected >/dev/null 2>&1)\nstatus=\"$?\"\nset -e\nif [[ \"${status}\" -ne 64 ]]; then\n    printf 'unexpected-argument status was %s, expected 64\\n' \"${status}\" >&2\n    exit 1\nfi\n"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "\nactual=\"$(source ./cast-generated-shell --self-test)\"\nif [[ \"${actual}\" != 'cast-generated-shell: self-test passed' ]]; then\n    printf '%s\\n' 'generated shell self-test output differed' >&2\n    exit 1\nfi\n\nset +e\n(source ./cast-generated-shell --unexpected >/dev/null 2>&1)\nstatus=\"$?\"\nset -e\nif [[ \"${status}\" -ne 64 ]]; then\n    printf 'unexpected-argument status was %s, expected 64\\n' \"${status}\" >&2\n    exit 1\nfi\n"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

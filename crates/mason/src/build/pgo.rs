@@ -37,6 +37,28 @@ mod tests {
 
     use super::*;
 
+    /// The ten hook slots a profile must name, all empty.
+    const EMPTY_HOOKS: &str = "{ pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {}, \
+         pre_check = {}, post_check = {}, pre_install = {}, post_install = {}, \
+         pre_workload = {}, post_workload = {} }";
+
+    /// Every builder phase accepts hooks.
+    const ALL_HOOKS: &str =
+        "{ setup = true, build = true, check = true, install = true, workload = true }";
+
+    /// The five builder phases, all empty but `workload`.
+    const WORKLOAD_ONLY_PHASES: &str = r#"{
+        setup = { steps = {} },
+        build = { steps = {} },
+        install = { steps = {} },
+        check = { steps = {} },
+        workload = { steps = { {
+            kind = "run",
+            program = { path = "run-workload", requirement = { kind = "binary", value = "run-workload" } },
+            args = {},
+        } } },
+    }"#;
+
     #[test]
     fn selected_profile_workload_preserves_llvm_pgo_stages() {
         let policy = crate::BuildPolicy::repository_for_tests();
@@ -46,47 +68,52 @@ mod tests {
         fs::write(
             root.path().join("stone.lua"),
             format!(
-                r#"let a = import! cast.authored.v1
-let scripts = a.scripts {{
-    workload = a.phase [a.step.run (a.program.binary "run-workload") []],
-    .. a.empty.scripts
-}}
-let profile = a.profile {{
-    name = {target_name:?},
-    builder = {{
-        required_tools = [],
-        environment = [],
-        phases = scripts,
-        supported_hooks = a.hook_support.all,
-    }},
-    hooks = a.empty.hooks,
-    native_build_inputs = [], build_inputs = [], check_inputs = [],
-}}
-{{
+                r#"return {{
     meta = {{
         pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.invalid", license = ["MPL-2.0"],
+        homepage = "https://example.invalid", license = {{ "MPL-2.0" }},
     }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [], build_inputs = [], check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.some.options (a.options {{
-        toolchain = a.toolchain.llvm,
-        cspgo = a.true,
-        samplepgo = a.false,
-        debug = a.true,
-        strip = a.true,
-        networking = a.false,
-        compressman = a.false,
-        lastrip = a.true,
-    }}),
-    profiles = [profile],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = {{
+        required_tools = {{}},
+        environment = {{}},
+        phases = {{
+            setup = {{ steps = {{}} }},
+            build = {{ steps = {{}} }},
+            install = {{ steps = {{}} }},
+            check = {{ steps = {{}} }},
+            workload = {{ steps = {{}} }},
+        }},
+        supported_hooks = {ALL_HOOKS},
+    }},
+    hooks = {EMPTY_HOOKS},
+    native_build_inputs = {{}}, build_inputs = {{}}, check_inputs = {{}},
+    outputs = {{}},
+    options = {{
+        toolchain = "llvm",
+        cspgo = true,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    }},
+    profiles = {{ {{
+        name = {target_name:?},
+        builder = {{
+            required_tools = {{}},
+            environment = {{}},
+            phases = {WORKLOAD_ONLY_PHASES},
+            supported_hooks = {ALL_HOOKS},
+        }},
+        hooks = {EMPTY_HOOKS},
+        native_build_inputs = {{}}, build_inputs = {{}}, check_inputs = {{}},
+    }} }},
+    sources = {{}},
+    architectures = {{}},
+    tuning = {{}},
+    emul32 = false,
+    mold = false,
 }}
 "#
             ),

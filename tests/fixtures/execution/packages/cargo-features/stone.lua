@@ -10,55 +10,58 @@ return {
         }
     },
     builder = {
-        required_tools = {},
-        environment = {
-            "cargo"
-        },
-        phases = {
-            setup = {
-                steps = {}
+        kind = "custom",
+        spec = {
+            required_tools = {},
+            environment = {
+                "cargo"
             },
-            build = {
-                steps = {
-                    {
-                        kind = "cargo_build",
-                        features = {
-                            "fixture-protocol"
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "cargo_build",
+                            features = {
+                                "fixture-protocol"
+                            }
                         }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "cargo_install",
-                        binaries = {
-                            "cast-feature-client",
-                            "cast-feature-daemon"
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "cargo_install",
+                            binaries = {
+                                "cast-feature-client",
+                                "cast-feature-daemon"
+                            }
                         }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "cargo_test",
-                        features = {
-                            "fixture-protocol"
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "cargo_test",
+                            features = {
+                                "fixture-protocol"
+                            }
                         }
                     }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

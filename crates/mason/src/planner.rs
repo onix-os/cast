@@ -415,33 +415,76 @@ mod tests {
         fs::write(
             root.path().join("stone.lua"),
             format!(
-                r#"let a = import! cast.authored.v1
-{{
+                r#"return {{
     meta = {{
         pname = "example",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid",
-        license = ["MPL-2.0"],
+        license = {{ "MPL-2.0" }},
     }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [a.source.git_with {{
-        url = "{URL}",
-        git_ref = "main",
-        clone_dir = a.optional.set "chosen-source",
-    }}],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}"#
+    builder = {{
+        kind = "custom",
+        spec = {{
+            required_tools = {{}},
+            environment = {{}},
+            phases = {{
+                setup = {{ steps = {{}} }},
+                build = {{ steps = {{}} }},
+                install = {{ steps = {{}} }},
+                check = {{ steps = {{}} }},
+                workload = {{ steps = {{}} }},
+            }},
+            supported_hooks = {{
+                setup = false,
+                build = false,
+                check = false,
+                install = false,
+                workload = false,
+            }},
+        }},
+    }},
+    sources = {{
+        {{
+            kind = "git",
+            url = "{URL}",
+            git_ref = "main",
+            clone_dir = {{ kind = "some", value = "chosen-source" }},
+        }},
+    }},
+    native_build_inputs = {{}},
+    build_inputs = {{}},
+    check_inputs = {{}},
+    outputs = {{
+        {{
+            name = "out",
+            include_in_manifest = true,
+            summary = {{ kind = "none" }},
+            description = {{ kind = "none" }},
+            provides_exclude = {{}},
+            runtime_inputs = {{}},
+            runtime_exclude = {{}},
+            paths = {{}},
+            conflicts = {{}},
+        }},
+    }},
+    options = {{
+        toolchain = "llvm",
+        cspgo = false,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    }},
+    profiles = {{}},
+    architectures = {{}},
+    tuning = {{}},
+    emul32 = false,
+    mold = false,
+}}
+"#
             ),
         )
         .unwrap();

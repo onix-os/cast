@@ -37,9 +37,9 @@
             .join(", ");
         format!(
             "return {{\n    meta = {source},\n    \
-             builder = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
-             supported_hooks = {{ setup = false, build = false, check = false, install = false, \
-             workload = false }} }},\n    \
+             builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+             phases = {{ {phases} }}, supported_hooks = {{ setup = false, build = false, \
+             check = false, install = false, workload = false }} }} }},\n    \
              hooks = {{ {hooks} }},\n    \
              native_build_inputs = {{}}, build_inputs = {{}}, check_inputs = {{}},\n    \
              outputs = {{ {{ name = \"out\", include_in_manifest = true, \

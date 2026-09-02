@@ -10,158 +10,161 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "dash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "dash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-std=c11",
-                            "-O2",
-                            "-g",
-                            "-Wall",
-                            "-Wextra",
-                            "-Werror",
-                            "-fstack-protector-strong",
-                            "-D_FORTIFY_SOURCE=3",
-                            "-fPIC",
-                            "-shared",
-                            "plugin.c",
-                            "-Wl,-soname,cast-plugin-output.so",
-                            "-Wl,--build-id=sha1",
-                            "-Wl,-z,relro,-z,now",
-                            "-Wl,-z,noexecstack",
-                            "-Wl,-z,separate-code",
-                            "-Wl,--no-undefined",
-                            "-o",
-                            "build/cast-plugin-output.so"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-std=c11",
-                            "-O2",
-                            "-g",
-                            "-Wall",
-                            "-Wextra",
-                            "-Werror",
-                            "-fstack-protector-strong",
-                            "-D_FORTIFY_SOURCE=3",
-                            "-fPIE",
-                            "host.c",
-                            "-Wl,-pie",
-                            "-Wl,--build-id=sha1",
-                            "-Wl,-z,relro,-z,now",
-                            "-Wl,-z,noexecstack",
-                            "-Wl,-z,separate-code",
-                            "-Wl,--as-needed",
-                            "-ldl",
-                            "-o",
-                            "build/cast-plugin-host"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
+                            },
+                            args = {
+                                "-p",
+                                "build"
                             }
-                        },
-                        script = "\ninstall -Dm755 build/cast-plugin-host \\\n    \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-plugin-host\"\ninstall -Dm644 build/cast-plugin-output.so \\\n    \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/cast/plugins/cast-plugin-output.so\"\n"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/cast-plugin-host"
-                        },
-                        args = {
-                            "--plugin",
-                            "build/cast-plugin-output.so"
                         }
                     }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-std=c11",
+                                "-O2",
+                                "-g",
+                                "-Wall",
+                                "-Wextra",
+                                "-Werror",
+                                "-fstack-protector-strong",
+                                "-D_FORTIFY_SOURCE=3",
+                                "-fPIC",
+                                "-shared",
+                                "plugin.c",
+                                "-Wl,-soname,cast-plugin-output.so",
+                                "-Wl,--build-id=sha1",
+                                "-Wl,-z,relro,-z,now",
+                                "-Wl,-z,noexecstack",
+                                "-Wl,-z,separate-code",
+                                "-Wl,--no-undefined",
+                                "-o",
+                                "build/cast-plugin-output.so"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-std=c11",
+                                "-O2",
+                                "-g",
+                                "-Wall",
+                                "-Wextra",
+                                "-Werror",
+                                "-fstack-protector-strong",
+                                "-D_FORTIFY_SOURCE=3",
+                                "-fPIE",
+                                "host.c",
+                                "-Wl,-pie",
+                                "-Wl,--build-id=sha1",
+                                "-Wl,-z,relro,-z,now",
+                                "-Wl,-z,noexecstack",
+                                "-Wl,-z,separate-code",
+                                "-Wl,--as-needed",
+                                "-ldl",
+                                "-o",
+                                "build/cast-plugin-host"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm755 build/cast-plugin-host \\\n    \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-plugin-host\"\ninstall -Dm644 build/cast-plugin-output.so \\\n    \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/cast/plugins/cast-plugin-output.so\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/cast-plugin-host"
+                            },
+                            args = {
+                                "--plugin",
+                                "build/cast-plugin-output.so"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

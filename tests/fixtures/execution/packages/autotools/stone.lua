@@ -10,75 +10,78 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "autoconf"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "autoconf"
+                },
+                {
+                    kind = "binary",
+                    value = "automake"
+                },
+                {
+                    kind = "binary",
+                    value = "awk"
+                },
+                {
+                    kind = "binary",
+                    value = "grep"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "sed"
+                }
             },
-            {
-                kind = "binary",
-                value = "automake"
+            environment = {
+                "autotools"
             },
-            {
-                kind = "binary",
-                value = "awk"
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "autotools_configure",
+                            flags = {}
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "autotools_build"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "autotools_install"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "autotools_test"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            {
-                kind = "binary",
-                value = "grep"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "sed"
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {
-            "autotools"
-        },
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "autotools_configure",
-                        flags = {}
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "autotools_build"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "autotools_install"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "autotools_test"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

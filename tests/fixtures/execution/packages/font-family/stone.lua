@@ -10,82 +10,85 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "dash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm644 fonts/CastAsterFixture-Regular.ttf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Regular.ttf\"\ninstall -Dm644 fonts/CastAsterFixture-Bold.ttf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Bold.ttf\"\ninstall -Dm644 OFL.txt \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-font-family-fixture/OFL.txt\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "dash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/fc-scan",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "fc-scan"
+                                    value = "dash"
                                 }
-                            }
-                        },
-                        script = "font_root=\"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture\"\nregular=\"$font_root/CastAsterFixture-Regular.ttf\"\nbold=\"$font_root/CastAsterFixture-Bold.ttf\"\n[ \"$(fc-scan --format '%{family[0]}|%{style[0]}|%{fontformat}|%{fullname[0]}|%{postscriptname}\\n' \"$regular\")\" = 'Cast Aster Fixture|Regular|TrueType|Cast Aster Fixture Regular|CastAsterFixture-Regular' ]\n[ \"$(fc-scan --format '%{family[0]}|%{style[0]}|%{fontformat}|%{fullname[0]}|%{postscriptname}\\n' \"$bold\")\" = 'Cast Aster Fixture|Bold|TrueType|Cast Aster Fixture Bold|CastAsterFixture-Bold' ]\nset -- \"$font_root/\"*.ttf\n[ \"$#\" -eq 2 ]\nfor cache in \"$font_root/\"fonts.cache-* \"$font_root/fonts.dir\" \"$font_root/fonts.scale\"; do\n    [ ! -e \"$cache\" ]\ndone"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm644 fonts/CastAsterFixture-Regular.ttf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Regular.ttf\"\ninstall -Dm644 fonts/CastAsterFixture-Bold.ttf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Bold.ttf\"\ninstall -Dm644 OFL.txt \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-font-family-fixture/OFL.txt\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/fc-scan",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "fc-scan"
+                                    }
+                                }
+                            },
+                            script = "font_root=\"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture\"\nregular=\"$font_root/CastAsterFixture-Regular.ttf\"\nbold=\"$font_root/CastAsterFixture-Bold.ttf\"\n[ \"$(fc-scan --format '%{family[0]}|%{style[0]}|%{fontformat}|%{fullname[0]}|%{postscriptname}\\n' \"$regular\")\" = 'Cast Aster Fixture|Regular|TrueType|Cast Aster Fixture Regular|CastAsterFixture-Regular' ]\n[ \"$(fc-scan --format '%{family[0]}|%{style[0]}|%{fontformat}|%{fullname[0]}|%{postscriptname}\\n' \"$bold\")\" = 'Cast Aster Fixture|Bold|TrueType|Cast Aster Fixture Bold|CastAsterFixture-Bold' ]\nset -- \"$font_root/\"*.ttf\n[ \"$#\" -eq 2 ]\nfor cache in \"$font_root/\"fonts.cache-* \"$font_root/fonts.dir\" \"$font_root/fonts.scale\"; do\n    [ ! -e \"$cache\" ]\ndone"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

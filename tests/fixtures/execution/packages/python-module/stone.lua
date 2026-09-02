@@ -10,116 +10,119 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "python3"
+                }
             },
-            {
-                kind = "binary",
-                value = "python3"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "test -s pyproject.toml\ntest -s src/cast_python_module_fixture/__init__.py\ntest -s src/cast_python_module_fixture/codec.py\ntest -s src/cast_python_module_fixture/__main__.py\ntest -s tests/test_codec.py\ntest ! -e setup.py\ntest ! -e setup.cfg\ntest ! -e tox.ini"
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m build --wheel --no-isolation --outdir dist\nshopt -s nullglob\nwheels=(dist/*.whl)\ntest \"${#wheels[@]}\" -eq 1\ntest \"${wheels[0]}\" = dist/cast_python_module_fixture-1.0.0-py3-none-any.whl\ntest -s \"${wheels[0]}\""
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m installer --destdir \"${CAST_INSTALL_ROOT}\" --prefix \"${CAST_PREFIX}\" --no-compile-bytecode --validate-record all dist/cast_python_module_fixture-1.0.0-py3-none-any.whl\nstaged_purelib=$(python3 -c 'import sysconfig, sys; print(sysconfig.get_path(\"purelib\", vars={\"base\": sys.argv[1], \"platbase\": sys.argv[1]}))' \"${CAST_INSTALL_ROOT}${CAST_PREFIX}\")\ntest -s \"${staged_purelib}/cast_python_module_fixture/codec.py\"\ntest -s \"${staged_purelib}/cast_python_module_fixture-1.0.0.dist-info/METADATA\"\nPYTHONPATH=\"${staged_purelib}\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-python-module-fixture\" --self-test"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m pytest -q\nPYTHONPATH=src python3 -m cast_python_module_fixture --self-test"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -s pyproject.toml\ntest -s src/cast_python_module_fixture/__init__.py\ntest -s src/cast_python_module_fixture/codec.py\ntest -s src/cast_python_module_fixture/__main__.py\ntest -s tests/test_codec.py\ntest ! -e setup.py\ntest ! -e setup.cfg\ntest ! -e tox.ini"
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m build --wheel --no-isolation --outdir dist\nshopt -s nullglob\nwheels=(dist/*.whl)\ntest \"${#wheels[@]}\" -eq 1\ntest \"${wheels[0]}\" = dist/cast_python_module_fixture-1.0.0-py3-none-any.whl\ntest -s \"${wheels[0]}\""
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m installer --destdir \"${CAST_INSTALL_ROOT}\" --prefix \"${CAST_PREFIX}\" --no-compile-bytecode --validate-record all dist/cast_python_module_fixture-1.0.0-py3-none-any.whl\nstaged_purelib=$(python3 -c 'import sysconfig, sys; print(sysconfig.get_path(\"purelib\", vars={\"base\": sys.argv[1], \"platbase\": sys.argv[1]}))' \"${CAST_INSTALL_ROOT}${CAST_PREFIX}\")\ntest -s \"${staged_purelib}/cast_python_module_fixture/codec.py\"\ntest -s \"${staged_purelib}/cast_python_module_fixture-1.0.0.dist-info/METADATA\"\nPYTHONPATH=\"${staged_purelib}\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-python-module-fixture\" --self-test"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport PYTHONHASHSEED=0\nexport PYTHONDONTWRITEBYTECODE=1\numask 022\npython3 -m pytest -q\nPYTHONPATH=src python3 -m cast_python_module_fixture --self-test"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

@@ -29,8 +29,8 @@ mod execution_evidence;
 pub(crate) use execution_evidence::DelegatedExecutionOutcome;
 
 const BOOTSTRAP_SCHEMA_VERSION: i64 = 2;
-const MAX_BOOTSTRAP_CLOSURE_BYTES: usize = 64 * 1024;
-const MAX_BOOTSTRAP_CLOSURE_GRAPH_BYTES: usize = 4 * MAX_BOOTSTRAP_CLOSURE_BYTES;
+const MAX_BOOTSTRAP_CLOSURE_GRAPH_BYTES: usize = 256 * 1024;
+const MAX_BOOTSTRAP_CLOSURE_BYTES: usize = MAX_BOOTSTRAP_CLOSURE_GRAPH_BYTES;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -557,24 +557,28 @@ impl BootstrapPlanningMatrix {
 
         let mirror_uri = Url::from_directory_path(&mirror).unwrap();
         fs::write(
-            config_dir.join("profile.d/bootstrap.glu"),
+            config_dir.join("profile.d/bootstrap.lua"),
             format!(
-                r#"let cast = import! cast.profile.v1
-
-cast.profiles [
-    cast.profile "{BOOTSTRAP_PROFILE}" [
-        cast.repository.root_index_with {{
-            id = "bootstrap",
-            description = cast.optional.some "Pinned contentful execution bootstrap",
-            base_uri = "{mirror_uri}",
-            channel = cast.optional.some "{}",
-            version = "{}",
-            arch = cast.optional.some "{}",
-            priority = cast.optional.some 0,
-            enabled = cast.optional.some cast.boolean.true,
+                r#"return {{
+    {{
+        id = "{BOOTSTRAP_PROFILE}",
+        repositories = {{
+            {{
+                id = "bootstrap",
+                description = {{ kind = "some", value = "Pinned contentful execution bootstrap" }},
+                source = {{
+                    kind = "root_index",
+                    base_uri = "{mirror_uri}",
+                    channel = {{ kind = "some", value = "{}" }},
+                    version = "{}",
+                    arch = {{ kind = "some", value = "{}" }},
+                }},
+                priority = {{ kind = "some", value = 0 }},
+                enabled = {{ kind = "some", value = true }},
+            }},
         }},
-    ],
-]
+    }},
+}}
 "#,
                 closure.repository.channel, closure.repository.version, closure.repository.architecture
             ),

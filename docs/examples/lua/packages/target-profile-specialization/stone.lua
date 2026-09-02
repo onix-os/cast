@@ -139,54 +139,51 @@ return {
         {
             name = "x86_64",
             builder = {
-                kind = "custom",
-                spec = {
-                    required_tools = {
-                        {
-                            kind = "binary",
-                            value = "profile-builder-tool"
-                        }
+                required_tools = {
+                    {
+                        kind = "binary",
+                        value = "profile-builder-tool"
+                    }
+                },
+                environment = {},
+                phases = {
+                    setup = {
+                        steps = {}
                     },
-                    environment = {},
-                    phases = {
-                        setup = {
-                            steps = {}
-                        },
-                        build = {
-                            steps = {
-                                {
-                                    kind = "run",
-                                    program = {
-                                        path = "/usr/bin/profile-phase-runner",
-                                        requirement = {
-                                            kind = "binary",
-                                            value = "profile-phase-runner"
-                                        }
-                                    },
-                                    args = {
-                                        "--target",
-                                        "x86_64"
+                    build = {
+                        steps = {
+                            {
+                                kind = "run",
+                                program = {
+                                    path = "/usr/bin/profile-phase-runner",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "profile-phase-runner"
                                     }
+                                },
+                                args = {
+                                    "--target",
+                                    "x86_64"
                                 }
                             }
-                        },
-                        install = {
-                            steps = {}
-                        },
-                        check = {
-                            steps = {}
-                        },
-                        workload = {
-                            steps = {}
                         }
                     },
-                    supported_hooks = {
-                        setup = true,
-                        build = true,
-                        check = true,
-                        install = true,
-                        workload = true
+                    install = {
+                        steps = {}
+                    },
+                    check = {
+                        steps = {}
+                    },
+                    workload = {
+                        steps = {}
                     }
+                },
+                supported_hooks = {
+                    setup = true,
+                    build = true,
+                    check = true,
+                    install = true,
+                    workload = true
                 }
             },
             hooks = {

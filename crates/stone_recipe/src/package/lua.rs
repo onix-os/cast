@@ -501,7 +501,7 @@ pub fn encode_lua_recipe(package: &PackageSpec) -> String {
          mold = {},\n\
          }}\n",
         meta(&package.meta),
-        builder(&package.builder),
+        builder_request(&package.builder),
         hooks(&package.hooks),
         seq(&package.native_build_inputs, dependency),
         seq(&package.build_inputs, dependency),
@@ -633,18 +633,22 @@ fn supported_hooks(s: &SupportedHooksSpec) -> String {
     )
 }
 
-/// A lowered builder is emitted as the `custom` builder request — the authored
-/// spelling for a builder supplied as complete data — so an emitted recipe uses
-/// the same single authoring ABI a hand-written one does.
 fn builder(b: &BuilderSpec) -> String {
     format!(
-        "{{ kind = \"custom\", spec = {{ required_tools = {}, environment = {}, phases = {}, \
-         supported_hooks = {} }} }}",
+        "{{ required_tools = {}, environment = {}, phases = {}, supported_hooks = {} }}",
         seq(&b.required_tools, dependency),
         seq(&b.environment, |e| builder_environment(e).to_owned()),
         phases(&b.phases),
         supported_hooks(&b.supported_hooks),
     )
+}
+
+/// A package's lowered builder is emitted as the `custom` builder request — the
+/// authored spelling for a builder supplied as complete data — so an emitted
+/// recipe uses the same single authoring ABI a hand-written one does. A
+/// profile's builder is already a complete spec and stays unwrapped.
+fn builder_request(b: &BuilderSpec) -> String {
+    format!(r#"{{ kind = "custom", spec = {} }}"#, builder(b))
 }
 
 fn path_spec(p: &PathSpec) -> String {

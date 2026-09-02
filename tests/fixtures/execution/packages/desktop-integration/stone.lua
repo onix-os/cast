@@ -10,117 +10,120 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "dash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm755 integration/cast-desktop-integration-fixture \"${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.desktop \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/applications/io.cast.desktop-integration-fixture.desktop\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.metainfo.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/metainfo/io.cast.desktop-integration-fixture.metainfo.xml\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.gschema.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/glib-2.0/schemas/io.cast.desktop-integration-fixture.gschema.xml\"\ninstall -Dm644 integration/application-x-cast-desktop-integration-fixture.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/mime/packages/application-x-cast-desktop-integration-fixture.xml\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.svg \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg\"\ninstall -Dm644 COPYING \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-desktop-integration-fixture/COPYING\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "dash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/desktop-file-validate",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "desktop-file-validate"
+                                    value = "dash"
                                 }
                             },
-                            {
-                                path = "/usr/bin/glib-compile-schemas",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "glib-compile-schemas"
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
                                 }
                             },
-                            {
-                                path = "/usr/bin/appstreamcli",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "appstreamcli"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/update-mime-database",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "update-mime-database"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/xmllint",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "xmllint"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "\"${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture\" --self-test\ndesktop-file-validate \"${CAST_INSTALL_ROOT}/usr/share/applications/io.cast.desktop-integration-fixture.desktop\"\nglib-compile-schemas --strict --dry-run \"${CAST_INSTALL_ROOT}/usr/share/glib-2.0/schemas\"\nappstreamcli validate --no-net --strict --pedantic \"${CAST_INSTALL_ROOT}/usr/share/metainfo/io.cast.desktop-integration-fixture.metainfo.xml\"\nxmllint --nonet --noout \"${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml\" \"${CAST_INSTALL_ROOT}/usr/share/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg\"\ninstall -Dm644 \"${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml\" build/mime-validation/packages/application-x-cast-desktop-integration-fixture.xml\nXDG_DATA_HOME=\"$PWD/build\" XDG_DATA_DIRS=\"$PWD/build\" update-mime-database build/mime-validation"
+                            script = "install -Dm755 integration/cast-desktop-integration-fixture \"${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.desktop \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/applications/io.cast.desktop-integration-fixture.desktop\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.metainfo.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/metainfo/io.cast.desktop-integration-fixture.metainfo.xml\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.gschema.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/glib-2.0/schemas/io.cast.desktop-integration-fixture.gschema.xml\"\ninstall -Dm644 integration/application-x-cast-desktop-integration-fixture.xml \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/mime/packages/application-x-cast-desktop-integration-fixture.xml\"\ninstall -Dm644 integration/io.cast.desktop-integration-fixture.svg \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg\"\ninstall -Dm644 COPYING \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-desktop-integration-fixture/COPYING\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/desktop-file-validate",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "desktop-file-validate"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/glib-compile-schemas",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "glib-compile-schemas"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/appstreamcli",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "appstreamcli"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/update-mime-database",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "update-mime-database"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/xmllint",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "xmllint"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\"${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture\" --self-test\ndesktop-file-validate \"${CAST_INSTALL_ROOT}/usr/share/applications/io.cast.desktop-integration-fixture.desktop\"\nglib-compile-schemas --strict --dry-run \"${CAST_INSTALL_ROOT}/usr/share/glib-2.0/schemas\"\nappstreamcli validate --no-net --strict --pedantic \"${CAST_INSTALL_ROOT}/usr/share/metainfo/io.cast.desktop-integration-fixture.metainfo.xml\"\nxmllint --nonet --noout \"${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml\" \"${CAST_INSTALL_ROOT}/usr/share/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg\"\ninstall -Dm644 \"${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml\" build/mime-validation/packages/application-x-cast-desktop-integration-fixture.xml\nXDG_DATA_HOME=\"$PWD/build\" XDG_DATA_DIRS=\"$PWD/build\" update-mime-database build/mime-validation"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

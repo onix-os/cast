@@ -10,129 +10,132 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "go"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -s go.mod\ntest -s go.sum\ntest -s vendor/modules.txt\ntest -s vendor/fixtures.invalid/cast/go-message/message.go\ntest ! -e go.work\ntest ! -e vendor/fixtures.invalid/cast/go-message/go.mod\nreplace_pattern='^[[:space:]]*replace([[:space:](]|$)'\nwhile IFS= read -r line; do\n    [[ ! $line =~ $replace_pattern ]] || exit 1\ndone < go.mod"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "go"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/go",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "go"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\nexport GOOS=linux\nexport GOARCH=amd64\nexport GOAMD64=v1\ngo telemetry off\ngo build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm755 cast-go-module-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-go-module-fixture\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-go-module-fixture/LICENSE\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/go",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "go"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\nexport GOOS=linux\nexport GOARCH=amd64\nexport GOAMD64=v1\ngo telemetry off\ngo test -mod=vendor -trimpath -count=1 ./..."
-                    },
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "cast-go-module-fixture"
-                        },
-                        args = {
-                            "--self-test"
+                            },
+                            declared_programs = {},
+                            script = "test -s go.mod\ntest -s go.sum\ntest -s vendor/modules.txt\ntest -s vendor/fixtures.invalid/cast/go-message/message.go\ntest ! -e go.work\ntest ! -e vendor/fixtures.invalid/cast/go-message/go.mod\nreplace_pattern='^[[:space:]]*replace([[:space:](]|$)'\nwhile IFS= read -r line; do\n    [[ ! $line =~ $replace_pattern ]] || exit 1\ndone < go.mod"
                         }
                     }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/go",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "go"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\nexport GOOS=linux\nexport GOARCH=amd64\nexport GOAMD64=v1\ngo telemetry off\ngo build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 cast-go-module-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-go-module-fixture\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-go-module-fixture/LICENSE\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/go",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "go"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\nexport GOOS=linux\nexport GOARCH=amd64\nexport GOAMD64=v1\ngo telemetry off\ngo test -mod=vendor -trimpath -count=1 ./..."
+                        },
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "cast-go-module-fixture"
+                            },
+                            args = {
+                                "--self-test"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

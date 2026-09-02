@@ -287,41 +287,83 @@ pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
     bootstrap::run_delegated_execution_fixture()
 }
 
-const RECIPE: &str = r#"let a = import! cast.authored.v1
-
-let scripts = a.scripts {
-    build = a.phase [a.step.shell "printf planner-hermetic > build.log"],
-    .. a.empty.scripts
-}
-
-let root = {
-    summary = a.optional.set "Hermetic planner fixture",
-    description = a.optional.set "Hermetic planner fixture",
-    runtime_inputs = [a.dep.binary "planner-runtime"],
-    .. a.output "out"
-}
-
-{
+const RECIPE: &str = r#"return {
     meta = {
         pname = "planner-hermetic",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid/planner-hermetic",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.shell scripts [],
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.with_root root,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = {
+        kind = "custom",
+        spec = {
+            required_tools = {
+                { kind = "binary", value = "bash" },
+            },
+            environment = {},
+            phases = {
+                setup = { steps = {} },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = { kind = "binary", value = "bash" },
+                            },
+                            declared_programs = {},
+                            script = "printf planner-hermetic > build.log",
+                        },
+                    },
+                },
+                install = { steps = {} },
+                check = { steps = {} },
+                workload = { steps = {} },
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true,
+            },
+        },
+    },
+    sources = {},
+    native_build_inputs = {},
+    build_inputs = {},
+    check_inputs = {},
+    outputs = {
+        {
+            name = "out",
+            include_in_manifest = true,
+            summary = { kind = "some", value = "Hermetic planner fixture" },
+            description = { kind = "some", value = "Hermetic planner fixture" },
+            provides_exclude = {},
+            runtime_inputs = {
+                { kind = "binary", value = "planner-runtime" },
+            },
+            runtime_exclude = {},
+            paths = {},
+            conflicts = {},
+        },
+    },
+    options = {
+        toolchain = "llvm",
+        cspgo = false,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    },
+    profiles = {},
+    architectures = {},
+    tuning = {},
+    emul32 = false,
+    mold = false,
 }
 "#;
 
@@ -359,18 +401,34 @@ impl Fixture {
 
         let index_uri = Url::from_file_path(&repository_index).unwrap();
         fs::write(
-            config_dir.join("profile.d/planner-hermetic.glu"),
+            config_dir.join("profile.d/planner-hermetic.lua"),
             format!(
-                r#"let cast = import! cast.profile.v1
-
-cast.profiles [
-    cast.profile "{PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-    cast.profile "{ALTERNATE_PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-]
+                r#"return {{
+    {{
+        id = "{PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+    {{
+        id = "{ALTERNATE_PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+}}
 "#,
             ),
         )
@@ -480,15 +538,22 @@ impl PackageExampleMatrix {
         fs::create_dir_all(&output_dir).unwrap();
         let index_uri = Url::from_file_path(&repository_index).unwrap();
         fs::write(
-            config_dir.join("profile.d/planner-example-matrix.glu"),
+            config_dir.join("profile.d/planner-example-matrix.lua"),
             format!(
-                r#"let cast = import! cast.profile.v1
-
-cast.profiles [
-    cast.profile "{EXAMPLE_PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-]
+                r#"return {{
+    {{
+        id = "{EXAMPLE_PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+}}
 "#,
             ),
         )

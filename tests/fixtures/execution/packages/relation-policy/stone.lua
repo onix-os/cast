@@ -10,61 +10,64 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "\nprintf '%s\\n' \\\n    'schema = 1' \\\n    'native-build = \"sysbinary(ldconfig)\"' \\\n    'build = \"pkgconfig32(zlib)\"' \\\n    'runtime-interpreter = \"interpreter(/usr/lib/ld-linux-x86-64.so.2(x86_64))\"' \\\n    'runtime-library = \"soname(libz.so.1(x86_64))\"' \\\n    > relation-policy.conf\ninstall -Dm644 relation-policy.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/relation-policy.conf\"\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\nprintf '%s\\n' \\\n    'schema = 1' \\\n    'native-build = \"sysbinary(ldconfig)\"' \\\n    'build = \"pkgconfig32(zlib)\"' \\\n    'runtime-interpreter = \"interpreter(/usr/lib/ld-linux-x86-64.so.2(x86_64))\"' \\\n    'runtime-library = \"soname(libz.so.1(x86_64))\"' \\\n    > relation-policy.conf\ninstall -Dm644 relation-policy.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/relation-policy.conf\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

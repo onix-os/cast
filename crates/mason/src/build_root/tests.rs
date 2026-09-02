@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use declarative_config::{DeclarationEvaluator, Source};
+use declarative_config::Source;
 use forge::package::{Flags, Meta, Name};
 use stone_recipe::UpstreamSpec;
 use stone_recipe::derivation::{JobPlan, LockedOutput, LockedOutputRef};
@@ -57,98 +57,95 @@ fn locked() -> LockedPackage {
     }
 }
 
+/// The five builder phases, each with no steps.
+const EMPTY_PHASES: &str = "{ setup = { steps = {} }, build = { steps = {} }, \
+     install = { steps = {} }, check = { steps = {} }, workload = { steps = {} } }";
+
+/// The ten hook slots a profile must name, all empty.
+const EMPTY_HOOKS: &str = "{ pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {}, \
+     pre_check = {}, post_check = {}, pre_install = {}, post_install = {}, \
+     pre_workload = {}, post_workload = {} }";
+
+/// Every builder phase accepts hooks.
+const ALL_HOOK_SUPPORT: &str =
+    "{ setup = true, build = true, check = true, install = true, workload = true }";
+
+/// Decode a minimal authored recipe: everything the recipe leaves out is
+/// supplied by the shared Rust lowering, not by the config language.
+fn authored_package(source: String) -> PackageSpec {
+    LuaPackageEvaluator::default()
+        .evaluate_authored(&Source::new("stone.lua", source))
+        .unwrap()
+}
+
 fn selected_inputs_package() -> PackageSpec {
-    let source = Source::new(
-        "stone.lua",
-        r#"let a = import! cast.authored.v1
-let scripts = a.empty.scripts
-let selected = {
-    name = "x86_64",
-    builder = {
-        required_tools = [a.dep.binary "profile-builder"],
-        environment = [],
-        phases = scripts,
-        supported_hooks = a.hook_support.all,
-    },
-    hooks = a.empty.hooks,
-    native_build_inputs = [a.dep.package "profile-native"],
-    build_inputs = [a.dep.package "profile-build"],
-    check_inputs = [a.dep.package "profile-check"],
-}
-let unrelated = {
-    name = "aarch64",
-    builder = {
-        required_tools = [a.dep.binary "unrelated-builder"],
-        environment = [],
-        phases = scripts,
-        supported_hooks = a.hook_support.all,
-    },
-    hooks = a.empty.hooks,
-    native_build_inputs = [a.dep.package "unrelated-native"],
-    build_inputs = [],
-    check_inputs = [],
-}
-{
-    meta = {
+    authored_package(format!(
+        r#"return {{
+    meta = {{
         pname = "example",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid",
-        license = ["MPL-2.0"],
-    },
-    builder = a.builder.shell scripts [a.dep.binary "base-builder"],
-    sources = [],
-    native_build_inputs = [a.dep.package "base-native"],
-    build_inputs = [a.dep.package "base-build"],
-    check_inputs = [a.dep.package "base-check"],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [selected, unrelated],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-    );
-    DeclarationEvaluator::<PackageSpec>::evaluate(&LuaPackageEvaluator::default(), &source)
-        .unwrap()
-        .value
+        license = {{ "MPL-2.0" }},
+    }},
+    builder = {{ kind = "custom", spec = {{
+        required_tools = {{ {{ kind = "binary", value = "base-builder" }} }},
+        environment = {{}},
+        phases = {EMPTY_PHASES},
+        supported_hooks = {ALL_HOOK_SUPPORT},
+    }} }},
+    native_build_inputs = {{ {{ kind = "package", value = {{ name = "base-native" }} }} }},
+    build_inputs = {{ {{ kind = "package", value = {{ name = "base-build" }} }} }},
+    check_inputs = {{ {{ kind = "package", value = {{ name = "base-check" }} }} }},
+    profiles = {{
+        {{
+            name = "x86_64",
+            builder = {{
+                required_tools = {{ {{ kind = "binary", value = "profile-builder" }} }},
+                environment = {{}},
+                phases = {EMPTY_PHASES},
+                supported_hooks = {ALL_HOOK_SUPPORT},
+            }},
+            hooks = {EMPTY_HOOKS},
+            native_build_inputs = {{ {{ kind = "package", value = {{ name = "profile-native" }} }} }},
+            build_inputs = {{ {{ kind = "package", value = {{ name = "profile-build" }} }} }},
+            check_inputs = {{ {{ kind = "package", value = {{ name = "profile-check" }} }} }},
+        }},
+        {{
+            name = "aarch64",
+            builder = {{
+                required_tools = {{ {{ kind = "binary", value = "unrelated-builder" }} }},
+                environment = {{}},
+                phases = {EMPTY_PHASES},
+                supported_hooks = {ALL_HOOK_SUPPORT},
+            }},
+            hooks = {EMPTY_HOOKS},
+            native_build_inputs = {{ {{ kind = "package", value = {{ name = "unrelated-native" }} }} }},
+            build_inputs = {{}},
+            check_inputs = {{}},
+        }},
+    }},
+}}
+"#
+    ))
 }
 
 fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
-    let source = Source::new(
-        "stone.lua",
-        r#"let a = import! cast.authored.v1
-{
+    authored_package(
+        r#"return {
     meta = {
         pname = "example",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.cmake { flags = [], run_tests = a.true },
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = { kind = "cmake", flags = {}, run_tests = true },
 }
-"#,
-    );
-    DeclarationEvaluator::<PackageSpec>::evaluate(&LuaPackageEvaluator::default(), &source)
-        .unwrap()
-        .value
-        .builder
+"#
+        .to_owned(),
+    )
+    .builder
 }
 
 fn repository_policy() -> BuildPolicySpec {
@@ -176,7 +173,7 @@ fn repository_base_does_not_request_ambient_or_interactive_tools() {
     let policy = repository_policy();
     let package = selected_inputs_package();
     let target = policy.targets.iter().find(|target| target.name == "x86_64").unwrap();
-    let requests = inputs_for(&policy, "policy.glu", &package, None, target, false)
+    let requests = inputs_for(&policy, "policy.lua", &package, None, target, false)
         .unwrap()
         .into_iter()
         .map(|input| input.request)
@@ -267,7 +264,7 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
         .unwrap()
         .clone();
 
-    let inputs = inputs_for(&policy, "policy.glu", &package, None, &target, true).unwrap();
+    let inputs = inputs_for(&policy, "policy.lua", &package, None, &target, true).unwrap();
     let packages = inputs
         .iter()
         .map(|input| input.request.clone())
@@ -305,7 +302,7 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
         (
             "policy-base",
             InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.base".to_owned(),
                 index: 0,
             },
@@ -313,7 +310,7 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
         (
             "binary(policy-gnu)",
             InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.toolchains.gnu".to_owned(),
                 index: 0,
             },
@@ -356,7 +353,7 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
         (
             "binary(objcopy)",
             InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.analyzer_tools.gnu.objcopy".to_owned(),
                 index: 0,
             },

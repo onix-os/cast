@@ -10,190 +10,193 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "msgfmt"
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build/locale/fr/LC_MESSAGES"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build/locale/de/LC_MESSAGES"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "msgfmt"
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/msgfmt",
-                            requirement = {
-                                kind = "binary",
-                                value = "msgfmt"
-                            }
-                        },
-                        args = {
-                            "--check-format",
-                            "--check-header",
-                            "-o",
-                            "build/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo",
-                            "po/fr.po"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/msgfmt",
-                            requirement = {
-                                kind = "binary",
-                                value = "msgfmt"
-                            }
-                        },
-                        args = {
-                            "--check-format",
-                            "--check-header",
-                            "-o",
-                            "build/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo",
-                            "po/de.po"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-std=c11",
-                            "-O2",
-                            "-g",
-                            "-Wall",
-                            "-Wextra",
-                            "-Werror",
-                            "-fstack-protector-strong",
-                            "-D_FORTIFY_SOURCE=3",
-                            "-fPIE",
-                            "consumer.c",
-                            "-Wl,-pie",
-                            "-Wl,--build-id=sha1",
-                            "-Wl,-z,relro,-z,now",
-                            "-Wl,-z,noexecstack",
-                            "-Wl,-z,separate-code",
-                            "-Wl,--as-needed",
-                            "-o",
-                            "build/gettext-consumer"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
+                            },
+                            args = {
+                                "-p",
+                                "build/locale/fr/LC_MESSAGES"
                             }
                         },
-                        script = "install -Dm644 build/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo\"\ninstall -Dm644 build/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo\"\ninstall -Dm644 COPYING \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-gettext-localization-fixture/COPYING\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/gettext-consumer"
-                        },
-                        args = {
-                            "fr_FR.utf8",
-                            "build/locale",
-                            "Bonjour de Cast"
-                        }
-                    },
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/gettext-consumer"
-                        },
-                        args = {
-                            "de_DE.utf8",
-                            "build/locale",
-                            "Hallo von Cast"
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "mkdir"
+                                }
+                            },
+                            args = {
+                                "-p",
+                                "build/locale/de/LC_MESSAGES"
+                            }
                         }
                     }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/msgfmt",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "msgfmt"
+                                }
+                            },
+                            args = {
+                                "--check-format",
+                                "--check-header",
+                                "-o",
+                                "build/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo",
+                                "po/fr.po"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/msgfmt",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "msgfmt"
+                                }
+                            },
+                            args = {
+                                "--check-format",
+                                "--check-header",
+                                "-o",
+                                "build/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo",
+                                "po/de.po"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-std=c11",
+                                "-O2",
+                                "-g",
+                                "-Wall",
+                                "-Wextra",
+                                "-Werror",
+                                "-fstack-protector-strong",
+                                "-D_FORTIFY_SOURCE=3",
+                                "-fPIE",
+                                "consumer.c",
+                                "-Wl,-pie",
+                                "-Wl,--build-id=sha1",
+                                "-Wl,-z,relro,-z,now",
+                                "-Wl,-z,noexecstack",
+                                "-Wl,-z,separate-code",
+                                "-Wl,--as-needed",
+                                "-o",
+                                "build/gettext-consumer"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm644 build/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/fr/LC_MESSAGES/cast-gettext-localization-fixture.mo\"\ninstall -Dm644 build/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/de/LC_MESSAGES/cast-gettext-localization-fixture.mo\"\ninstall -Dm644 COPYING \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-gettext-localization-fixture/COPYING\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/gettext-consumer"
+                            },
+                            args = {
+                                "fr_FR.utf8",
+                                "build/locale",
+                                "Bonjour de Cast"
+                            }
+                        },
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/gettext-consumer"
+                            },
+                            args = {
+                                "de_DE.utf8",
+                                "build/locale",
+                                "Hallo von Cast"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

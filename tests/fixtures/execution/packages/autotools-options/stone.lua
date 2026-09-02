@@ -10,73 +10,76 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "autoconf"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "autoconf"
+                },
+                {
+                    kind = "binary",
+                    value = "automake"
+                },
+                {
+                    kind = "binary",
+                    value = "awk"
+                },
+                {
+                    kind = "binary",
+                    value = "grep"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "sed"
+                }
             },
-            {
-                kind = "binary",
-                value = "automake"
+            environment = {
+                "autotools"
             },
-            {
-                kind = "binary",
-                value = "awk"
-            },
-            {
-                kind = "binary",
-                value = "grep"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "sed"
-            }
-        },
-        environment = {
-            "autotools"
-        },
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "autotools_configure",
-                        flags = {
-                            "--enable-stone-message"
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "autotools_configure",
+                            flags = {
+                                "--enable-stone-message"
+                            }
                         }
                     }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "autotools_build"
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "autotools_build"
+                        }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "autotools_install"
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "autotools_install"
+                        }
                     }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            check = {
-                steps = {}
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

@@ -10,126 +10,129 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "clang"
-            },
-            {
-                kind = "binary",
-                value = "dash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "clang"
+                },
+                {
+                    kind = "binary",
+                    value = "dash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/clang",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "clang"
+                                    value = "mkdir"
                                 }
+                            },
+                            args = {
+                                "-p",
+                                "build"
                             }
-                        },
-                        script = "set -eu\ncase \"${PGO_STAGE}\" in\n    ONE)\n        test ! -e build/stage1-only.marker\n        : > build/stage1-only.marker\n        ;;\n    USE)\n        test ! -e build/stage1-only.marker\n        ;;\n    *)\n        exit 1\n        ;;\nesac\n\"${CC}\" ${CFLAGS} -std=c11 -Wall -Wextra -Werror main.c ${LDFLAGS} -o build/cast-pgo-workload-fixture"
+                        }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "dash"
                                 }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/clang",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "clang"
+                                    }
+                                }
+                            },
+                            script = "set -eu\ncase \"${PGO_STAGE}\" in\n    ONE)\n        test ! -e build/stage1-only.marker\n        : > build/stage1-only.marker\n        ;;\n    USE)\n        test ! -e build/stage1-only.marker\n        ;;\n    *)\n        exit 1\n        ;;\nesac\n\"${CC}\" ${CFLAGS} -std=c11 -Wall -Wextra -Werror main.c ${LDFLAGS} -o build/cast-pgo-workload-fixture"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 build/cast-pgo-workload-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-pgo-workload-fixture\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/cast-pgo-workload-fixture"
+                            },
+                            args = {
+                                "--self-test"
                             }
-                        },
-                        script = "install -Dm755 build/cast-pgo-workload-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-pgo-workload-fixture\""
+                        }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/cast-pgo-workload-fixture"
-                        },
-                        args = {
-                            "--self-test"
+                },
+                workload = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/cast-pgo-workload-fixture"
+                            },
+                            args = {
+                                "--train",
+                                "profile-guided-build-2026"
+                            }
                         }
                     }
                 }
             },
-            workload = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/cast-pgo-workload-fixture"
-                        },
-                        args = {
-                            "--train",
-                            "profile-guided-build-2026"
-                        }
-                    }
-                }
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

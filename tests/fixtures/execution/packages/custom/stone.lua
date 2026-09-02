@@ -10,121 +10,124 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "dash"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "dash"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-O2",
-                            "-g",
-                            "-Wall",
-                            "-Wextra",
-                            "-Werror",
-                            "-fstack-protector-strong",
-                            "-D_FORTIFY_SOURCE=3",
-                            "-fPIE",
-                            "main.c",
-                            "-Wl,-pie",
-                            "-Wl,-z,relro,-z,now",
-                            "-Wl,--as-needed",
-                            "-o",
-                            "build/cast-custom-fixture"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
+                            },
+                            args = {
+                                "-p",
+                                "build"
                             }
-                        },
-                        script = "install -Dm755 build/cast-custom-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-custom-fixture\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/cast-custom-fixture"
-                        },
-                        args = {
-                            "--self-test"
                         }
                     }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-O2",
+                                "-g",
+                                "-Wall",
+                                "-Wextra",
+                                "-Werror",
+                                "-fstack-protector-strong",
+                                "-D_FORTIFY_SOURCE=3",
+                                "-fPIE",
+                                "main.c",
+                                "-Wl,-pie",
+                                "-Wl,-z,relro,-z,now",
+                                "-Wl,--as-needed",
+                                "-o",
+                                "build/cast-custom-fixture"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 build/cast-custom-fixture \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-custom-fixture\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/cast-custom-fixture"
+                            },
+                            args = {
+                                "--self-test"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

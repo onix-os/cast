@@ -10,50 +10,53 @@ return {
         }
     },
     builder = {
-        required_tools = {},
-        environment = {
-            "cargo"
-        },
-        phases = {
-            setup = {
-                steps = {}
+        kind = "custom",
+        spec = {
+            required_tools = {},
+            environment = {
+                "cargo"
             },
-            build = {
-                steps = {
-                    {
-                        kind = "cargo_build",
-                        features = {}
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "cargo_install",
-                        binaries = {
-                            "cast-cargo-fixture"
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "cargo_build",
+                            features = {}
                         }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "cargo_test",
-                        features = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "cargo_install",
+                            binaries = {
+                                "cast-cargo-fixture"
+                            }
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "cargo_test",
+                            features = {}
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

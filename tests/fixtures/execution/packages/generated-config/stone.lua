@@ -10,61 +10,64 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "\nprintf '%s\\n' \\\n    'format = 1' \\\n    'profile = \"stone-native\"' \\\n    'source = \"gluon\"' \\\n    > generated-config.conf\ninstall -Dm644 generated-config.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf\"\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\nprintf '%s\\n' \\\n    'format = 1' \\\n    'profile = \"stone-native\"' \\\n    'source = \"gluon\"' \\\n    > generated-config.conf\ninstall -Dm644 generated-config.conf \\\n    \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

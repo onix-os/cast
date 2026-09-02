@@ -10,122 +10,125 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "dash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm755 integration/cast-system-integration-fixture \"${CAST_INSTALL_ROOT}/usr/libexec/cast-system-integration-fixture\"\ninstall -Dm644 integration/cast-system-integration-fixture.service \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/cast-system-integration-fixture.service\"\ninstall -Dm644 integration/cast-system-integration-fixture.sysusers \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/cast-system-integration-fixture.conf\"\ninstall -Dm644 integration/cast-system-integration-fixture.tmpfiles \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/cast-system-integration-fixture.conf\"\ninstall -Dm644 integration/70-cast-system-integration-fixture.rules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/udev/rules.d/70-cast-system-integration-fixture.rules\"\ninstall -Dm644 integration/io.cast.SystemIntegrationFixture.rules \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/rules.d/io.cast.SystemIntegrationFixture.rules\"\ninstall -Dm644 integration/io.cast.SystemIntegrationFixture.policy \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/actions/io.cast.SystemIntegrationFixture.policy\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-system-integration-assets-fixture/LICENSE\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "dash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "\"${CAST_INSTALL_ROOT}/usr/libexec/cast-system-integration-fixture\" --self-test"
-                    },
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/systemd-analyze",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "systemd-analyze"
+                                    value = "dash"
                                 }
                             },
-                            {
-                                path = "/usr/bin/systemd-sysusers",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "systemd-sysusers"
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
                                 }
                             },
-                            {
-                                path = "/usr/bin/systemd-tmpfiles",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "systemd-tmpfiles"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/udevadm",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "udevadm"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/xmllint",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "xmllint"
-                                }
-                            }
-                        },
-                        script = "SYSTEMD_UNIT_PATH=/usr/lib/systemd/system systemd-analyze --root=\"${CAST_INSTALL_ROOT}\" --recursive-errors=no --man=no --generators=no verify cast-system-integration-fixture.service\nsystemd-sysusers --dry-run --root=\"${CAST_INSTALL_ROOT}\" \"${CAST_INSTALL_ROOT}/usr/lib/sysusers.d/cast-system-integration-fixture.conf\"\nsystemd-tmpfiles --create --dry-run --root=\"${CAST_INSTALL_ROOT}\" --graceful -E \"${CAST_INSTALL_ROOT}/usr/lib/tmpfiles.d/cast-system-integration-fixture.conf\"\nudevadm verify --root=\"${CAST_INSTALL_ROOT}\" --resolve-names=never --no-summary --no-style /usr/lib/udev/rules.d/70-cast-system-integration-fixture.rules\nxmllint --nonet --noout \"${CAST_INSTALL_ROOT}/usr/share/polkit-1/actions/io.cast.SystemIntegrationFixture.policy\""
+                            script = "install -Dm755 integration/cast-system-integration-fixture \"${CAST_INSTALL_ROOT}/usr/libexec/cast-system-integration-fixture\"\ninstall -Dm644 integration/cast-system-integration-fixture.service \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/cast-system-integration-fixture.service\"\ninstall -Dm644 integration/cast-system-integration-fixture.sysusers \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/cast-system-integration-fixture.conf\"\ninstall -Dm644 integration/cast-system-integration-fixture.tmpfiles \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/cast-system-integration-fixture.conf\"\ninstall -Dm644 integration/70-cast-system-integration-fixture.rules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/udev/rules.d/70-cast-system-integration-fixture.rules\"\ninstall -Dm644 integration/io.cast.SystemIntegrationFixture.rules \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/rules.d/io.cast.SystemIntegrationFixture.rules\"\ninstall -Dm644 integration/io.cast.SystemIntegrationFixture.policy \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/actions/io.cast.SystemIntegrationFixture.policy\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-system-integration-assets-fixture/LICENSE\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "\"${CAST_INSTALL_ROOT}/usr/libexec/cast-system-integration-fixture\" --self-test"
+                        },
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/systemd-analyze",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "systemd-analyze"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/systemd-sysusers",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "systemd-sysusers"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/systemd-tmpfiles",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "systemd-tmpfiles"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/udevadm",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "udevadm"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/xmllint",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "xmllint"
+                                    }
+                                }
+                            },
+                            script = "SYSTEMD_UNIT_PATH=/usr/lib/systemd/system systemd-analyze --root=\"${CAST_INSTALL_ROOT}\" --recursive-errors=no --man=no --generators=no verify cast-system-integration-fixture.service\nsystemd-sysusers --dry-run --root=\"${CAST_INSTALL_ROOT}\" \"${CAST_INSTALL_ROOT}/usr/lib/sysusers.d/cast-system-integration-fixture.conf\"\nsystemd-tmpfiles --create --dry-run --root=\"${CAST_INSTALL_ROOT}\" --graceful -E \"${CAST_INSTALL_ROOT}/usr/lib/tmpfiles.d/cast-system-integration-fixture.conf\"\nudevadm verify --root=\"${CAST_INSTALL_ROOT}\" --resolve-names=never --no-summary --no-style /usr/lib/udev/rules.d/70-cast-system-integration-fixture.rules\nxmllint --nonet --noout \"${CAST_INSTALL_ROOT}/usr/share/polkit-1/actions/io.cast.SystemIntegrationFixture.policy\""
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

@@ -10,86 +10,89 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "dash"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm644 include/vector.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h\"\ninstall -Dm644 cast-header-only.pc \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/cast-header-only.pc\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-header-only-library-fixture/LICENSE\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "dash"
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/dash",
-                            requirement = {
-                                kind = "binary",
-                                value = "dash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/cc",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "cc"
+                                    value = "dash"
                                 }
-                            }
-                        },
-                        script = "test ! -e include/cast-header-only/vector.h\ntest -f \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h\"\ncc -std=c11 -Wall -Wextra -Werror -pedantic-errors -nostdinc -I\"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include\" -fsyntax-only tests/consumer.c"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm644 include/vector.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h\"\ninstall -Dm644 cast-header-only.pc \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/cast-header-only.pc\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-header-only-library-fixture/LICENSE\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/dash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "dash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/cc",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "cc"
+                                    }
+                                }
+                            },
+                            script = "test ! -e include/cast-header-only/vector.h\ntest -f \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h\"\ncc -std=c11 -Wall -Wextra -Werror -pedantic-errors -nostdinc -I\"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include\" -fsyntax-only tests/consumer.c"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {
