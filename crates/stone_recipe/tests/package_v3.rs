@@ -137,6 +137,28 @@ fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
     format!(r#"{{ name = "{name}", {body} }}"#)
 }
 
+/// A complete, already-lowered package spec. The input-evaluator path decodes
+/// the frozen domain directly, so it names every field.
+fn complete_package(pname: &str) -> Source {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    authored(&format!(
+        "{{ {}, builder = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, \
+         workload = false }} }}, hooks = {}, native_build_inputs = {{}}, build_inputs = {{}}, \
+         check_inputs = {{}}, outputs = {{ {} }}, options = {{ toolchain = \"llvm\", cspgo = false, \
+         samplepgo = false, debug = true, strip = true, networking = false, compressman = false, \
+         lastrip = true }}, profiles = {{}}, sources = {{}}, architectures = {{}}, tuning = {{}}, \
+         emul32 = false, mold = false }}",
+        meta(pname),
+        empty_hooks(),
+        output("out", true),
+    ))
+}
+
 /// An archive upstream with the given hash and optional rename/unpack_dir.
 fn archive(hash: &str, rename: &str, unpack_dir: &str) -> String {
     format!(
@@ -740,36 +762,18 @@ fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
 
 #[test]
 fn evaluator_keeps_special_constructor_reserved_but_rejects_concrete_package_use() {
-    let source = authored(
-        r#"
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    outputs = a.outputs.explicit [a.output_with {
-        paths = [a.path.special "/usr/lib/example/events.fifo"],
-        .. a.output "out"
-    }],
-    .. base
-}
-"#,
+    let root = output_with(
+        "out",
+        &[(
+            "paths",
+            r#"{ { kind = "special", path = "/usr/lib/example/events.fifo" } }"#,
+        )],
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {root} }} }}",
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -783,30 +787,7 @@ let base = {
 
 #[test]
 fn package_fingerprint_is_deterministic_and_binds_explicit_inputs() {
-    let source = authored(
-        r#"
-let abi_version: Int = a.abi_version
-{
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-    );
+    let source = complete_package("example");
     let evaluator = LuaPackageEvaluator::default();
 
     let first = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
