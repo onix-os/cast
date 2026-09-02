@@ -93,8 +93,8 @@ fn stone_layout_ingestion_confines_every_inode_variant_to_canonical_usr_relative
             ".stateID/forged-child",
             "lib/os-release",
             "lib/os-release/forged-child",
-            "lib/system-model.glu",
-            "lib/system-model.glu/forged-child",
+            "lib/system-model.lua",
+            "lib/system-model.lua/forged-child",
         ] {
             let invalid = test_stone_layout(kind, reserved);
             assert!(matches!(
@@ -198,7 +198,7 @@ fn stone_layout_ingestion_accepts_utf8_and_exact_linux_path_boundaries() {
         ".stateID.old/child",
         "lib/os-info.json",
         "lib/os-release.local",
-        "lib/system-model.glu.old",
+        "lib/system-model.lua.old",
         "share/Grüße/工具",
         "usr/bin/nested",
     ] {

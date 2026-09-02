@@ -141,7 +141,7 @@ impl ResolvedCompilerFlags {
     const RESOLVED_ITEMS: usize = 8;
 }
 
-/// Typed finite build context resolved from one Gluon policy value.
+/// Typed finite build context resolved from one policy value.
 ///
 /// It has no definition map and cannot interpret `%action` or
 /// `%(definition)` syntax.

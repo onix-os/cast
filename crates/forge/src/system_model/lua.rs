@@ -133,7 +133,11 @@ impl LuaSystemEvaluator {
 
 impl DeclarationCodec<SystemModel> for LuaSystemEvaluator {
     fn encode(&self, model: &SystemModel) -> Result<String, Self::Error> {
-        encode_lua_system(model)
+        // The owned model already contains the exact canonical snapshot,
+        // including any authored-source annotation. Re-emitting the semantic
+        // value here would erase that provenance and break two-file metadata
+        // publication byte identity.
+        Ok(model.encoded().to_owned())
     }
 }
 

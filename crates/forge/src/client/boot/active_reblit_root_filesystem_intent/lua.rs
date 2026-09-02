@@ -40,6 +40,7 @@ pub(super) fn language_spec() -> LanguageSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaRootFilesystemIntent {
     root: String,
 }

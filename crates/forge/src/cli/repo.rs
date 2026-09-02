@@ -351,13 +351,19 @@ mod tests {
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
         fs::set_permissions(temporary.path().join("etc"), std::fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(intent_path.parent().unwrap(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let authored = r#"// Repository intent remains administrator-owned.
-let cast = import! cast.system.v1
-{
-    repositories = [
-        cast.repository.direct "local" "file:///var/cache/cast/local.index",
-    ],
-    .. cast.system
+        let authored = r#"-- Repository intent remains administrator-owned.
+return {
+    disable_warning = false,
+    repositories = {
+        {
+            id = "local",
+            description = { kind = "none" },
+            source = { kind = "direct_index", uri = "file:///var/cache/cast/local.index" },
+            priority = { kind = "none" },
+            enabled = { kind = "none" },
+        },
+    },
+    packages = {},
 }
 "#;
         fs::write(&intent_path, authored).unwrap();

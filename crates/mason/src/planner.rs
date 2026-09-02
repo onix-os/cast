@@ -327,7 +327,7 @@ pub enum Error {
     },
     #[error("policy analyzer tool at {field} is not an executable capability")]
     AnalyzerToolNotExecutable { field: &'static str },
-    #[error("policy analyzer tool at {field} has no exact provider in build.lock.glu: {request}")]
+    #[error("policy analyzer tool at {field} has no exact provider in build.lock.lua: {request}")]
     UnlockedAnalyzerTool { field: &'static str, request: String },
     #[error("package resolution returned an input request with no typed planner origin: {request}")]
     UnclassifiedResolvedInput { request: String },

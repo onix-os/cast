@@ -693,7 +693,7 @@ pub enum Error {
     ForgeClient(#[from] forge::client::Error),
     #[error("Forge installation")]
     ForgeInstallation(#[from] forge::installation::Error),
-    #[error("repository indexes no longer match build.lock.glu")]
+    #[error("repository indexes no longer match build.lock.lua")]
     RepositorySnapshotMismatch {
         locked: Vec<RepositorySnapshot>,
         current: Vec<RepositorySnapshot>,
@@ -704,9 +704,9 @@ pub enum Error {
     InvalidLockedRepositoryId(String),
     #[error("locked metadata no longer matches package {package_id}")]
     LockedPackageMetadataMismatch { package_id: String },
-    #[error("frozen executable request is absent from build.lock.glu: {0}")]
+    #[error("frozen executable request is absent from build.lock.lua: {0}")]
     MissingFrozenExecutableRequest(String),
-    #[error("frozen executable request appears more than once in build.lock.glu: {0}")]
+    #[error("frozen executable request appears more than once in build.lock.lua: {0}")]
     DuplicateFrozenExecutableRequest(String),
     #[error("frozen plan sandbox layout does not match runtime paths")]
     FrozenSandboxLayoutMismatch,

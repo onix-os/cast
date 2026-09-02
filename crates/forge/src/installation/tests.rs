@@ -17,10 +17,10 @@ fn open_defers_canonical_authored_system_intent_to_the_client_gate() {
     let temporary = private_installation_tempdir();
     let path = system_model::intent_path(temporary.path());
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let authored = r#"let cast = import! cast.system.v1
-{
-    packages = ["alpha"],
-    .. cast.system
+    let authored = r#"return {
+    disable_warning = false,
+    repositories = {},
+    packages = { "alpha" },
 }
 "#;
     fs::write(&path, authored).unwrap();

@@ -146,13 +146,13 @@ pub struct PlanCommand {
     #[arg(
         long,
         default_value_t = false,
-        help = "Resolve and atomically refresh build.lock.glu"
+        help = "Resolve and atomically refresh build.lock.lua"
     )]
     update_lock: bool,
     #[arg(
         long,
         default_value_t = false,
-        help = "Refresh repositories before updating build.lock.glu"
+        help = "Refresh repositories before updating build.lock.lua"
     )]
     refresh_repositories: bool,
 }

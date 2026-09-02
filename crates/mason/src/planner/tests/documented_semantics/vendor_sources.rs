@@ -144,7 +144,7 @@ pub(super) fn assert_semantics(
             },
         ] if destination == "application" && vendor_destination == "vendor"
     ));
-    for module in ["package.glu", "sources.glu"] {
+    for module in ["package.lua", "sources.lua"] {
         assert!(
             plan.provenance
                 .recipe
@@ -304,46 +304,30 @@ fn freeze_variant(
     (evaluated.recipe.declaration.clone(), planned.plan)
 }
 
-const APPLICATION_VARIANT: &str = r#"let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
-let sources = import! "./sources.glu"
+const APPLICATION_VARIANT: &str = r#"local factory = cast.import("package.lua")
+local sources = cast.import("sources.lua")
 
-make_package {
-    application = {
+return factory.make({
+    application = sources.archive_lock({
         url = "https://example.invalid/vendor-note-next.tar.zst",
         digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        archive_name = "vendor-note-next.tar.zst",
         unpack_dir = "application",
-        lock = a.source.archive_with {
-            url = "https://example.invalid/vendor-note-next.tar.zst",
-            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            rename = a.optional.set "vendor-note-next.tar.zst",
-            strip_dirs = a.optional.set 1,
-            unpack = a.true,
-            unpack_dir = a.optional.set "application",
-        },
-    },
-    .. sources
-}
+    }),
+    vendor = sources.vendor,
+})
 "#;
 
-const VENDOR_VARIANT: &str = r#"let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
-let sources = import! "./sources.glu"
+const VENDOR_VARIANT: &str = r#"local factory = cast.import("package.lua")
+local sources = cast.import("sources.lua")
 
-make_package {
-    vendor = {
+return factory.make({
+    application = sources.application,
+    vendor = sources.archive_lock({
         url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
         digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        archive_name = "vendor-note-cargo-vendor-next.tar.zst",
         unpack_dir = "vendor",
-        lock = a.source.archive_with {
-            url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
-            hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            rename = a.optional.set "vendor-note-cargo-vendor-next.tar.zst",
-            strip_dirs = a.optional.set 1,
-            unpack = a.true,
-            unpack_dir = a.optional.set "vendor",
-        },
-    },
-    .. sources
-}
+    }),
+})
 "#;

@@ -427,9 +427,9 @@ fn retained_root_abi_replacement_fails_before_any_name_mutation() {
     }
     assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
     assert!(!fixture.target.join("usr/lib/os-release").exists());
-    assert!(!fixture.target.join("usr/lib/system-model.glu").exists());
+    assert!(!fixture.target.join("usr/lib/system-model.lua").exists());
     assert!(!detached.join("usr/lib/os-release").exists());
-    assert!(!detached.join("usr/lib/system-model.glu").exists());
+    assert!(!detached.join("usr/lib/system-model.lua").exists());
 }
 
 struct ExternalFixture {

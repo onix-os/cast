@@ -47,8 +47,8 @@ fn journal_coordinator_root_links_complete_archived_post_publication_database_an
             "previous" => database.remove(&previous).unwrap(),
             "provenance" => database.delete_metadata_provenance_for_test(candidate).unwrap(),
             "metadata" => replace_file_with_same_bytes(
-                &live_usr.join("lib/system-model.glu"),
-                "system-model.glu.root-links-displaced",
+                &live_usr.join("lib/system-model.lua"),
+                "system-model.lua.root-links-displaced",
             ),
             _ => unreachable!(),
         });

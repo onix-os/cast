@@ -81,16 +81,16 @@ mod tests {
         prepare_private_installation_root(temporary.path());
         let root = temporary.path().join("installation");
         let target = temporary.path().join("ephemeral-target");
-        let intent = temporary.path().join("import.glu");
+        let intent = temporary.path().join("import.lua");
         fs::create_dir(&root).unwrap();
         fs::create_dir(&target).unwrap();
         prepare_private_installation_root(&root);
         prepare_private_installation_root(&target);
-        let authored = r#"// This source is owned by the caller.
-let cast = import! cast.system.v1
-{
-    disable_warning = cast.boolean.true,
-    .. cast.system
+        let authored = r#"-- This source is owned by the caller.
+return {
+    disable_warning = true,
+    repositories = {},
+    packages = {},
 }
 "#;
         fs::write(&intent, authored).unwrap();

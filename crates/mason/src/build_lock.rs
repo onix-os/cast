@@ -589,7 +589,7 @@ mod tests {
             package_id: "package-id".to_owned(),
             output: "out".to_owned(),
             origins: vec![InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.base".to_owned(),
                 index: 0,
             }],

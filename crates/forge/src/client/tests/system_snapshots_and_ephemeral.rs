@@ -8,9 +8,12 @@ fn state_creation_records_and_exports_the_generated_snapshot() {
     fs::set_permissions(intent_directory, Permissions::from_mode(0o755)).unwrap();
     fs::write(
         &intent_path,
-        r#"// Authored intent must remain unchanged.
-let cast = import! cast.system.v1
-cast.system
+        r#"-- Authored intent must remain unchanged.
+return {
+    disable_warning = false,
+    repositories = {},
+    packages = {},
+}
 "#,
     )
     .unwrap();
@@ -32,7 +35,7 @@ cast.system
     let snapshot_path = system_model::snapshot_path(temporary.path());
     let recorded = fs::read_to_string(&snapshot_path).unwrap();
     assert!(recorded.starts_with(lua_config::GENERATED_LUA_MARKER));
-    assert!(recorded.contains(&format!("// Authored source fingerprint: {authored_fingerprint}")));
+    assert!(recorded.contains(&format!("-- Authored source fingerprint: {authored_fingerprint}")));
     assert_eq!(fs::read_to_string(&intent_path).unwrap(), authored);
 
     drop(client);
@@ -51,16 +54,16 @@ fn ephemeral_import_evaluates_intent_and_records_only_a_generated_snapshot() {
     prepare_private_installation_root(temporary.path());
     let installation_root = temporary.path().join("installation");
     let blit_root = temporary.path().join("ephemeral-root");
-    let intent_path = temporary.path().join("import.glu");
+    let intent_path = temporary.path().join("import.lua");
     fs::create_dir(&installation_root).unwrap();
     fs::create_dir(&blit_root).unwrap();
     prepare_private_installation_root(&blit_root);
 
-    let authored = r#"// This authored source must never be copied into state.
-let cast = import! cast.system.v1
-{
-packages = ["alpha"],
-.. cast.system
+    let authored = r#"-- This authored source must never be copied into state.
+return {
+    disable_warning = false,
+    repositories = {},
+    packages = { "alpha" },
 }
 "#;
     fs::write(&intent_path, authored).unwrap();
@@ -82,12 +85,12 @@ packages = ["alpha"],
     let snapshot_path = system_model::snapshot_path(&blit_root);
     let snapshot = fs::read_to_string(&snapshot_path).unwrap();
     let evaluated =
-        system_model::evaluate_snapshot(&Source::new("system-model.glu", snapshot.clone())).unwrap();
+        system_model::evaluate_snapshot(&Source::new("system-model.lua", snapshot.clone())).unwrap();
     let loaded_snapshot = system_model::load(&snapshot_path).unwrap().unwrap();
     let round_trip = SystemModel::try_from(loaded_snapshot).unwrap();
 
     assert!(snapshot.starts_with(lua_config::GENERATED_LUA_MARKER));
-    assert!(snapshot.contains(&format!("// Authored source fingerprint: {imported_fingerprint}")));
+    assert!(snapshot.contains(&format!("-- Authored source fingerprint: {imported_fingerprint}")));
     assert!(!snapshot.contains("This authored source must never be copied into state"));
     assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
     assert_eq!(round_trip.encoded(), snapshot);

@@ -25,7 +25,7 @@ pub(super) fn assert_userspace_role(declaration: &PackageSpec, plan: &Derivation
     };
     assert_eq!(dependency_names(&root.runtime_inputs), ["openssh", "podman", "systemd"]);
     assert!(declaration.sources.is_empty());
-    assert_imports(plan, &["package.glu", "roles.glu"]);
+    assert_imports(plan, &["package.lua", "roles.lua"]);
     assert!(
         plan.build_lock
             .requests
@@ -47,7 +47,7 @@ pub(super) fn assert_package_set_extension(declaration: &PackageSpec, plan: &Der
         ["bash", "coreutils", "prometheus-node-exporter", "vector"]
     );
     assert!(declaration.sources.is_empty());
-    assert_imports(plan, &["package.glu", "scope.glu"]);
+    assert_imports(plan, &["package.lua", "scope.lua"]);
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);
 }
@@ -68,7 +68,7 @@ pub(super) fn assert_service_family(declaration: &PackageSpec, plan: &Derivation
         ["systemd", "soname(libssl.so.3)"]
     );
     assert_eq!(root.paths.len(), 3);
-    assert_imports(plan, &["family.glu", "package.glu", "release.glu"]);
+    assert_imports(plan, &["family.lua", "package.lua", "release.lua"]);
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);
 }
@@ -95,7 +95,7 @@ pub(super) fn assert_variant_matrix(declaration: &PackageSpec, plan: &Derivation
         dependency_names(&root.runtime_inputs),
         ["soname(libpq.so.5)", "soname(libopentelemetry.so.1)"]
     );
-    assert_imports(plan, &["matrix.glu", "package.glu"]);
+    assert_imports(plan, &["matrix.lua", "package.lua"]);
     assert!(
         plan.build_lock
             .requests

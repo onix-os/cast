@@ -128,16 +128,16 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
         assert_eq!(
             first.lock_outcome,
             Some(WriteOutcome::Written),
-            "{name}: first plan must publish a fresh build.lock.glu"
+            "{name}: first plan must publish a fresh build.lock.lua"
         );
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
         let first_lock = fs::read(&first.lock_path)
-            .unwrap_or_else(|error| panic!("{name}: read first build.lock.glu observation: {error}"));
+            .unwrap_or_else(|error| panic!("{name}: read first build.lock.lua observation: {error}"));
         assert_eq!(
             first_lock,
             canonical_build_lock(&first.plan.build_lock).into_bytes(),
-            "{name}: first build.lock.glu presentation does not encode the frozen lock"
+            "{name}: first build.lock.lua presentation does not encode the frozen lock"
         );
         let input_snapshot = ExecutionInputSnapshot::capture(recipe, &first.lock_path);
 
@@ -189,7 +189,7 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
         let repeated_derivation_id = locked.plan.derivation_id();
         assert_eq!(
             locked.lock_outcome, None,
-            "{name}: reuse must not rewrite build.lock.glu"
+            "{name}: reuse must not rewrite build.lock.lua"
         );
         assert_eq!(
             repeated_plan,
@@ -203,11 +203,11 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
         );
         assert_eq!(
             locked.lock_path, first.lock_path,
-            "{name}: repeated planning selected a different build.lock.glu path"
+            "{name}: repeated planning selected a different build.lock.lua path"
         );
         let repeated_lock = fs::read(&locked.lock_path)
-            .unwrap_or_else(|error| panic!("{name}: read repeated build.lock.glu observation: {error}"));
-        assert_eq!(repeated_lock, first_lock, "{name}: repeated build.lock.glu bytes drifted");
+            .unwrap_or_else(|error| panic!("{name}: read repeated build.lock.lua observation: {error}"));
+        assert_eq!(repeated_lock, first_lock, "{name}: repeated build.lock.lua bytes drifted");
         input_snapshot.assert_unchanged(name, "after locked replanning", recipe, &locked.lock_path);
 
         let second_execution = execute_and_publish(&locked).unwrap_or_else(|error| {

@@ -21,7 +21,7 @@ fn candidate_usr_clone_failure_precedes_all_metadata_decoration() {
     assert!(matches!(error, Error::StatefulCandidateMetadata { .. }), "{error:#?}");
     assert!(!candidate_usr.join("lib").exists());
     assert!(!candidate_usr.join("lib/os-release").exists());
-    assert!(!candidate_usr.join("lib/system-model.glu").exists());
+    assert!(!candidate_usr.join("lib/system-model.lua").exists());
 }
 
 #[test]
@@ -38,8 +38,8 @@ fn owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution(
     drop(identity);
     proof.revalidate().unwrap();
 
-    let canonical = candidate_usr.join("lib/system-model.glu");
-    let displaced = candidate_usr.join("lib/displaced-system-model.glu");
+    let canonical = candidate_usr.join("lib/system-model.lua");
+    let displaced = candidate_usr.join("lib/displaced-system-model.lua");
     let expected = fs::read(&canonical).unwrap();
     let original_identity = inode_identity(&canonical);
     fs::rename(&canonical, &displaced).unwrap();

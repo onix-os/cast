@@ -182,7 +182,7 @@ Hence:
   until the authored intent is updated.
 - The system state can be reverted to match the declared intent
   by doing a `cast sync`.
-- Each state stores a generated `/usr/lib/system-model.glu` snapshot;
+- Each state stores a generated `/usr/lib/system-model.lua` snapshot;
   it is not the authored source and should not be edited.
 - To disable declarative system intent, remove or rename {path:?}.",
     ))

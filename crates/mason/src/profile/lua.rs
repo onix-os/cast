@@ -1,11 +1,10 @@
-//! Lua declaration adapter for the profile domain (Phase L4).
+//! Lua declaration adapter for the profile domain.
 //!
-//! Decodes authored Lua profile fragments into the same shared `Map` the Gluon
-//! adapter produces, reusing the shared `decode_specs` validation. Options use
-//! the Lua tagged encoding; the conversion into the shared wire types mirrors
-//! the Gluon conversion, so equivalent sources normalize to equal domain
-//! values with intentionally distinct evaluation identities. Registration and
-//! the canonical Lua emitter are added in a later slice.
+//! Decodes authored Lua profile fragments into the shared `Map`, reusing the
+//! shared `decode_specs` validation. Options use the Lua tagged encoding, and
+//! the conversion into the shared wire types lives in the neutral layer, so
+//! any adapter reaches equal domain values with an intentionally distinct
+//! evaluation identity.
 
 use std::fmt::Write as _;
 
@@ -102,8 +101,8 @@ pub(crate) fn decode_lua_specs(
 }
 
 /// Stateful Lua adapter for the profile declaration boundary. Decodes an
-/// authored `.lua` fragment into the same shared [`Map`] the Gluon codec
-/// produces, with an intentionally distinct evaluation identity.
+/// authored `.lua` fragment into the shared [`Map`] with an intentionally
+/// distinct evaluation identity.
 #[derive(Debug, Clone, Default)]
 pub struct LuaProfileCodec {
     engine: LuaEngine,
@@ -150,8 +149,7 @@ impl ConfigDeclarationEvaluator for LuaProfileCodec {
 
 impl DeclarationCodec<Map> for LuaProfileCodec {
     /// Emit the canonical generated-marked Lua source for a profile map — what
-    /// the generated-slot authority switch writes when it converts a profile
-    /// store from `.glu` to `.lua` authority.
+    /// a generated profile store is written as.
     fn encode(&self, config: &Map) -> Result<String, Self::Error> {
         encode_lua_specs(config)
     }
@@ -212,7 +210,7 @@ impl ProfileEvaluator {
 
 /// Emit a profile [`Map`] as canonical, generated-marked Lua source that
 /// re-decodes through [`decode_lua_specs`] into the same map. Specs are derived
-/// by the shared `profile_to_spec`, so the Lua and Gluon emitters canonicalize
+/// by the shared `profile_to_spec`, so every emitter canonicalizes
 /// identical domain values.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn encode_lua_specs(map: &Map) -> Result<String, ProfileConversionError> {

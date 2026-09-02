@@ -54,7 +54,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         "the authored script bytes and commands must not retain ambient interpreter discovery"
     );
 
-    for module in ["interpreters.glu", "package.glu"] {
+    for module in ["interpreters.lua", "package.lua"] {
         assert!(
             plan.provenance
                 .recipe
@@ -325,7 +325,7 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
     let root_source = fs::read_to_string(&example.recipe_path).unwrap();
     fs::write(
         &example.recipe_path,
-        format!("{root_source}\n// Root-source invalidation proof.\n"),
+        format!("{root_source}\n-- Root-source invalidation proof.\n"),
     )
     .unwrap();
     assert!(
@@ -339,8 +339,8 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
         original_fingerprint.root_source_sha256
     );
     assert_eq!(
-        imported_sha256(&changed_root_builder.recipe.fingerprint, "interpreters.glu"),
-        imported_sha256(&original_fingerprint, "interpreters.glu")
+        imported_sha256(&changed_root_builder.recipe.fingerprint, "interpreters.lua"),
+        imported_sha256(&original_fingerprint, "interpreters.lua")
     );
     drop(changed_root_builder);
     let changed_root = plan_for_build(matrix.env(), matrix.request(example, true), &matrix.output_dir)
@@ -355,10 +355,10 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
     assert_eq!(restored.plan.canonical_bytes(), original.plan.canonical_bytes());
     assert_eq!(restored.plan.derivation_id(), original.plan.derivation_id());
 
-    let interpreters_path = example.recipe_path.with_file_name("interpreters.glu");
+    let interpreters_path = example.recipe_path.with_file_name("interpreters.lua");
     let interpreters_source = fs::read_to_string(&interpreters_path).unwrap();
-    const BASH_INPUT: &str = "interpreter \"bash\" \"@BASH@\"";
-    const CHANGED_BASH_INPUT: &str = "interpreter \"sh\" \"@BASH@\"";
+    const BASH_INPUT: &str = "interpreter(\"bash\", \"@BASH@\")";
+    const CHANGED_BASH_INPUT: &str = "interpreter(\"sh\", \"@BASH@\")";
     assert_eq!(interpreters_source.matches(BASH_INPUT).count(), 1);
     fs::write(
         &interpreters_path,
@@ -375,8 +375,8 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
         original_fingerprint.root_source_sha256
     );
     assert_ne!(
-        imported_sha256(&changed_import_builder.recipe.fingerprint, "interpreters.glu"),
-        imported_sha256(&original_fingerprint, "interpreters.glu")
+        imported_sha256(&changed_import_builder.recipe.fingerprint, "interpreters.lua"),
+        imported_sha256(&original_fingerprint, "interpreters.lua")
     );
     assert_ne!(changed_import_builder.recipe.declaration, original_declaration);
     assert_eq!(

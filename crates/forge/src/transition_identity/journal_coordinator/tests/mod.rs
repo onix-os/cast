@@ -217,7 +217,7 @@ fn fixture_parts_with_root_abi_mask(
         create_canonical_directory(&candidate_path.join("lib"));
         write_canonical_file(&candidate_path.join("lib/os-release"), COORDINATOR_OS_RELEASE);
         write_canonical_file(
-            &candidate_path.join("lib/system-model.glu"),
+            &candidate_path.join("lib/system-model.lua"),
             COORDINATOR_SYSTEM_SNAPSHOT,
         );
     }
@@ -553,7 +553,7 @@ fn assert_candidate_metadata(fixture: &CoordinatorFixture) {
         COORDINATOR_OS_RELEASE
     );
     assert_eq!(
-        fs::read(fixture.candidate_path.join("lib/system-model.glu")).unwrap(),
+        fs::read(fixture.candidate_path.join("lib/system-model.lua")).unwrap(),
         COORDINATOR_SYSTEM_SNAPSHOT
     );
 }

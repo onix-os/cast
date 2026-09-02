@@ -238,7 +238,7 @@ return {{
         let temporary = tempfile::tempdir().unwrap();
         let staging = temporary.path().join("staging");
         let candidate_usr_path = staging.join("usr");
-        let original = candidate_usr_path.join(format!("share/cast/triggers/{domain}.d/original.glu"));
+        let original = candidate_usr_path.join(format!("share/cast/triggers/{domain}.d/original.lua"));
         fs_err::create_dir_all(original.parent().unwrap()).unwrap();
         fs_err::write(&original, trigger_source(original_name, "/bin/true")).unwrap();
         let candidate_usr = std::fs::OpenOptions::new()
@@ -249,7 +249,7 @@ return {{
 
         let displaced = temporary.path().join("displaced-staging");
         fs_err::rename(&staging, &displaced).unwrap();
-        let injected = candidate_usr_path.join(format!("share/cast/triggers/{domain}.d/injected.glu"));
+        let injected = candidate_usr_path.join(format!("share/cast/triggers/{domain}.d/injected.lua"));
         fs_err::create_dir_all(injected.parent().unwrap()).unwrap();
         fs_err::write(&injected, trigger_source(injected_name, "/bin/false")).unwrap();
 
@@ -267,17 +267,27 @@ return {{
 
     fn trigger_source_with_path(name: &str, command: &str, witness: &str) -> String {
         format!(
-            r#"let cast = import! cast.trigger.v1
-let base = cast.trigger "{name}" "Retained trigger discovery fixture"
-{{
-    paths = [cast.path
-        "/usr/share/{witness}"
-        ["{name}"]
-        (cast.optional.set cast.path_kind.directory)],
-    handlers = [cast.handler.named "{name}" (cast.handler.run
-        "{command}"
-        [])],
-    .. base
+            r#"return {{
+    name = "{name}",
+    description = "Retained trigger discovery fixture",
+    before = {{ kind = "none" }},
+    after = {{ kind = "none" }},
+    inhibitors = {{ kind = "none" }},
+    paths = {{
+        {{
+            key = "/usr/share/{witness}",
+            value = {{
+                handlers = {{ "{name}" }},
+                kind = {{ kind = "some", value = {{ kind = "directory" }} }},
+            }},
+        }},
+    }},
+    handlers = {{
+        {{
+            key = "{name}",
+            value = {{ kind = "run", command = "{command}", args = {{}} }},
+        }},
+    }},
 }}
 "#
         )

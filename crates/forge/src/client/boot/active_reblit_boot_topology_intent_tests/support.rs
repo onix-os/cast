@@ -1,5 +1,6 @@
 use std::{
     ffi::CString,
+    fmt::Write as _,
     fs, io,
     os::unix::{ffi::OsStrExt as _, fs::PermissionsExt as _},
     path::{Path, PathBuf},
@@ -72,7 +73,8 @@ pub(super) fn authored_distinct(esp_partuuid: &str, xbootldr_partuuid: &str) -> 
 
 pub(super) fn authored_alias_at(partuuid: &str, mount_point: &str) -> String {
     format!(
-        "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{partuuid}\", mount_point = \"{mount_point}\" }}\n"
+        "return {{\n    esp = {},\n    boot = {{ kind = \"alias_esp\" }},\n}}\n",
+        authored_selector(partuuid, mount_point)
     )
 }
 
@@ -83,8 +85,40 @@ pub(super) fn authored_distinct_at(
     xbootldr_mount_point: &str,
 ) -> String {
     format!(
-        "let cast = import! cast.boot_topology.v2\ncast.boot_topology.distinct {{ partuuid = \"{esp_partuuid}\", mount_point = \"{esp_mount_point}\" }} {{ partuuid = \"{xbootldr_partuuid}\", mount_point = \"{xbootldr_mount_point}\" }}\n"
+        "return {{\n    esp = {},\n    boot = {{ kind = \"distinct_xbootldr\", xbootldr = {} }},\n}}\n",
+        authored_selector(esp_partuuid, esp_mount_point),
+        authored_selector(xbootldr_partuuid, xbootldr_mount_point)
     )
+}
+
+fn authored_selector(partuuid: &str, mount_point: &str) -> String {
+    format!(
+        "{{ partuuid = {}, mount_point = {} }}",
+        lua_literal(partuuid),
+        lua_literal(mount_point)
+    )
+}
+
+/// Quote an arbitrary authored value as a Lua string literal.
+///
+/// These fixtures deliberately author hostile selector bytes — control
+/// characters included — so escaping must keep the literal parseable and hand
+/// the exact bytes to the selector validators.
+fn lua_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            control if control.is_control() && control.is_ascii() => {
+                write!(escaped, "\\{:03}", control as u32).unwrap();
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 #[derive(Debug, Eq, PartialEq)]

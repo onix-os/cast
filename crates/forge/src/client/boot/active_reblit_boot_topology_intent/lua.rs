@@ -39,19 +39,21 @@ pub(super) fn language_spec() -> LanguageSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaPartitionSelector {
     partuuid: String,
     mount_point: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum LuaBootTarget {
     AliasEsp,
     DistinctXbootldr { xbootldr: LuaPartitionSelector },
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaBootTopologyIntent {
     esp: LuaPartitionSelector,
     boot: LuaBootTarget,

@@ -214,8 +214,8 @@ fn direct_database_frozen_consumer_rejects_reserved_targets_before_destination_m
         ".stateID/forged-child",
         "lib/os-release",
         "lib/os-release/forged-child",
-        "lib/system-model.glu",
-        "lib/system-model.glu/forged-child",
+        "lib/system-model.lua",
+        "lib/system-model.lua/forged-child",
     ] {
         let layout = StonePayloadLayoutRecord {
             uid: 0,

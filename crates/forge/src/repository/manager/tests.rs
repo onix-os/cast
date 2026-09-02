@@ -289,16 +289,30 @@ fn config_manager_preserves_repository_fragment_precedence() {
     let fragments = config_directory.path().join("repo.d");
     fs::create_dir_all(&fragments).unwrap();
     fs::write(
-        fragments.join("a.glu"),
-        r#"let cast = import! cast.repository.v1
-cast.repositories [cast.repository.direct "selected" "file:///a.index"]
+        fragments.join("a.lua"),
+        r#"return {
+    {
+        id = "selected",
+        description = { kind = "none" },
+        source = { kind = "direct_index", uri = "file:///a.index" },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+}
 "#,
     )
     .unwrap();
     fs::write(
-        fragments.join("z.glu"),
-        r#"let cast = import! cast.repository.v1
-cast.repositories [cast.repository.direct "selected" "file:///z.index"]
+        fragments.join("z.lua"),
+        r#"return {
+    {
+        id = "selected",
+        description = { kind = "none" },
+        source = { kind = "direct_index", uri = "file:///z.index" },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+}
 "#,
     )
     .unwrap();
@@ -310,7 +324,7 @@ cast.repositories [cast.repository.direct "selected" "file:///z.index"]
         panic!("expected direct repository source");
     };
     assert_eq!(uri.as_str(), "file:///z.index");
-    assert!(selected.config_path.as_ref().unwrap().ends_with("repo.d/z.glu"));
+    assert!(selected.config_path.as_ref().unwrap().ends_with("repo.d/z.lua"));
 }
 
 #[test]
@@ -347,7 +361,7 @@ return {
 
 #[test]
 fn config_manager_admits_only_registered_declaration_languages() {
-    // Only the registered language set (`glu`, `lua`) is dispatched. Serialized
+    // Only the registered language set (`lua`) is dispatched. Serialized
     // configuration formats — YAML, KDL, JSON — are never an authored surface;
     // a fragment with an unregistered extension is not loaded as a repository.
     let config_directory = tempfile::tempdir().unwrap();

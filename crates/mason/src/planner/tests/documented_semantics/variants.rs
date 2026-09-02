@@ -24,7 +24,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
             .recipe
             .modules
             .iter()
-            .any(|module| module.logical_name == "package.glu"),
+            .any(|module| module.logical_name == "package.lua"),
         "the frozen evaluation provenance must bind the typed factory module"
     );
     assert!(matches!(

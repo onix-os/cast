@@ -56,7 +56,7 @@ fn journal_coordinator_new_state_provenance_commit_faults_precede_every_canonica
         );
         assert_candidate_state_id_absent(&fixture);
         assert_generated_metadata_name_absent(&fixture, "os-release");
-        assert_generated_metadata_name_absent(&fixture, "system-model.glu");
+        assert_generated_metadata_name_absent(&fixture, "system-model.lua");
         match point {
             db::state::MetadataProvenanceFaultPoint::BeforeCommit => {
                 assert_eq!(
@@ -78,7 +78,7 @@ fn journal_coordinator_new_state_provenance_commit_faults_precede_every_canonica
 fn journal_coordinator_first_and_second_metadata_publication_faults_retain_provenance() {
     for (name, foreign) in [
         ("os-release", b"foreign first output\n".as_slice()),
-        ("system-model.glu", b"foreign second output\n".as_slice()),
+        ("system-model.lua", b"foreign second output\n".as_slice()),
     ] {
         let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::NewState);
         let started = coordinator.record().clone();
@@ -97,7 +97,7 @@ fn journal_coordinator_first_and_second_metadata_publication_faults_retain_prove
         assert_candidate_state_id_absent(&fixture);
         assert_eq!(fs::read(fixture.candidate_path.join("lib").join(name)).unwrap(), foreign);
         if name == "os-release" {
-            assert_generated_metadata_name_absent(&fixture, "system-model.glu");
+            assert_generated_metadata_name_absent(&fixture, "system-model.lua");
         } else {
             assert_eq!(
                 fs::read(fixture.candidate_path.join("lib/os-release")).unwrap(),
@@ -172,7 +172,7 @@ fn journal_coordinator_existing_candidates_require_exact_nonlegacy_provenance_be
         } else {
             assert!(!fixture.candidate_path.join("lib").exists());
             assert_generated_metadata_name_absent(&fixture, "os-release");
-            assert_generated_metadata_name_absent(&fixture, "system-model.glu");
+            assert_generated_metadata_name_absent(&fixture, "system-model.lua");
             assert_candidate_state_id_absent(&fixture);
         }
 
@@ -196,7 +196,7 @@ fn journal_coordinator_existing_candidates_require_exact_nonlegacy_provenance_be
         assert_eq!(reopen_record(&fixture.installation.root), started);
         if candidate_kind == CandidateKind::ActiveReblit {
             assert_generated_metadata_name_absent(&fixture, "os-release");
-            assert_generated_metadata_name_absent(&fixture, "system-model.glu");
+            assert_generated_metadata_name_absent(&fixture, "system-model.lua");
             assert_candidate_state_id_absent(&fixture);
         }
     }

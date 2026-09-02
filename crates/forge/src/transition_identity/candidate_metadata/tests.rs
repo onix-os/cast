@@ -181,7 +181,7 @@ fn authority_bound_snapshot_refuses_authored_fixed_name_before_pair_publication(
     let lib = candidate_path.join("lib");
     fs::create_dir(&lib).unwrap();
     fs::set_permissions(&lib, Permissions::from_mode(0o755)).unwrap();
-    let snapshot_path = lib.join("system-model.glu");
+    let snapshot_path = lib.join("system-model.lua");
     let authored = b"// deliberately authored, not generated\n";
     fs::write(&snapshot_path, authored).unwrap();
     fs::set_permissions(&snapshot_path, Permissions::from_mode(0o644)).unwrap();
@@ -321,7 +321,7 @@ fn existing_metadata_verification_rejects_same_byte_release_replacement_during_p
     assert_ne!((replacement.dev(), replacement.ino()), (original.dev(), original.ino()));
     assert_eq!(fs::read(parked_release).unwrap(), RELEASE);
     assert_eq!(fs::read(canonical_release).unwrap(), RELEASE);
-    assert_eq!(fs::read(candidate_path.join("lib/system-model.glu")).unwrap(), SNAPSHOT);
+    assert_eq!(fs::read(candidate_path.join("lib/system-model.lua")).unwrap(), SNAPSHOT);
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn mirror_logical_metadata(candidate: &Path) {
     let lib = candidate.join("lib");
     fs::create_dir(&lib).unwrap();
     fs::set_permissions(&lib, Permissions::from_mode(0o755)).unwrap();
-    for (name, bytes) in [("os-release", RELEASE), ("system-model.glu", SNAPSHOT)] {
+    for (name, bytes) in [("os-release", RELEASE), ("system-model.lua", SNAPSHOT)] {
         let path = lib.join(name);
         fs::write(&path, bytes).unwrap();
         fs::set_permissions(path, Permissions::from_mode(0o644)).unwrap();
@@ -403,7 +403,7 @@ fn logical_layout(candidate: &Path) -> Vec<(PathBuf, u32, u32, u64, u64, Vec<u8>
 }
 
 fn retained_evidence(candidate: &Path) -> Vec<EntryEvidence> {
-    retained_evidence_for(candidate, ["", "lib", "lib/os-release", "lib/system-model.glu"])
+    retained_evidence_for(candidate, ["", "lib", "lib/os-release", "lib/system-model.lua"])
 }
 
 fn retained_evidence_for<'a>(

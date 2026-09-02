@@ -259,7 +259,7 @@ impl Packager {
     }
 }
 
-/// Resolve the concrete typed outputs returned by the Gluon package factory.
+/// Resolve the concrete typed outputs returned by the package factory.
 fn resolve_packages(recipe: &Recipe, collector: &mut Collector) -> Result<BTreeMap<String, ResolvedOutput>, Error> {
     let mut packages = BTreeMap::new();
     for (index, output) in recipe.declaration.outputs.iter().enumerate() {

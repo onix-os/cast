@@ -4,7 +4,7 @@
 //! Note that we support transaction scope and system scope triggers, invoked
 //! before `/usr` is activated and after, respectively.
 //!
-//! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu`
+//! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.lua`
 //! and do not yet support local triggers
 mod anchored_locators;
 mod process;
@@ -646,21 +646,31 @@ mod tests {
     #[test]
     fn packaged_transaction_triggers_load_from_packaged_fragments() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("tx.d/depmod.glu");
+        let path = temporary.path().join("tx.d/depmod.lua");
         fs_err::create_dir_all(path.parent().unwrap()).unwrap();
         fs_err::write(
             &path,
-            r#"let cast = import! cast.trigger.v1
-let base = cast.trigger "depmod" "Update kernel module dependencies"
-{
-    paths = [cast.path
-        "/usr/lib/modules/(version:*)/kernel"
-        ["depmod"]
-        (cast.optional.set cast.path_kind.directory)],
-    handlers = [cast.handler.named "depmod" (cast.handler.run
-        "/sbin/depmod"
-        ["-a", "$(version)"])],
-    .. base
+            r#"return {
+    name = "depmod",
+    description = "Update kernel module dependencies",
+    before = { kind = "none" },
+    after = { kind = "none" },
+    inhibitors = { kind = "none" },
+    paths = {
+        {
+            key = "/usr/lib/modules/(version:*)/kernel",
+            value = {
+                handlers = { "depmod" },
+                kind = { kind = "some", value = { kind = "directory" } },
+            },
+        },
+    },
+    handlers = {
+        {
+            key = "depmod",
+            value = { kind = "run", command = "/sbin/depmod", args = { "-a", "$(version)" } },
+        },
+    },
 }
 "#,
         )

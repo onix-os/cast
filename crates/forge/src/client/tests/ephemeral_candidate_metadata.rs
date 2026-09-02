@@ -34,7 +34,7 @@ fn ephemeral_candidate_metadata_never_follows_lib_or_os_info_symlinks() {
         if escape == "lib" {
             assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"external-directory");
             assert!(!external.join("os-release").exists());
-            assert!(!external.join("system-model.glu").exists());
+            assert!(!external.join("system-model.lua").exists());
             assert!(fs::symlink_metadata(&candidate_lib).unwrap().file_type().is_symlink());
         } else {
             assert_eq!(fs::read(&external).unwrap(), b"external-input");
@@ -50,7 +50,7 @@ fn ephemeral_candidate_metadata_never_follows_lib_or_os_info_symlinks() {
 
 #[test]
 fn ephemeral_candidate_metadata_never_follows_output_symlinks() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let fixture = ephemeral_metadata_fixture();
         let candidate = fixture.materialize_candidate();
         let external = fixture.temporary.path().join(format!("external-{output}-target"));
@@ -75,7 +75,7 @@ fn ephemeral_candidate_metadata_never_follows_output_symlinks() {
 
 #[test]
 fn ephemeral_candidate_metadata_preserves_existing_output_inodes() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         for hardlinked in [false, true] {
             let fixture = ephemeral_metadata_fixture();
             let candidate = fixture.materialize_candidate();
@@ -112,7 +112,7 @@ fn ephemeral_candidate_metadata_preserves_existing_output_inodes() {
 
 #[test]
 fn ephemeral_candidate_metadata_final_name_races_are_no_replace() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let fixture = ephemeral_metadata_fixture();
         let candidate = fixture.materialize_candidate();
         let external = fixture.temporary.path().join(format!("external-{output}-race"));
@@ -198,7 +198,7 @@ fn retained_ephemeral_metadata_proof_rejects_post_transaction_mutation() {
     for mutation in ["rewrite", "delete", "replace", "hardlink"] {
         let fixture = ephemeral_metadata_fixture();
         let candidate = fixture.materialize_candidate();
-        let output = fixture.root.join("usr/lib/system-model.glu");
+        let output = fixture.root.join("usr/lib/system-model.lua");
         let external = fixture
             .temporary
             .path()
@@ -254,7 +254,7 @@ fn retained_ephemeral_metadata_proof_rejects_post_transaction_mutation() {
 fn retained_ephemeral_metadata_proof_rejects_post_system_mutation() {
     let fixture = ephemeral_metadata_fixture();
     let candidate = fixture.materialize_candidate();
-    let output = fixture.root.join("usr/lib/system-model.glu");
+    let output = fixture.root.join("usr/lib/system-model.lua");
     let hook_ran = std::rc::Rc::new(std::cell::Cell::new(false));
     let hook_observation = std::rc::Rc::clone(&hook_ran);
     let hook_output = output.clone();
@@ -403,11 +403,11 @@ fn successful_ephemeral_metadata_is_exact_evaluable_and_root_abi_complete() {
         candidate_metadata::GENERIC_OS_RELEASE
     );
     assert_generated_snapshot(
-        &fixture.root.join("usr/lib/system-model.glu"),
+        &fixture.root.join("usr/lib/system-model.lua"),
         &expected_snapshot,
         "ephemeral-metadata-package",
     );
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let metadata = fs::symlink_metadata(fixture.root.join("usr/lib").join(output)).unwrap();
         assert!(metadata.file_type().is_file(), "metadata {output}");
         assert_eq!(metadata.uid(), unsafe { nix::libc::geteuid() }, "metadata {output}");
@@ -556,9 +556,9 @@ fn prepare_replacement_usr(root: &Path, domain: &str, replacement: ReplacementTr
     fs::write(usr.join(marker), marker.as_bytes()).unwrap();
     match replacement {
         ReplacementTrigger::Invalid => {
-            let trigger = usr.join(format!("share/cast/triggers/{domain}.d/replacement-invalid.glu"));
+            let trigger = usr.join(format!("share/cast/triggers/{domain}.d/replacement-invalid.lua"));
             fs::create_dir_all(trigger.parent().unwrap()).unwrap();
-            fs::write(trigger, b"let replacement_trigger =").unwrap();
+            fs::write(trigger, b"return {").unwrap();
         }
         ReplacementTrigger::Destructive => {
             write_destructive_trigger(&usr, domain, "replacement-destructive", &format!("/usr/{marker}"))
@@ -567,21 +567,32 @@ fn prepare_replacement_usr(root: &Path, domain: &str, replacement: ReplacementTr
 }
 
 fn write_destructive_trigger(usr: &Path, domain: &str, name: &str, marker: &str) {
-    let trigger = usr.join(format!("share/cast/triggers/{domain}.d/{name}.glu"));
+    let trigger = usr.join(format!("share/cast/triggers/{domain}.d/{name}.lua"));
     fs::create_dir_all(trigger.parent().unwrap()).unwrap();
     fs::write(
         trigger,
         format!(
-            r#"let cast = import! cast.trigger.v1
-let base = cast.trigger "{name}" "Ephemeral trigger authority boundary proof"
-{{
-    paths = [cast.path
-        "/usr/share/ephemeral-trigger-input"
-        ["delete-marker"]
-        (cast.optional.set cast.path_kind.directory)],
-    handlers = [cast.handler.named "delete-marker" (cast.handler.delete
-        ["{marker}"])],
-    .. base
+            r#"return {{
+    name = "{name}",
+    description = "Ephemeral trigger authority boundary proof",
+    before = {{ kind = "none" }},
+    after = {{ kind = "none" }},
+    inhibitors = {{ kind = "none" }},
+    paths = {{
+        {{
+            key = "/usr/share/ephemeral-trigger-input",
+            value = {{
+                handlers = {{ "delete-marker" }},
+                kind = {{ kind = "some", value = {{ kind = "directory" }} }},
+            }},
+        }},
+    }},
+    handlers = {{
+        {{
+            key = "delete-marker",
+            value = {{ kind = "delete", paths = {{ "{marker}" }} }},
+        }},
+    }},
 }}
 "#
         ),
@@ -612,7 +623,7 @@ fn assert_substitution_preserved_both_sides(
         candidate_metadata::GENERIC_OS_RELEASE
     );
     assert_eq!(
-        fs::read_to_string(retained_usr.join("lib/system-model.glu")).unwrap(),
+        fs::read_to_string(retained_usr.join("lib/system-model.lua")).unwrap(),
         expected_snapshot
     );
     assert_eq!(
@@ -624,7 +635,7 @@ fn assert_substitution_preserved_both_sides(
         replacement_marker.as_bytes()
     );
     assert!(!root.join("usr/lib/os-release").exists());
-    assert!(!root.join("usr/lib/system-model.glu").exists());
+    assert!(!root.join("usr/lib/system-model.lua").exists());
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {

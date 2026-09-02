@@ -674,8 +674,8 @@ fn assert_factory_override_changes_frozen_identity(matrix: &PackageExampleMatrix
     let original = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir)
         .expect("reuse the original factory-override build lock");
     let original_source = fs::read_to_string(&example.recipe_path).unwrap();
-    const OVERRIDE: &str = "a.dep.pkgconfig \"libressl\"";
-    const CHANGED_OVERRIDE: &str = "a.dep.pkgconfig \"openssl\"";
+    const OVERRIDE: &str = "tls = { kind = \"pkg_config\", value = \"libressl\" }";
+    const CHANGED_OVERRIDE: &str = "tls = { kind = \"pkg_config\", value = \"openssl\" }";
     assert_eq!(
         original_source.matches(OVERRIDE).count(),
         1,
@@ -808,7 +808,7 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
             .unwrap_or_else(|error| panic!("{}: plan from written build lock: {error:#}", example.name));
         assert_eq!(
             locked.lock_outcome, None,
-            "{}: the second plan must consume, not regenerate, build.lock.glu",
+            "{}: the second plan must consume, not regenerate, build.lock.lua",
             example.name
         );
         assert_eq!(

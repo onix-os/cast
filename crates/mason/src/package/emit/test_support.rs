@@ -79,7 +79,7 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         profiles,
         policy: PolicyProvenance {
             name: "aerynos".to_owned(),
-            root: test_evaluation("policy.glu", "4", &policy_inputs),
+            root: test_evaluation("policy.lua", "4", &policy_inputs),
             layers,
         },
     };
@@ -112,7 +112,7 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         .into_iter()
         .map(|name| {
             let mut origins = vec![InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.base".to_owned(),
                 index: 0,
             }];

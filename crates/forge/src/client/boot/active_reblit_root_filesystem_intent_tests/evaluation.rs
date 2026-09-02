@@ -18,8 +18,9 @@ fn authored_intent_exposes_one_revalidated_root_token_and_exact_provenance() {
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
     assert_eq!(fingerprint.root_logical_name, "etc/cast/root-filesystem.lua");
-    assert_eq!(fingerprint.modules.len(), 1);
-    assert_eq!(fingerprint.modules[0].logical_name, "cast.root_filesystem.v1");
+    // The Lua root declaration is self-contained, so its provenance is the one
+    // authored source and nothing else.
+    assert!(fingerprint.modules.is_empty());
 }
 
 #[test]
@@ -98,10 +99,10 @@ fn root_locator_byte_bound_is_inclusive_and_diagnostic_preview_is_bounded() {
 
 #[test]
 fn relative_host_unknown_and_old_abi_imports_are_rejected() {
-    for imported in ["\"other.glu\"", "std.fs", "cast.system.v1", "cast.root_filesystem.v0"] {
+    for imported in ["other.lua", "std.fs", "cast.system.v1", "cast.root_filesystem.v0"] {
         let fixture = Fixture::new();
         fixture.write_source(format!(
-            "let _ = import! {imported}\nlet cast = import! cast.root_filesystem.v1\ncast.root_filesystem {{ root = {ROOT_LOCATOR:?} }}\n"
+            "local _ = cast.import({imported:?})\nreturn {{ root = {ROOT_LOCATOR:?} }}\n"
         ));
         assert!(matches!(
             fixture.prepare(),
@@ -112,16 +113,29 @@ fn relative_host_unknown_and_old_abi_imports_are_rejected() {
 }
 
 #[test]
-fn v1_api_import_is_mandatory_and_the_output_record_is_closed() {
-    let no_api = Fixture::new();
-    no_api.write_source(format!("{{ root = {ROOT_LOCATOR:?} }}\n"));
+fn no_api_import_is_admitted_and_the_output_record_is_closed() {
+    // The declaration admits no ABI import at all, so importing the versioned
+    // API is itself rejected before evaluation.
+    let imported_api = Fixture::new();
+    imported_api.write_source(format!(
+        "local cast_api = cast.import(\"cast.root_filesystem.v1\")\nreturn {{ root = {ROOT_LOCATOR:?} }}\n"
+    ));
     assert!(matches!(
-        no_api.prepare(),
-        Err(ActiveReblitRootFilesystemIntentError::EvaluationContract { .. })
+        imported_api.prepare(),
+        Err(ActiveReblitRootFilesystemIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Import
+    ));
+
+    let not_a_record = Fixture::new();
+    not_a_record.write_source(format!("return {ROOT_LOCATOR:?}\n"));
+    assert!(matches!(
+        not_a_record.prepare(),
+        Err(ActiveReblitRootFilesystemIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Type
     ));
 
     let missing = Fixture::new();
-    missing.write_source("let cast = import! cast.root_filesystem.v1\ncast.root_filesystem { }\n");
+    missing.write_source("return { }\n");
     assert!(matches!(
         missing.prepare(),
         Err(ActiveReblitRootFilesystemIntentError::Evaluation(ref diagnostic))
@@ -130,7 +144,7 @@ fn v1_api_import_is_mandatory_and_the_output_record_is_closed() {
 
     let unknown = Fixture::new();
     unknown.write_source(format!(
-        "let cast = import! cast.root_filesystem.v1\n{{ unexpected = \"input\", .. cast.root_filesystem {{ root = {ROOT_LOCATOR:?} }} }}\n"
+        "return {{ unexpected = \"input\", root = {ROOT_LOCATOR:?} }}\n"
     ));
     assert!(matches!(
         unknown.prepare(),
@@ -140,7 +154,7 @@ fn v1_api_import_is_mandatory_and_the_output_record_is_closed() {
 }
 
 #[test]
-fn exact_source_and_embedded_abi_participate_in_a_deterministic_fingerprint() {
+fn exact_source_bytes_participate_in_a_deterministic_fingerprint() {
     let first = Fixture::new();
     first.write_root(ROOT_LOCATOR);
     let first_prepared = first.prepare().unwrap();
@@ -169,10 +183,10 @@ fn exact_source_and_embedded_abi_participate_in_a_deterministic_fingerprint() {
         .fingerprint()
         .clone();
     assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
-    assert_eq!(
-        first_fingerprint.modules[0].sha256,
-        changed_fingerprint.modules[0].sha256
-    );
+    // No module set participates: the Lua declaration imports nothing, so the
+    // authored bytes are the whole fingerprinted graph.
+    assert!(first_fingerprint.modules.is_empty());
+    assert!(changed_fingerprint.modules.is_empty());
 }
 
 #[test]

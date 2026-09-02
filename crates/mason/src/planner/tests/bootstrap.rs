@@ -180,7 +180,7 @@ impl ExecutionInputSnapshot {
                 expected,
             );
         }
-        assert_file_bytes_unchanged(fixture, checkpoint, "build.lock.glu", build_lock, &self.build_lock);
+        assert_file_bytes_unchanged(fixture, checkpoint, "build.lock.lua", build_lock, &self.build_lock);
     }
 }
 

@@ -282,7 +282,7 @@ mod tests {
             }
         ));
 
-        let fifo = root.path().join("build.lock.glu");
+        let fifo = root.path().join("build.lock.lua");
         nix::unistd::mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
         let error = read(&fifo, TEST_SOURCE_BYTE_LIMIT).unwrap_err();
         assert!(matches!(

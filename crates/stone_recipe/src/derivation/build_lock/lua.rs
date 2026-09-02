@@ -24,9 +24,7 @@ use super::{
 
 /// Emit a build lock as canonical, generated-marked Lua source that re-decodes
 /// through this adapter into the same [`BuildLock`]. This is the lock's write
-/// path — what a generated-slot authority switch writes when it converts a
-/// `build.lock.glu` to `build.lock.lua`.
-
+/// path — what a generated slot writes as `build.lock.lua`.
 pub fn encode_lua_lock(lock: &BuildLock) -> String {
     let mut lock = lock.clone();
     lock.normalize();

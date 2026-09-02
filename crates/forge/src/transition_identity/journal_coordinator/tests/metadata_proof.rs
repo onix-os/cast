@@ -15,7 +15,7 @@ struct CandidateMetadataEntryEvidence {
 }
 
 fn candidate_metadata_evidence(fixture: &CoordinatorFixture) -> Vec<CandidateMetadataEntryEvidence> {
-    ["lib", "lib/os-release", "lib/system-model.glu"]
+    ["lib", "lib/os-release", "lib/system-model.lua"]
         .into_iter()
         .map(|relative| {
             let path = fixture.candidate_path.join(relative);
@@ -201,7 +201,7 @@ fn journal_coordinator_metadata_substitution_during_trigger_effect_stops_before_
     let failure = coordinator
         .run_transaction_triggers(|_| {
             calls.set(calls.get() + 1);
-            parked = Some(park_and_replace_metadata(&fixture, "system-model.glu"));
+            parked = Some(park_and_replace_metadata(&fixture, "system-model.lua"));
             Ok::<(), TriggerEffectError>(())
         })
         .unwrap_err();
