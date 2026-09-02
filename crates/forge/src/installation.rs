@@ -180,7 +180,7 @@ impl Installation {
     ///
     /// Unlike [`Self::open`], this never reads the installation's preliminary
     /// active-state witness. Neither opening mode evaluates authored
-    /// `system.glu`; frozen callers must supply their complete repository and
+    /// `system.lua`; frozen callers must supply their complete repository and
     /// package intent explicitly.
     pub fn open_frozen(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
         Self::open_with_discovery(root.into(), cache_dir, Discovery::FrozenCache)

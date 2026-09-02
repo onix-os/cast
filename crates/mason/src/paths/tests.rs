@@ -10,7 +10,7 @@ use crate::package::test_derivation_plan;
 fn test_paths(root: &tempfile::TempDir, plan: &DerivationPlan) -> Paths {
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let output = root.path().join("output");
     util::ensure_dir_exists(&output).unwrap();
     Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap()
@@ -136,7 +136,7 @@ fn invalid_recipe_identity_is_rejected_before_host_paths_are_created() {
     let root = tempfile::tempdir().unwrap();
     let plan = test_derivation_plan();
     let mut recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     recipe.declaration.meta.pname = "/tmp/cast-path-escape".to_owned();
     let output = root.path().join("output");
     util::ensure_dir_exists(&output).unwrap();
@@ -719,7 +719,7 @@ fn retained_workspace_descriptor_detects_path_substitution() {
     std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
     let plan = test_derivation_plan();
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let output = outer.path().join("output");
     std::fs::create_dir(&output).unwrap();
     let paths = Paths::new(&recipe, plan.layout, &workspace, output).unwrap();

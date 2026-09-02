@@ -143,7 +143,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
 
 fn assert_disabled_factory_variant() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/examples/gluon/packages/optional-component-source-graph");
+        .join("../../docs/examples/lua/packages/optional-component-source-graph");
     let source_root = SourceRoot::new(&root).expect("open optional component example source root");
     let evaluator = DeclarationEvaluator::<PackageSpec>::with_source_root(
         &LuaPackageEvaluator::default(),

@@ -176,7 +176,7 @@ impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
 /// Emit a decoded [`SystemModel`] as canonical generated-marked Lua source that
 /// re-decodes through [`LuaSystemEvaluator`] to the same semantic value. This is
 /// the system-model write path — what a Gluon→Lua declaration migration emits
-/// for the `etc/cast/system.glu` slot. Repository records reuse the shared
+/// for the `etc/cast/system.lua` slot. Repository records reuse the shared
 /// repository encoding, so a system model and a standalone repositories
 /// document canonicalize their repositories identically.
 #[cfg_attr(not(test), allow(dead_code))]

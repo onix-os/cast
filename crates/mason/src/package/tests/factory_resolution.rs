@@ -1,7 +1,7 @@
 #[test]
 fn package_factory_defaults_resolve_directly() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let install = tempfile::tempdir().unwrap();
     let mut collector = Collector::new(install.path());
 
@@ -96,7 +96,7 @@ fn package_factory_defaults_resolve_directly() {
 #[test]
 fn resolved_outputs_do_not_inherit_root_metadata() {
     let mut recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let root = recipe
         .declaration
         .outputs
@@ -127,7 +127,7 @@ fn resolved_outputs_do_not_inherit_root_metadata() {
 #[test]
 fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();
@@ -233,7 +233,7 @@ fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
 #[test]
 fn frozen_packager_rejects_runtime_and_plan_layout_mismatch() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();

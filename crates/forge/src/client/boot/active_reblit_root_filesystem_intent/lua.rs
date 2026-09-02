@@ -141,7 +141,7 @@ impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntent
 /// The normalization stores the locator verbatim (rejecting the reserved
 /// `root=` prefix, non-graphic bytes, quotes, and backslashes), so this is
 /// idempotent: emitting the validated locator and decoding it again yields the
-/// same intent. Because `etc/cast/root-filesystem.glu` is an *authored*,
+/// same intent. Because `etc/cast/root-filesystem.lua` is an *authored*,
 /// boot-critical slot, this is the canonical Lua an operator adopts as the
 /// verified replacement — never an authority Cast switches on its own.
 #[cfg_attr(not(test), allow(dead_code))]

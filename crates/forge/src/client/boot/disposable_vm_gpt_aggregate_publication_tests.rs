@@ -47,7 +47,7 @@ const CAMPAIGN_PROFILE: &str = "gpt-receipt-bound-aggregate-v1";
 const RUNTIME_ROOT: &str = "/run/cast-vm-boot-storage";
 const MOUNT_ROOT: &str = "/run/cast-vm-boot-storage/mount";
 const CONSUMED_MARKER: &str = "/run/cast-vm-boot-storage/authorization-v1.consumed";
-const TOPOLOGY_SOURCE: &str = "etc/cast/boot-topology.glu";
+const TOPOLOGY_SOURCE: &str = "etc/cast/boot-topology.lua";
 
 #[derive(Clone, Debug)]
 struct ExpectedTarget {

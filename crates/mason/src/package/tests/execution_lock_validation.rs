@@ -47,7 +47,7 @@ fn frozen_packager_rejects_other_derivation_permit_in_same_workspace_before_muta
     other_plan.validate().unwrap();
     assert_ne!(plan.derivation_id(), other_plan.derivation_id());
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let other_output = root.path().join("other-output");
     fs::create_dir(&other_output).unwrap();
     let mut other_paths = Paths::new(&recipe, other_plan.layout.clone(), root.path(), other_output).unwrap();
@@ -68,7 +68,7 @@ fn frozen_packager_rejects_unbound_runtime_paths_during_construction() {
     let output = root.path().join("output");
     fs::create_dir(&output).unwrap();
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let unbound_paths = Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap();
 
     assert!(matches!(

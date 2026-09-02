@@ -1,4 +1,4 @@
-//! Retained authority for the canonical `etc/cast/system.glu` intent.
+//! Retained authority for the canonical `etc/cast/system.lua` intent.
 
 use std::{
     fs::Metadata,

@@ -454,7 +454,7 @@ let cast = import! cast.system.v1
     fn canonical_paths_separate_authored_intent_from_generated_state() {
         let root = Path::new("/target");
 
-        assert_eq!(intent_path(root), root.join("etc/cast/system.glu"));
+        assert_eq!(intent_path(root), root.join("etc/cast/system.lua"));
         assert_eq!(snapshot_path(root), root.join("usr/lib/system-model.glu"));
         assert_ne!(intent_path(root), snapshot_path(root));
     }
@@ -466,7 +466,7 @@ let cast = import! cast.system.v1
         let public_etc = public_root.join("etc");
         let directory = public_etc.join("cast");
         fs::create_dir_all(&directory).unwrap();
-        let source_path = directory.join("system.glu");
+        let source_path = directory.join("system.lua");
         fs::write(&source_path, authored_source()).unwrap();
         fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let retained_directory = std::fs::File::open(&directory).unwrap();
@@ -490,13 +490,13 @@ let cast = import! cast.system.v1
 
         assert_eq!(loaded.path(), source_path);
         assert!(loaded.packages.contains(&Provider::package_name("alpha")));
-        assert!(!evacuated_etc.join("cast/system.glu").exists());
+        assert!(!evacuated_etc.join("cast/system.lua").exists());
     }
 
     #[test]
     fn load_retains_authored_source_and_records_both_fingerprints() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         let authored = authored_source();
         fs::write(&path, &authored).unwrap();
 
@@ -543,7 +543,7 @@ let cast = import! cast.system.v1
     #[test]
     fn fixed_loader_keeps_engine_and_conversion_errors_typed_with_exact_paths() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         fs::write(
             &path,
             "let cast = import! cast.system.v1\n{ packages = [1], .. cast.system }",
@@ -602,7 +602,7 @@ let cast = import! cast.system.v1
     #[test]
     fn fixed_loader_keeps_relative_imports_beneath_its_retained_root() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         fs::write(&path, "import! \"./selection.glu\"").unwrap();
         fs::write(
             temporary.path().join("selection.glu"),
@@ -632,7 +632,7 @@ let cast = import! cast.system.v1
     #[test]
     fn authored_fingerprint_is_embedded_and_preserved_across_updates() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         fs::write(&path, authored_source()).unwrap();
         let loaded = load(&path).unwrap().unwrap();
         let authored_fingerprint = loaded.fingerprint().sha256.clone();

@@ -34,7 +34,7 @@ pub struct Command {
     ///
     /// The supplied .glu expression is evaluated, and only its repositories and packages
     /// will be used to create the new state
-    #[arg(value_name = "system.glu", long)]
+    #[arg(value_name = "system.lua", long)]
     import: Option<PathBuf>,
 }
 

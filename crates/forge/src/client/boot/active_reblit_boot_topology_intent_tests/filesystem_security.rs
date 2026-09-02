@@ -76,7 +76,7 @@ fn a_lua_source_at_the_fixed_slot_is_discovered_revalidated_and_loaded() {
     // The fixed slot has one canonical logical name regardless of engine, and
     // the Lua declaration imports nothing.
     let fingerprint = revalidated.fingerprint();
-    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.lua");
     assert!(fingerprint.modules.is_empty());
 }
 

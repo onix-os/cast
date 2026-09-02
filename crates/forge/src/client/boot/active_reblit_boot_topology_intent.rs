@@ -1,6 +1,6 @@
 //! Authenticated machine-local declarative intent for ActiveReblit boot topology.
 //!
-//! The fixed `etc/cast/boot-topology.glu` program is separate from the stored
+//! The fixed `etc/cast/boot-topology.lua` program is separate from the stored
 //! [`crate::SystemModel`]: it describes one machine's immutable partition
 //! identities, not stateless OS package intent. The restricted program must
 //! import exactly `cast.boot_topology.v2` and returns either one ESP selector
@@ -582,7 +582,7 @@ fn revalidate_installation_root(
 }
 
 fn boot_topology_intent_path(installation: &Installation) -> PathBuf {
-    installation.root.join("etc/cast/boot-topology.glu")
+    installation.root.join("etc/cast/boot-topology.lua")
 }
 
 fn deadline_after(timeout: Duration) -> Result<Instant, ActiveReblitBootTopologyIntentError> {

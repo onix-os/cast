@@ -1,6 +1,6 @@
 //! Authenticated machine-local root-filesystem intent for ActiveReblit.
 //!
-//! The mandatory `etc/cast/root-filesystem.glu` source declares one opaque
+//! The mandatory `etc/cast/root-filesystem.lua` source declares one opaque
 //! kernel root locator. Rust validates that locator and materializes exactly
 //! one `root=<value>` token. The value is deliberately separate from stored
 //! OS state, package and administrator snippets, and ESP/XBOOTLDR topology.
@@ -492,7 +492,7 @@ fn revalidate_installation_root(
 }
 
 fn root_filesystem_intent_path(installation: &Installation) -> PathBuf {
-    installation.root.join("etc/cast/root-filesystem.glu")
+    installation.root.join("etc/cast/root-filesystem.lua")
 }
 
 fn deadline_after(timeout: Duration) -> Result<Instant, ActiveReblitRootFilesystemIntentError> {

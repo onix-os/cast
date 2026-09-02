@@ -213,7 +213,7 @@ fn execution_fixture_package_directory(name: &str) -> PathBuf {
     if name == "userspace-profile" {
         fixtures.join(name)
     } else {
-        fixtures.join("execution/packages").join(name)
+        fixtures.join("packages").join(name)
     }
 }
 
@@ -597,7 +597,7 @@ cast.profiles [
 }
 
 fn package_example_roots() -> Vec<(String, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/packages");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
     let mut examples = fs::read_dir(&root)
         .unwrap()
         .map(|entry| entry.unwrap())

@@ -17,7 +17,7 @@ fn authored_intent_exposes_one_revalidated_root_token_and_exact_provenance() {
     assert!(!revalidated.kernel_argument().contains(char::is_whitespace));
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
-    assert_eq!(fingerprint.root_logical_name, "etc/cast/root-filesystem.glu");
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/root-filesystem.lua");
     assert_eq!(fingerprint.modules.len(), 1);
     assert_eq!(fingerprint.modules[0].logical_name, "cast.root_filesystem.v1");
 }

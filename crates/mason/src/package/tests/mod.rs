@@ -31,7 +31,7 @@ fn publication_fixture() -> (tempfile::TempDir, DerivationPlan, Paths) {
     let output = root.path().join("output");
     fs::create_dir(&output).unwrap();
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let plan = test_derivation_plan();
     let mut paths = Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap();
     paths.bind_to_plan(&plan).unwrap();

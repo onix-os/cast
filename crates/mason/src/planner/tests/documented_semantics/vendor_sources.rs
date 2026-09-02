@@ -274,7 +274,7 @@ fn freeze_variant(
     recipe_source: &str,
 ) -> (PackageSpec, DerivationPlan) {
     let authored = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/examples/gluon/packages/independent-vendor-source");
+        .join("../../docs/examples/lua/packages/independent-vendor-source");
     let recipe_dir = matrix
         ._root
         .path()

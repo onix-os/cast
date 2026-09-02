@@ -120,7 +120,7 @@ mod tests {
         let local_etc = crate::client::transaction_root::prepare_local_etc(&installation).unwrap();
         let isolation_root = crate::client::create_root_links(&installation.isolation_dir()).unwrap();
         let live_usr_path = installation.root.join("usr");
-        let original = live_usr_path.join("share/cast/triggers/sys.d/system.glu");
+        let original = live_usr_path.join("share/cast/triggers/sys.d/system.lua");
         fs_err::create_dir_all(original.parent().unwrap()).unwrap();
         fs_err::write(
             &original,
@@ -135,7 +135,7 @@ mod tests {
 
         let displaced = installation.root.join("displaced-system-usr");
         fs_err::rename(&live_usr_path, &displaced).unwrap();
-        let injected = live_usr_path.join("share/cast/triggers/sys.d/system.glu");
+        let injected = live_usr_path.join("share/cast/triggers/sys.d/system.lua");
         fs_err::create_dir_all(injected.parent().unwrap()).unwrap();
         fs_err::write(
             &injected,
@@ -172,7 +172,7 @@ mod tests {
             triggers::format::Handler::Run { run, args } if run == "/bin/true" && args.is_empty()
         ));
         assert!(injected.exists());
-        assert!(displaced.join("share/cast/triggers/sys.d/system.glu").exists());
+        assert!(displaced.join("share/cast/triggers/sys.d/system.lua").exists());
     }
 
     #[test]

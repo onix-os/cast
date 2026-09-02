@@ -110,7 +110,7 @@ fn write_system_intent_with_warning(root: &Path, package: &str, disable_warning:
     fs::create_dir_all(&cast).unwrap();
     fs::set_permissions(&etc, fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(&cast, fs::Permissions::from_mode(0o755)).unwrap();
-    let path = cast.join("system.glu");
+    let path = cast.join("system.lua");
     fs::write(
         &path,
         format!(
@@ -541,7 +541,7 @@ fn clean_startup_loads_the_default_intent_only_after_strict_discovery() {
 fn explicit_intent_remains_authoritative_without_loading_the_malformed_default() {
     let temporary = private_installation_tempdir();
     let (default_path, malformed_default) = write_malformed_system_intent(temporary.path());
-    let explicit = temporary.path().join("explicit-system.glu");
+    let explicit = temporary.path().join("explicit-system.lua");
     fs::write(
         &explicit,
         r#"let cast = import! cast.system.v1
@@ -663,7 +663,7 @@ fn unsafe_symlink_and_hardlinked_default_sources_fail_unchanged() {
 fn default_source_substitution_after_retention_fails_closed() {
     let temporary = private_installation_tempdir();
     let canonical = write_system_intent(temporary.path(), "retained-source");
-    let retained = canonical.with_file_name("retained-system.glu");
+    let retained = canonical.with_file_name("retained-system.lua");
     let original = fs::read(&canonical).unwrap();
     let hook_canonical = canonical.clone();
     let hook_retained = retained.clone();
@@ -708,7 +708,7 @@ fn default_intent_root_and_directory_name_substitution_fail_closed() {
             "detached-cast"
         });
         let hook_root = root.clone();
-        let injected = root.join("etc/cast/system.glu");
+        let injected = root.join("etc/cast/system.lua");
 
         startup_gate::arm_after_default_directory_retained(move || {
             if replace_root {
@@ -738,9 +738,9 @@ fn default_intent_root_and_directory_name_substitution_fail_closed() {
         }
         assert!(fs::read_to_string(&injected).unwrap().contains("replacement-injected"));
         let retained_source = if replace_root {
-            parent.path().join("detached-installation/etc/cast/system.glu")
+            parent.path().join("detached-installation/etc/cast/system.lua")
         } else {
-            parent.path().join("detached-cast/system.glu")
+            parent.path().join("detached-cast/system.lua")
         };
         assert_eq!(fs::read(retained_source).unwrap(), original_bytes);
     }

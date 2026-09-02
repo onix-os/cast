@@ -73,7 +73,7 @@ impl AliasFixture {
         for directory in [installation_root.join("etc"), source_directory] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
         }
-        let source = installation_root.join("etc/cast/boot-topology.glu");
+        let source = installation_root.join("etc/cast/boot-topology.lua");
         write_alias_source(&source, PARTUUID)?;
 
         let context_parent = temporary.path().join("context-parent");
@@ -152,7 +152,7 @@ impl AliasFixture {
         for directory in [installation.root.join("etc"), source_directory] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
         }
-        let source = installation.root.join("etc/cast/boot-topology.glu");
+        let source = installation.root.join("etc/cast/boot-topology.lua");
         write_alias_source(&source, PARTUUID)?;
         PreparedActiveReblitMountedBootTopology::prepare_fixture_until(
             installation,

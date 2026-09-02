@@ -318,7 +318,7 @@ fn install_root_intent(installation: &Installation) {
     }
     let source =
         format!("let cast = import! cast.root_filesystem.v1\ncast.root_filesystem {{ root = {ROOT_LOCATOR:?} }}\n");
-    let path = installation.root.join("etc/cast/root-filesystem.glu");
+    let path = installation.root.join("etc/cast/root-filesystem.lua");
     fs::write(&path, source).unwrap();
     fs::set_permissions(path, Permissions::from_mode(0o644)).unwrap();
 }

@@ -23,7 +23,7 @@ use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, HooksSpec, LuaPackageEvaluator, PackageConversionError,
-    PackageSpec, PhasesSpec, ProfileSpec, RecipeMigrationDecision, authorize_recipe_migration,
+    PackageSpec, PhasesSpec, ProfileSpec,
 };
 use thiserror::Error;
 
@@ -33,7 +33,7 @@ use crate::{
 };
 
 const RECIPE_ROOT_BASENAME: &str = "stone";
-const RECIPE_ROOT_LOGICAL_NAME_V1: &str = "stone.lua";
+
 const RECIPE_ROOT_LOGICAL_NAME_LUA: &str = "stone.lua";
 
 #[derive(Debug)]
@@ -76,16 +76,6 @@ impl Recipe {
             load_recipe_declaration(&path, SourceLockPolicy::Ignore)?;
 
         Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
-    }
-
-    /// Authorize migrating this authored recipe to an operator-supplied Lua
-    /// replacement recipe. The bridge migrates a recipe tree only when the
-    /// operator provides its exact root and a Lua replacement whose normalized
-    /// package value matches the authored recipe; a mismatch is rejected rather
-    /// than silently converted. Only an authorized replacement proceeds to
-    /// regenerate the source/build-lock pair.
-    pub fn authorize_lua_replacement(&self, replacement: &Recipe) -> RecipeMigrationDecision {
-        authorize_recipe_migration(&self.declaration, &replacement.declaration)
     }
 
     fn from_loaded(
@@ -184,8 +174,8 @@ fn load_recipe_declaration(
     source_lock_policy: SourceLockPolicy,
 ) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationIdentity), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
-    // The recipe language is selected by the file's extension (`stone.lua` or
-    // `stone.lua`); an unregistered extension is a hard missing-recipe error.
+    // The recipe language is selected by the file's extension (`stone.lua`);
+    // an unregistered extension is a hard missing-recipe error.
     let extension = path.extension().and_then(|extension| extension.to_str());
     let registered_extensions = RecipeDeclarationEvaluator::registered(Arc::from(Vec::new()))
         .iter()
@@ -280,21 +270,17 @@ struct RecipeDeclaration {
     package: PackageSpec,
 }
 
-/// One registered recipe declaration language (`stone.lua` or `stone.lua`),
-/// selected by the recipe file's extension. Both engines reach the same
-/// [`PackageSpec`] and bind the source lock as explicit inputs.
+/// One registered recipe declaration language, selected by the recipe file's
+/// extension. Every engine reaches the same [`PackageSpec`] and binds the source
+/// lock as explicit inputs.
 #[derive(Debug, Clone)]
 enum RecipeDeclarationEvaluator {
-    Gluon(LuaPackageEvaluator, Arc<[u8]>),
     Lua(LuaPackageEvaluator, Arc<[u8]>),
 }
 
 impl RecipeDeclarationEvaluator {
-    fn registered(explicit_inputs: Arc<[u8]>) -> [Self; 2] {
-        [
-            Self::Gluon(LuaPackageEvaluator::default(), explicit_inputs.clone()),
-            Self::Lua(LuaPackageEvaluator::default(), explicit_inputs),
-        ]
+    fn registered(explicit_inputs: Arc<[u8]>) -> [Self; 1] {
+        [Self::Lua(LuaPackageEvaluator::default(), explicit_inputs)]
     }
 }
 
@@ -304,9 +290,6 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(package, _) => {
-                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(package)
-            }
             Self::Lua(package, _) => {
                 <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(package)
             }
@@ -315,9 +298,6 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(package, _) => {
-                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(package)
-            }
             Self::Lua(package, _) => {
                 <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(package)
             }
@@ -326,13 +306,6 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(package, inputs) => Self::Gluon(
-                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
-                    package,
-                    source_root,
-                ),
-                inputs.clone(),
-            ),
             Self::Lua(package, inputs) => Self::Lua(
                 <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
                     package,
@@ -352,11 +325,6 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = match self {
-            Self::Gluon(package, inputs) => {
-                <LuaPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
-                    package, source, inputs, deadline,
-                )?
-            }
             Self::Lua(package, inputs) => {
                 <LuaPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
                     package, source, inputs, deadline,
@@ -401,12 +369,12 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     let path = if path.is_dir() {
         let slot = RootDeclarationSlot::new(
             RECIPE_ROOT_BASENAME,
-            RECIPE_ROOT_LOGICAL_NAME_V1,
+            RECIPE_ROOT_LOGICAL_NAME_LUA,
         )
         .expect("the canonical recipe declaration slot is valid");
         let languages = registered_recipe_languages();
         discover_recipe_root(path, &slot, &languages)?
-            .unwrap_or_else(|| path.join(RECIPE_ROOT_LOGICAL_NAME_V1))
+            .unwrap_or_else(|| path.join(RECIPE_ROOT_LOGICAL_NAME_LUA))
     } else {
         path.to_path_buf()
     };
@@ -415,65 +383,6 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     fs::canonicalize(&path).map_err(|_| Error::MissingRecipe(path))
 }
 
-/// The result of an operator recipe source-authority migration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecipeMigration {
-    /// The co-located Lua replacement was verified equivalent and is now the
-    /// sole authority; the authored `stone.lua` was removed.
-    Migrated,
-    /// The Lua replacement was not an equivalent recipe; nothing on disk
-    /// changed and `stone.lua` remains the authority.
-    Rejected,
-}
-
-/// Operator command: switch a recipe directory's source authority from the
-/// authored `stone.lua` to an operator-supplied Lua replacement.
-///
-/// User-authored recipes are never auto-converted. The operator authors the Lua
-/// replacement in a *separate* location (`replacement_lua`) — it cannot sit
-/// beside the Gluon original, because a directory holding both `stone.lua` and
-/// `stone.lua` is a single-authority collision the loader rejects. This command
-/// loads both, and only when [`authorize_recipe_migration`] confirms the
-/// replacement's normalized package value matches the authored recipe does it
-/// install the Lua source into the recipe directory and drop the Gluon file. A
-/// non-equivalent replacement leaves the recipe directory untouched (fail
-/// closed).
-///
-/// The switch installs `stone.lua` first and only then removes `stone.lua`, so
-/// a crash between the two can leave both files (a recoverable collision the
-/// operator resolves by re-running) but never zero — the recipe's authority is
-/// never lost.
-pub fn migrate_recipe_to_lua(
-    recipe_dir: impl AsRef<Path>,
-    replacement_lua: impl AsRef<Path>,
-) -> Result<RecipeMigration, Error> {
-    let recipe_dir = recipe_dir.as_ref();
-    let replacement_lua = replacement_lua.as_ref();
-    let gluon_path = recipe_dir.join(RECIPE_ROOT_LOGICAL_NAME_V1);
-    let installed_lua = recipe_dir.join(RECIPE_ROOT_LOGICAL_NAME_LUA);
-
-    // Compare authored source values only; a stale or absent source lock must
-    // not gate a source-authority switch.
-    let authored = Recipe::load_authored(&gluon_path)?;
-    let replacement = Recipe::load_authored(replacement_lua)?;
-
-    match authored.authorize_lua_replacement(&replacement) {
-        RecipeMigrationDecision::Rejected => Ok(RecipeMigration::Rejected),
-        RecipeMigrationDecision::Authorized => {
-            fs::copy(replacement_lua, &installed_lua).map_err(|source| {
-                Error::SwitchRecipeAuthority {
-                    path: installed_lua.clone(),
-                    source,
-                }
-            })?;
-            fs::remove_file(&gluon_path).map_err(|source| Error::SwitchRecipeAuthority {
-                path: gluon_path.clone(),
-                source,
-            })?;
-            Ok(RecipeMigration::Migrated)
-        }
-    }
-}
 
 fn registered_recipe_languages() -> RegisteredLanguages {
     let languages = RecipeDeclarationEvaluator::registered(Arc::from(Vec::new()))

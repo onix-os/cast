@@ -170,7 +170,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for LuaBootTopolo
 ///
 /// The assembled value stores the canonical PARTUUID and the verbatim
 /// mount-point hint, and re-canonicalizing an already-canonical PARTUUID is a
-/// no-op, so this is idempotent. Because `etc/cast/boot-topology.glu` is an
+/// no-op, so this is idempotent. Because `etc/cast/boot-topology.lua` is an
 /// *authored*, boot-critical slot, this is the canonical Lua an operator adopts
 /// as the verified replacement — never an authority Cast switches on its own.
 #[cfg_attr(not(test), allow(dead_code))]

@@ -326,7 +326,7 @@ fn frozen_minimal_dev_is_exact_and_sys_is_absent() {
 #[test]
 fn frozen_container_excludes_recipe_and_disabled_global_caches() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let plan = package::test_derivation_plan();
@@ -374,7 +374,7 @@ fn frozen_container_excludes_recipe_and_disabled_global_caches() {
 #[test]
 fn frozen_sandbox_retains_parallel_opath_identity_witnesses() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let plan = package::test_derivation_plan();
@@ -408,7 +408,7 @@ fn frozen_sandbox_retains_parallel_opath_identity_witnesses() {
 #[test]
 fn frozen_bind_locator_rejects_replacement_without_touching_either_directory() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let plan = package::test_derivation_plan();
@@ -450,7 +450,7 @@ fn frozen_bind_locator_rejects_replacement_without_touching_either_directory() {
 #[test]
 fn frozen_root_locator_rejects_replacement_without_touching_either_directory() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let plan = package::test_derivation_plan();
@@ -481,7 +481,7 @@ fn frozen_root_locator_rejects_replacement_without_touching_either_directory() {
 #[test]
 fn frozen_container_uses_non_default_policy_layout_as_one_authority() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let default_plan = package::test_derivation_plan();
@@ -533,7 +533,7 @@ fn frozen_container_uses_non_default_policy_layout_as_one_authority() {
 #[test]
 fn frozen_container_rejects_runtime_and_plan_layout_mismatch() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let mut plan = package::test_derivation_plan();
@@ -550,7 +550,7 @@ fn frozen_container_rejects_runtime_and_plan_layout_mismatch() {
 #[test]
 fn frozen_container_rejects_non_isolated_credentials() {
     let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/stone.lua")).unwrap();
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let mut plan = package::test_derivation_plan();

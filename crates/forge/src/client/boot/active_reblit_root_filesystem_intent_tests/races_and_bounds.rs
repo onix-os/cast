@@ -113,8 +113,8 @@ fn directory_chain_and_installation_root_substitution_are_rejected() {
             fs::rename(&cast, &displaced).unwrap();
             fs::create_dir(&cast).unwrap();
             fs::set_permissions(&cast, fs::Permissions::from_mode(0o755)).unwrap();
-            fs::write(cast.join("root-filesystem.glu"), authored_root(ROOT_LOCATOR)).unwrap();
-            fs::set_permissions(cast.join("root-filesystem.glu"), fs::Permissions::from_mode(0o644)).unwrap();
+            fs::write(cast.join("root-filesystem.lua"), authored_root(ROOT_LOCATOR)).unwrap();
+            fs::set_permissions(cast.join("root-filesystem.lua"), fs::Permissions::from_mode(0o644)).unwrap();
         },
         || {},
     );

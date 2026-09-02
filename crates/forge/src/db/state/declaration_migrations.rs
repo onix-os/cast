@@ -147,11 +147,11 @@ mod tests {
     fn row(state_id: i32) -> DeclarationMigrationRow {
         DeclarationMigrationRow {
             state_id,
-            logical_slot: "etc/cast/system.glu".to_owned(),
+            logical_slot: "etc/cast/system.lua".to_owned(),
             catalog_schema_version: CATALOG_SCHEMA_VERSION,
             state_tree_marker: vec![1u8; 32],
             original_language: "gluon".to_owned(),
-            original_logical_path: "etc/cast/system.glu".to_owned(),
+            original_logical_path: "etc/cast/system.lua".to_owned(),
             original_sha256: vec![2u8; 32],
             migrated_language: "lua".to_owned(),
             migrated_blob_sha256: vec![3u8; 32],
@@ -170,7 +170,7 @@ mod tests {
             DeclarationMigrationCommit::Committed
         );
         assert_eq!(
-            database.declaration_migration(state_id, "etc/cast/system.glu").unwrap(),
+            database.declaration_migration(state_id, "etc/cast/system.lua").unwrap(),
             Some(row)
         );
     }
@@ -197,7 +197,7 @@ mod tests {
         ));
         // The original row is unchanged.
         assert_eq!(
-            database.declaration_migration(state_id, "etc/cast/system.glu").unwrap(),
+            database.declaration_migration(state_id, "etc/cast/system.lua").unwrap(),
             Some(row)
         );
     }
@@ -207,7 +207,7 @@ mod tests {
         let database = database();
         let state_id = add_state(&database);
         assert_eq!(
-            database.declaration_migration(state_id, "etc/cast/system.glu").unwrap(),
+            database.declaration_migration(state_id, "etc/cast/system.lua").unwrap(),
             None
         );
     }

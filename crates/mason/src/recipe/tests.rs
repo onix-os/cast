@@ -109,7 +109,7 @@
     #[ignore = "one-shot corpus conversion tool"]
     fn generate_lua_recipe_example_mirror() {
         let gluon_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/packages");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
         let lua_root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
 
@@ -165,70 +165,6 @@
         }
     }
 
-    #[test]
-    fn a_recipe_authorizes_only_an_equivalent_replacement() {
-        let authored = recipe_from(SOURCE_SPEC);
-        let equivalent = recipe_from(SOURCE_SPEC);
-        assert_eq!(
-            authored.authorize_lua_replacement(&equivalent),
-            RecipeMigrationDecision::Authorized
-        );
-
-        let divergent = recipe_from(&SOURCE_SPEC.replace("example", "renamed"));
-        assert_eq!(
-            authored.authorize_lua_replacement(&divergent),
-            RecipeMigrationDecision::Rejected
-        );
-    }
-
-    /// Author an equivalent-or-divergent Lua replacement in a separate
-    /// directory (it cannot co-locate with the Gluon original) and return its
-    /// `stone.lua` path.
-    fn lua_replacement(declaration: &PackageSpec) -> (tempfile::TempDir, PathBuf) {
-        let candidate = tempfile::tempdir().unwrap();
-        let path = candidate.path().join("stone.lua");
-        fs::write(&path, encode_lua_recipe(declaration)).unwrap();
-        (candidate, path)
-    }
-
-    #[test]
-    fn an_authorized_recipe_migration_switches_the_source_authority() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
-        let authored = Recipe::load_authored(dir.path().join("stone.lua")).unwrap();
-
-        // The operator authors an equivalent Lua replacement elsewhere.
-        let (_candidate, replacement) = lua_replacement(&authored.declaration);
-
-        let outcome = migrate_recipe_to_lua(dir.path(), &replacement).unwrap();
-        assert_eq!(outcome, RecipeMigration::Migrated);
-
-        // The authored Gluon authority is gone; the Lua one is now sole and
-        // discovery resolves it unambiguously.
-        assert!(!dir.path().join("stone.lua").exists());
-        assert!(dir.path().join("stone.lua").exists());
-        assert!(resolve_path(dir.path()).unwrap().ends_with("stone.lua"));
-
-        let migrated = Recipe::load_authored(dir.path()).unwrap();
-        assert_eq!(migrated.declaration, authored.declaration);
-    }
-
-    #[test]
-    fn a_rejected_recipe_migration_leaves_the_recipe_untouched() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
-
-        // A valid but non-equivalent Lua recipe (a different package name).
-        let divergent = recipe_from(&SOURCE_SPEC.replace("example", "renamed"));
-        let (_candidate, replacement) = lua_replacement(&divergent.declaration);
-
-        let outcome = migrate_recipe_to_lua(dir.path(), &replacement).unwrap();
-        assert_eq!(outcome, RecipeMigration::Rejected);
-
-        // Fail-closed: the Gluon authority stays and no Lua file was installed.
-        assert!(dir.path().join("stone.lua").exists());
-        assert!(!dir.path().join("stone.lua").exists());
-    }
 
     #[test]
     fn a_stone_lua_recipe_is_discovered_by_extension() {
@@ -389,7 +325,7 @@
         let root = tempfile::tempdir().unwrap();
         let slot = RootDeclarationSlot::new(
             RECIPE_ROOT_BASENAME,
-            RECIPE_ROOT_LOGICAL_NAME_V1,
+            RECIPE_ROOT_LOGICAL_NAME_LUA,
         )
         .unwrap();
         let languages = RegisteredLanguages::new([
@@ -422,7 +358,7 @@
 
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target.glu");
-        let recipe = root.path().join(RECIPE_ROOT_LOGICAL_NAME_V1);
+        let recipe = root.path().join(RECIPE_ROOT_LOGICAL_NAME_LUA);
         fs::write(&target, gluon_recipe(SOURCE_SPEC)).unwrap();
         symlink(&target, &recipe).unwrap();
 
@@ -505,7 +441,7 @@ let source = import! "source.glu"
 
         assert_eq!(recipe.path, root.path().join("stone.lua").canonicalize().unwrap());
         assert_eq!(recipe.declaration.meta.version, "1.2.3");
-        assert_eq!(fingerprint.root_logical_name, RECIPE_ROOT_LOGICAL_NAME_V1);
+        assert_eq!(fingerprint.root_logical_name, RECIPE_ROOT_LOGICAL_NAME_LUA);
         let mut modules = fingerprint
             .modules
             .iter()
