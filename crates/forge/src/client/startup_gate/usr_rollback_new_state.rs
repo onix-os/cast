@@ -229,6 +229,17 @@ pub(super) fn dispatch<'reservation>(
                 &record,
                 initial_in_flight,
             )?;
+            let admission = match admission {
+                UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(reason) => {
+                    // Same contract as the CandidatePreserveIntent arm above:
+                    // an unhandled dispatch is a recovery-pending result with no
+                    // blocker, so a deferral that never resolves stalls the boot
+                    // and names nothing.
+                    tracing::warn!(%reason, phase = ?record.phase, "fresh-db invalidation route deferred");
+                    return Ok(Dispatch::Unhandled { journal, record });
+                }
+                other => other,
+            };
             let UsrRollbackFreshDbInvalidationRouteAdmission::Ready(authority) = admission else {
                 return Ok(Dispatch::Unhandled { journal, record });
             };

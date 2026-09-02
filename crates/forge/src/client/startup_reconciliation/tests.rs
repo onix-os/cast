@@ -1482,3 +1482,39 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
     );
 }
 
+
+/// The fresh-database invalidation route must not contradict the shared
+/// provenance contract.
+///
+/// `rollback_source_is_supported` admits every source before `UsrExchangeIntent`,
+/// and for those sources `metadata_provenance_evidence_compatible` allows absent
+/// provenance: nothing has written metadata yet. The route matched
+/// `provenance: Some(_)` anyway, so it deferred on every boot and a NewState
+/// crash at `CandidatePrepareStarted` stalled at `CandidatePreserved` forever
+/// with `blocked by []`.
+#[test]
+fn startup_reconciliation_fresh_db_route_admits_absent_provenance_from_early_sources() {
+    let evidence = DatabaseEvidence::CandidateOwnership {
+        state: state::Id::from(42),
+        ownership: db::state::TransitionOwnership::Matching,
+        provenance: None,
+        previous: None,
+    };
+    for source in [
+        ForwardPhase::Preparing,
+        ForwardPhase::FreshStateAllocating,
+        ForwardPhase::FreshStateAllocated,
+        ForwardPhase::CandidatePrepareStarted,
+    ] {
+        let mut record = rollback_record(Phase::CandidatePreserved, RollbackAction::Pending);
+        record.rollback.as_mut().unwrap().source = source;
+        assert!(
+            metadata_provenance_evidence_compatible(&record, &evidence),
+            "shared contract rejected absent provenance from {source:?}"
+        );
+        assert!(
+            super::usr_rollback_fresh_db_invalidation_route_authority::database_is_exact(&record, &evidence),
+            "fresh-db invalidation route rejected absent provenance from {source:?}"
+        );
+    }
+}

@@ -122,7 +122,7 @@ fn startup_usr_rollback_fresh_db_invalidation_route_defers_inexact_phase_plan_da
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         cleared_row.capture(&journal, &reservation).unwrap(),
-        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
     ));
     drop(journal);
     drop(reservation);
@@ -145,7 +145,7 @@ fn startup_usr_rollback_fresh_db_invalidation_route_defers_inexact_phase_plan_da
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         missing_row.capture(&journal, &reservation).unwrap(),
-        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
     ));
     drop(journal);
     drop(reservation);
@@ -165,6 +165,6 @@ fn startup_usr_rollback_fresh_db_invalidation_route_defers_inexact_phase_plan_da
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         missing_provenance.capture(&journal, &reservation).unwrap(),
-        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
     ));
 }

@@ -20,8 +20,49 @@ use super::{
 /// Exact result of read-only fresh-database invalidation route admission.
 pub(in crate::client) enum UsrRollbackFreshDbInvalidationRouteAdmission<'reservation> {
     NotApplicable,
-    Deferred,
+    Deferred(UsrRollbackFreshDbInvalidationRouteDeferral),
     Ready(UsrRollbackFreshDbInvalidationRouteAuthority<'reservation>),
+}
+
+/// Why this route declined to admit, carried so a stall can name its cause.
+///
+/// A deferral the gate turns into `Dispatch::Unhandled` becomes a
+/// recovery-pending result with no blocker, so every restart looks identical and
+/// the boot stalls undiagnosably. A `NewState` crash at `CandidatePrepareStarted`
+/// stalled exactly this way and printed `blocked by []` (2026-08-17).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::client) enum UsrRollbackFreshDbInvalidationRouteDeferral {
+    /// The record carries no rollback plan yet.
+    RollbackPlanAbsent,
+    /// The namespace could not be inspected at all.
+    NamespaceInspectionBegin(String),
+    /// The database disagrees with the record; carries the evidence shape.
+    DatabaseIncompatible(String),
+    /// The record's rollback route plan is not exact.
+    RoutePlanInexact,
+    /// The database changed between the two capture passes.
+    DatabaseChangedDuringCapture,
+    /// The namespace changed, or failed its topology, during capture.
+    NamespaceInspectionFinish(String),
+}
+
+impl std::fmt::Display for UsrRollbackFreshDbInvalidationRouteDeferral {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RollbackPlanAbsent => formatter.write_str("record carries no rollback plan"),
+            Self::NamespaceInspectionBegin(source) => {
+                write!(formatter, "namespace inspection could not begin: {source}")
+            }
+            Self::DatabaseIncompatible(evidence) => {
+                write!(formatter, "database is incompatible with the record: {evidence}")
+            }
+            Self::RoutePlanInexact => formatter.write_str("rollback route plan is not exact"),
+            Self::DatabaseChangedDuringCapture => formatter.write_str("database changed between capture passes"),
+            Self::NamespaceInspectionFinish(source) => {
+                write!(formatter, "namespace inspection could not finish: {source}")
+            }
+        }
+    }
 }
 
 /// Retained evidence authorizing only the next journal route decision.
@@ -58,7 +99,9 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
         }
         let Some(rollback) = record.rollback.as_ref() else {
-            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
+            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                UsrRollbackFreshDbInvalidationRouteDeferral::RollbackPlanAbsent,
+            ));
         };
         if !super::rollback_source_is_supported(record, rollback.source) {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
@@ -74,22 +117,39 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
             record,
         ) {
             Ok(inspection) => inspection,
-            Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                    UsrRollbackFreshDbInvalidationRouteDeferral::NamespaceInspectionBegin(source.to_string()),
+                ));
+            }
         };
         let database = inspect_database(record, state_db, initial_in_flight)?;
-        if !database_is_exact(record, &database) || !route_plan_is_exact(record) {
-            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
+        if !database_is_exact(record, &database) {
+            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                UsrRollbackFreshDbInvalidationRouteDeferral::DatabaseIncompatible(format!("{database:?}")),
+            ));
+        }
+        if !route_plan_is_exact(record) {
+            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                UsrRollbackFreshDbInvalidationRouteDeferral::RoutePlanInexact,
+            ));
         }
 
         run_between_initial_database_captures();
         let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
         let database_after = inspect_database(record, state_db, in_flight_after)?;
         if !database_is_exact(record, &database_after) || database != database_after {
-            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
+            return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                UsrRollbackFreshDbInvalidationRouteDeferral::DatabaseChangedDuringCapture,
+            ));
         }
         let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
-            Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
+            Err(source) => {
+                return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(
+                    UsrRollbackFreshDbInvalidationRouteDeferral::NamespaceInspectionFinish(source.to_string()),
+                ));
+            }
         };
 
         let retained_state_db = state_db.clone();
@@ -215,12 +275,17 @@ fn inspect_current_database(
     }
 }
 
-fn database_is_exact(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
+/// Provenance is judged only by `metadata_provenance_evidence_compatible`.
+///
+/// Requiring `Some(_)` here duplicated that contract and contradicted it: every
+/// rollback source before `UsrExchangeIntent` is admitted by
+/// `rollback_source_is_supported` and legitimately carries no provenance, so the
+/// route deferred on every boot and stalled the rollback permanently.
+pub(super) fn database_is_exact(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
     matches!(
         evidence,
         DatabaseEvidence::CandidateOwnership {
             ownership: db::state::TransitionOwnership::Matching,
-            provenance: Some(_),
             ..
         }
     ) && database_ownership_evidence_compatible(record, evidence)

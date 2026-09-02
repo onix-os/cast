@@ -194,7 +194,7 @@ fn startup_root_links_fresh_db_route_capture_rejects_all_root_abi_mutations() {
 
                         assert!(matches!(
                             fixture.capture(&journal, &reservation).unwrap(),
-                            UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+                            UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
                         ));
 
                         assert_eq!(fixture.canonical_bytes(), canonical_before);
@@ -350,7 +350,7 @@ fn startup_usr_rollback_fresh_db_invalidation_route_capture_and_final_evidence_r
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(matches!(
         fixture.capture(&journal, &reservation).unwrap(),
-        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+        UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
     ));
     assert_eq!(fixture.canonical_record(), fixture.source);
     drop(journal);
@@ -467,7 +467,7 @@ fn startup_usr_rollback_fresh_db_invalidation_route_refuses_namespace_lookalikes
         assert!(
             matches!(
                 fixture.capture(&journal, &reservation).unwrap(),
-                UsrRollbackFreshDbInvalidationRouteAdmission::Deferred
+                UsrRollbackFreshDbInvalidationRouteAdmission::Deferred(_)
             ),
             "namespace lookalike {case} was admitted"
         );
