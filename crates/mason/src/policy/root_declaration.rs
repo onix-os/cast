@@ -21,7 +21,7 @@ use stone_recipe::build_policy::layers::{
 use super::Error;
 
 const POLICY_ROOT_BASENAME: &str = "policy";
-pub(super) const POLICY_ROOT_LOGICAL_NAME: &str = "policy.glu";
+pub(super) const POLICY_ROOT_LOGICAL_NAME: &str = "policy.lua";
 
 /// The exact root bytes and retained directory authority used by the rest of
 /// policy composition after language-neutral slot discovery has completed.
@@ -44,7 +44,7 @@ pub(super) fn load(directory: &Path) -> Result<LoadedPolicyRoot, Error> {
     let evaluator = PolicyRootDeclarationEvaluator::default();
     let required_language = evaluator.language_spec().clone();
     let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
-        .expect("the build-policy root registers one unique Gluon language");
+        .expect("the build-policy root registers one unique language");
     let loaded = load_required_fixed_root_declaration_from_source_root(
         directory,
         &source_root,

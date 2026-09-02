@@ -1,6 +1,6 @@
 //! Explicit, ordered repository build policy.
 //!
-//! Cast evaluates one authored Gluon manifest and applies exactly the
+//! Cast evaluates one authored manifest and applies exactly the
 //! modules named by that manifest. Directory contents and filesystem order
 //! never participate in composition.
 
@@ -267,7 +267,7 @@ fn apply_entry(
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("prepare build-policy Gluon source root {path:?}")]
+    #[error("prepare build-policy source root {path:?}")]
     SourceRoot {
         path: PathBuf,
         #[source]
@@ -432,7 +432,7 @@ mod tests {
     /// The real shipped repository policy — `default.glu` plus the two large
     /// tuning catalogs it imports (`tuning/flags.glu`, `tuning/groups.glu`) —
     /// re-encodes to generated Lua and decodes back to an equal spec. This
-    /// pairs those authored Gluon files with the build-policy write path,
+    /// pairs those authored files with the build-policy write path,
     /// proving a generated-slot switch could reproduce them as `policy.lua`.
     #[test]
     fn the_repository_policy_round_trips_through_the_lua_emitter() {
@@ -548,7 +548,7 @@ mod tests {
         assert_eq!(root.explicit_inputs_sha256, composition_digest(&policy.provenance));
         assert_eq!(
             root.sha256,
-            "b4dbf7b710f36cc12d554373f660eafd9d91feca1461f17c30935a0bd01ad526"
+            "8b761e7334acc2e094e6b02cc345bd99a30f914490e733989baf7c6955918d9b"
         );
         root.validate().unwrap();
     }

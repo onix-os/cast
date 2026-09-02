@@ -429,38 +429,38 @@ pub enum Error {
         #[source]
         source: RootDeclarationDiscoveryError,
     },
-    #[error("load Gluon recipe source")]
+    #[error("load recipe source")]
     LoadRecipeSource(#[source] declarative_config::Diagnostic),
     #[error("load recipe declaration")]
     LoadRecipeDeclaration(
         #[source]
         Box<LoadFixedRootDeclarationError<PackageConversionError>>,
     ),
-    #[error("load Gluon source lock {path:?}")]
+    #[error("load source lock {path:?}")]
     LoadSourceLock {
         path: PathBuf,
         #[source]
         source: Box<generated_lock::ReadError>,
     },
-    #[error("Gluon source lock {path:?} is not UTF-8")]
+    #[error("source lock {path:?} is not UTF-8")]
     SourceLockUtf8 {
         path: PathBuf,
         #[source]
         source: str::Utf8Error,
     },
-    #[error("evaluate Gluon source lock {path:?}")]
+    #[error("evaluate source lock {path:?}")]
     EvaluateSourceLock {
         path: PathBuf,
         #[source]
         source: Box<DeclarationEvaluationError<source_lock::ValidationError>>,
     },
-    #[error("stale Gluon source lock {path:?}")]
+    #[error("stale source lock {path:?}")]
     StaleSourceLock {
         path: PathBuf,
         #[source]
         source: Box<source_lock::ValidationError>,
     },
-    #[error("evaluate Gluon recipe")]
+    #[error("evaluate recipe")]
     EvaluateRecipe(#[from] DeclarationEvaluationError<PackageConversionError>),
     #[error("remove authored recipe {path:?} after an authorized Lua migration")]
     SwitchRecipeAuthority {
