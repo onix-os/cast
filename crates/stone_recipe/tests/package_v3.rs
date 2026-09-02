@@ -78,6 +78,15 @@ fn package_with_step(pname: &str, phase: &str, step: &str) -> Source {
     ))
 }
 
+/// A typed dependency literal. `package` and `output` carry a reference table;
+/// every other kind carries a bare string.
+fn dep(kind: &str, value: &str) -> String {
+    match kind {
+        "package" => format!(r#"{{ kind = "package", value = {{ name = "{value}" }} }}"#),
+        _ => format!(r#"{{ kind = "{kind}", value = "{value}" }}"#),
+    }
+}
+
 fn binary_program(name: &str) -> ProgramSpec {
     ProgramSpec {
         path: format!("/usr/bin/{name}"),
@@ -105,31 +114,6 @@ fn assert_dependency_role_conversion_error(
     assert_eq!(kind, expected_kind);
     assert!(diagnostic.contains(&format!("`{expected_role}` role")));
     assert!(diagnostic.contains(&format!("kind `{expected_kind}`")));
-}
-
-#[test]
-fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
-    for module in [
-        "boulder.package.v3",
-        "boulder.builders.cmake.v2",
-        "boulder.builders.meson.v2",
-        "boulder.builders.cargo.v2",
-        "boulder.builders.autotools.v2",
-        "cast.package.v2",
-        "cast.builders.cmake.v1",
-        "cast.builders.meson.v1",
-        "cast.builders.cargo.v1",
-        "cast.builders.autotools.v1",
-        "boulder.package.v2",
-    ] {
-        let error = evaluate_default_package(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
-        assert!(matches!(
-            error,
-            DeclarationEvaluationError::Evaluation(ref diagnostic)
-                if diagnostic.category == DiagnosticCategory::Import
-                    && diagnostic.message.contains(module)
-        ));
-    }
 }
 
 #[test]
@@ -255,62 +239,38 @@ fn built_program_paths_are_normalized_before_planning() {
 
 #[test]
 fn invalid_program_bindings_are_rejected_before_planning() {
-    for (program, expected_field) in [
+    for (path, requirement, expected_field) in [
+        ("tool", dep("binary", "tool"), "builder.phases.build.steps[0].program.path"),
         (
-            r#"{ path = "tool", requirement = a.dep.binary "tool" }"#,
+            "/usr/bin/other",
+            dep("binary", "tool"),
             "builder.phases.build.steps[0].program.path",
         ),
         (
-            r#"{ path = "/usr/bin/other", requirement = a.dep.binary "tool" }"#,
-            "builder.phases.build.steps[0].program.path",
-        ),
-        (
-            r#"{ path = "/usr/bin/pkg-config", requirement = a.dep.pkgconfig "example" }"#,
+            "/usr/bin/pkg-config",
+            dep("pkg_config", "example"),
             "builder.phases.build.steps[0].program.requirement",
         ),
         (
-            r#"{ path = "/usr/bin/nested/tool", requirement = a.dep.binary "nested/tool" }"#,
+            "/usr/bin/nested/tool",
+            dep("binary", "nested/tool"),
             "builder.phases.build.steps[0].program.requirement",
         ),
         (
-            r#"{ path = "/usr/bin/tool", requirement = a.dep.package "tool-package" }"#,
+            "/usr/bin/tool",
+            dep("package", "tool-package"),
             "builder.phases.build.steps[0].program.path",
         ),
     ] {
-        let source = authored(&format!(
-            r#"
-let scripts = a.scripts {{
-    build = a.phase [a.step.run {program} []],
-    .. a.empty.scripts
-}}
-{{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {{
-        meta = {{
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
-        ));
+        let source = package_with_step(
+            "example",
+            "build",
+            &format!(
+                r#"{{ kind = "run", program = {{ path = "{path}", requirement = {requirement} }}, args = {{}} }}"#
+            ),
+        );
 
         let error = evaluate_default_package(&source).unwrap_err();
-        eprintln!("PROBE: {error}");
         assert!(matches!(error, DeclarationEvaluationError::Conversion(_)));
         assert_eq!(
             match &error {
@@ -322,35 +282,12 @@ let scripts = a.scripts {{
     }
 }
 
+/// A recipe that omits a required field is a schema type error, not a silently
+/// defaulted package. Only the optional fields named by the authored ABI may be
+/// absent; `meta` is not one of them.
 #[test]
-fn factory_missing_argument_is_a_gluon_type_error() {
-    let source = authored(
-        r#"
-let make = \deps -> {
-    native_build_inputs = [deps.cmake],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-make { wrong = a.dep.binary "cmake" }
-"#,
-    );
+fn a_missing_required_field_is_a_schema_type_error() {
+    let source = authored(&format!("{{ builder = {} }}", custom_builder("", "")));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
