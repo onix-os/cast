@@ -388,10 +388,21 @@ fn evaluate_chunk(
     let import_name = name.to_owned();
     let import = lua
         .create_function(move |_lua, requested: mlua::String| {
-            let key = requested.to_str()?;
+            let requested = requested.to_str()?;
+            // Modules are stored under their normalized alias, so a relative
+            // request must be normalized the same way its module was.
+            let key = match normalize_relative(&requested) {
+                Ok(relative) => relative.alias().to_owned(),
+                Err(_) => requested.to_string(),
+            };
             // Every import was resolved and loaded by the shared graph already;
             // an unresolved name here is an internal invariant break.
-            loaded_for_import.get::<Value>(&*key)
+            match loaded_for_import.get::<Value>(key.as_str())? {
+                Value::Nil => Err(mlua::Error::external(format!(
+                    "import {requested} was not loaded by the shared graph"
+                ))),
+                value => Ok(value),
+            }
         })
         .map_err(|error| Diagnostic::internal(format!("lua import binding failed in {import_name}: {error}")))?;
     cast.set("import", import)
