@@ -41,6 +41,24 @@ fn output(name: &str, include_in_manifest: bool) -> String {
     )
 }
 
+/// A custom builder whose named phase carries `steps` and which requires
+/// `tools`; every other phase is empty.
+fn custom_builder_with_tools(tools: &str, phase: &str, steps: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|name| {
+            let body = if name == phase { steps } else { "" };
+            format!("{name} = {{ steps = {{ {body} }} }}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ kind = \"custom\", spec = {{ required_tools = {{ {tools} }}, environment = {{}}, \
+         phases = {{ {phases} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}"
+    )
+}
+
 /// A custom builder whose named phase carries `steps`; every other phase empty.
 fn custom_builder(phase: &str, steps: &str) -> String {
     let phases = ["setup", "build", "install", "check", "workload"]
@@ -85,6 +103,38 @@ fn dep(kind: &str, value: &str) -> String {
         "package" => format!(r#"{{ kind = "package", value = {{ name = "{value}" }} }}"#),
         _ => format!(r#"{{ kind = "{kind}", value = "{value}" }}"#),
     }
+}
+
+/// An `output` dependency naming one output of another package.
+fn output_dep(package: &str, output: &str) -> String {
+    format!(
+        r#"{{ kind = "output", value = {{ package = {{ name = "{package}" }}, output = "{output}" }} }}"#
+    )
+}
+
+/// One output record, overriding the listed fields; the rest stay absent/empty.
+fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
+    let mut fields: Vec<(&str, String)> = vec![
+        ("include_in_manifest", "true".to_owned()),
+        ("summary", r#"{ kind = "none" }"#.to_owned()),
+        ("description", r#"{ kind = "none" }"#.to_owned()),
+        ("provides_exclude", "{}".to_owned()),
+        ("runtime_inputs", "{}".to_owned()),
+        ("runtime_exclude", "{}".to_owned()),
+        ("paths", "{}".to_owned()),
+        ("conflicts", "{}".to_owned()),
+    ];
+    for (key, value) in overrides {
+        if let Some(slot) = fields.iter_mut().find(|(field, _)| field == key) {
+            slot.1 = (*value).to_owned();
+        }
+    }
+    let body = fields
+        .into_iter()
+        .map(|(field, value)| format!("{field} = {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"{{ name = "{name}", {body} }}"#)
 }
 
 fn binary_program(name: &str) -> ProgramSpec {
@@ -299,57 +349,44 @@ fn a_missing_required_field_is_a_schema_type_error() {
 
 #[test]
 fn evaluator_accepts_typed_kinds_in_ordinary_dependency_roles() {
-    let source = authored(
-        r#"
-let root = {
-    runtime_inputs = [
-        a.dep.package "runtime-package",
-        a.dep.output (a.package_ref "runtime-suite") "runtime",
-        a.dep.binary "runtime-binary",
-        a.dep.system_binary "runtime-system-binary",
-        a.dep.soname "libruntime.so.1",
-        a.dep.python "runtime_python",
-        a.dep.interpreter "/usr/lib/ld-runtime.so.1(x86_64)",
-    ],
-    conflicts = [a.dep.pkgconfig32 "conflicting-devel"],
-    .. a.output "out"
-}
-{
-    builder = a.builder.shell a.empty.scripts [
-        a.dep.package "tool-package",
-        a.dep.output (a.package_ref "tool-suite") "tools",
-        a.dep.binary "tool-binary",
-        a.dep.system_binary "tool-system-binary",
-    ],
-    native_build_inputs = [a.dep.cmake "NativeConfig"],
-    build_inputs = [a.dep.pkgconfig "target-devel", a.dep.pkgconfig32 "target-devel"],
-    check_inputs = [
-        a.dep.soname "libcheck.so.1",
-        a.dep.interpreter "/usr/lib/ld-check.so.1(x86_64)",
-    ],
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "ordinary-roles", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let runtime_inputs = [
+        dep("package", "runtime-package"),
+        output_dep("runtime-suite", "runtime"),
+        dep("binary", "runtime-binary"),
+        dep("system_binary", "runtime-system-binary"),
+        dep("soname", "libruntime.so.1"),
+        dep("python", "runtime_python"),
+        dep("interpreter", "/usr/lib/ld-runtime.so.1(x86_64)"),
+    ]
+    .join(", ");
+    let root = output_with(
+        "out",
+        &[
+            ("runtime_inputs", &format!("{{ {runtime_inputs} }}")),
+            (
+                "conflicts",
+                &format!("{{ {} }}", dep("pkg_config32", "conflicting-devel")),
+            ),
+        ],
     );
+    let tools = [
+        dep("package", "tool-package"),
+        output_dep("tool-suite", "tools"),
+        dep("binary", "tool-binary"),
+        dep("system_binary", "tool-system-binary"),
+    ]
+    .join(", ");
+    let source = authored(&format!(
+        "{{ {}, builder = {}, native_build_inputs = {{ {} }}, \
+         build_inputs = {{ {}, {} }}, check_inputs = {{ {}, {} }}, outputs = {{ {root} }} }}",
+        meta("ordinary-roles"),
+        custom_builder_with_tools(&tools, "", ""),
+        dep("cmake", "NativeConfig"),
+        dep("pkg_config", "target-devel"),
+        dep("pkg_config32", "target-devel"),
+        dep("soname", "libcheck.so.1"),
+        dep("interpreter", "/usr/lib/ld-check.so.1(x86_64)"),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
@@ -384,59 +421,43 @@ let root = {
 
 #[test]
 fn evaluator_rejects_typed_kind_mismatches_in_ordinary_dependency_roles() {
+    let runtime_mismatch = |dependency: String| {
+        format!(
+            "builder = {}, outputs = {{ {} }}",
+            custom_builder("", ""),
+            output_with("out", &[("runtime_inputs", &format!("{{ {dependency} }}"))]),
+        )
+    };
     for (field, declaration, role, kind) in [
         (
             "builder.required_tools[0]",
-            "builder = a.builder.shell a.empty.scripts [a.dep.soname \"libtool.so.1\"],",
+            format!(
+                "builder = {}",
+                custom_builder_with_tools(&dep("soname", "libtool.so.1"), "", "")
+            ),
             DependencyRole::BuilderTool,
             DependencyKind::Soname,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.cmake \"RuntimeConfig\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("cmake", "RuntimeConfig")),
             DependencyRole::Runtime,
             DependencyKind::CMake,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.pkgconfig \"runtime-devel\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("pkg_config", "runtime-devel")),
             DependencyRole::Runtime,
             DependencyKind::PkgConfig,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.pkgconfig32 \"runtime-devel\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("pkg_config32", "runtime-devel")),
             DependencyRole::Runtime,
             DependencyKind::PkgConfig32,
         ),
     ] {
-        let source = authored(&format!(
-            r#"
-let base = {{
-    meta = {{
-        pname = "ordinary-role-error", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-{{
-    {declaration}
-    .. base
-}}
-"#
-        ));
+        let source = authored(&format!("{{ {}, {declaration} }}", meta("ordinary-role-error")));
 
         assert_dependency_role_conversion_error(evaluate_default_package(&source).unwrap_err(), field, role, kind);
     }
