@@ -20,7 +20,7 @@ fn repository_policy() -> BuildPolicySpec {
     );
     let source = source_root
         .load(
-            "default.glu",
+            "default.lua",
             DeclarationEvaluator::<BuildPolicySpec>::limits(&evaluator).max_source_bytes,
         )
         .unwrap();
@@ -48,10 +48,42 @@ fn evaluate_patch_with_inputs(
     DeclarationInputEvaluator::<BuildPolicyPatchSpec>::evaluate_with_inputs(evaluator, source, explicit_inputs)
 }
 
-fn authored_patch(body: &str) -> Source {
+/// A sparse patch: every field defaults to `keep`, and `overrides` names the
+/// ones under test.
+fn authored_patch(overrides: &[(&str, &str)]) -> Source {
+    let mut fields = [
+        "build_subdir",
+        "layout",
+        "toolchains",
+        "targets",
+        "retired_targets",
+        "sandbox",
+        "build_root",
+        "sources",
+        "tuning",
+        "environment",
+        "builders",
+        "analyzers",
+        "pgo",
+    ]
+    .into_iter()
+    .map(|field| (field, r#"{ kind = "keep" }"#.to_owned()))
+    .collect::<Vec<_>>();
+    for (field, value) in overrides {
+        let slot = fields
+            .iter_mut()
+            .find(|(name, _)| name == field)
+            .expect("patched field is part of the patch spec");
+        slot.1 = (*value).to_owned();
+    }
+    let body = fields
+        .into_iter()
+        .map(|(field, value)| format!("{field} = {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     Source::new(
-        "tests/fixtures/build-policy-patch.glu",
-        format!("let b = import! cast.build_policy.v5\n{body}\n"),
+        "tests/fixtures/build-policy-patch.lua",
+        format!("return {{ {body} }}\n"),
     )
 }
 
@@ -134,24 +166,25 @@ fn validation_runs_after_the_patch_is_applied() {
 }
 
 #[test]
-fn restricted_gluon_bridge_preserves_all_patch_operations() {
-    let source = authored_patch(
-        r#"
-b.policy_patch {
-    build_subdir = b.patch.set "layered-builddir",
-    targets = b.patch.array.replace [],
-    retired_targets = b.patch.array.prepend [b.retired_target {
-        name = "removed-test",
-        reason = "covered by patch algebra",
-    }],
-    environment = b.patch.array.append [
-        b.env.always "PATCHED" (b.text.literal "yes"),
-    ],
-    analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.include_any],
-    .. b.defaults.policy_patch
-}
-"#,
-    );
+fn the_restricted_declaration_bridge_preserves_all_patch_operations() {
+    let source = authored_patch(&[
+        ("build_subdir", r#"{ kind = "set", value = "layered-builddir" }"#),
+        ("targets", r#"{ kind = "replace", values = {} }"#),
+        (
+            "retired_targets",
+            r#"{ kind = "prepend", values = { { name = "removed-test",
+               reason = "covered by patch algebra" } } }"#,
+        ),
+        (
+            "environment",
+            r#"{ kind = "append", values = { { name = "PATCHED",
+               value = { kind = "literal", value = "yes" }, condition = "always" } } }"#,
+        ),
+        (
+            "analyzers",
+            r#"{ kind = "replace", values = { "binary", "include_any" } }"#,
+        ),
+    ]);
     let evaluated = evaluate_default_patch(&source).unwrap();
 
     assert!(matches!(evaluated.value.build_subdir, ValuePatch::Set(ref value) if value == "layered-builddir"));
@@ -189,7 +222,7 @@ b.policy_patch {
 
 #[test]
 fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
-    let source = authored_patch("b.defaults.policy_patch");
+    let source = authored_patch(&[]);
     let evaluator = LuaBuildPolicyEvaluator::default();
     let plain = evaluate_patch(&evaluator, &source).unwrap();
     let first = evaluate_patch_with_inputs(&evaluator, &source, b"first").unwrap();
@@ -201,7 +234,7 @@ fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
 
 #[test]
 fn normalized_build_policy_patch_root_matches_the_complete_owned_value() {
-    let evaluated = evaluate_default_patch(&authored_patch("b.defaults.policy_patch")).unwrap();
+    let evaluated = evaluate_default_patch(&authored_patch(&[])).unwrap();
     let expected = BuildPolicyPatchSpec {
         build_subdir: ValuePatch::Keep,
         layout: ValuePatch::Keep,
@@ -223,14 +256,14 @@ fn normalized_build_policy_patch_root_matches_the_complete_owned_value() {
 
 #[test]
 fn analyzer_order_is_preserved_and_participates_in_patch_identity() {
-    let first = evaluate_default_patch(&authored_patch(
-        "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.elf, b.analyzer.include_any], .. b.defaults.policy_patch }",
-    ))
-    .unwrap();
-    let second = evaluate_default_patch(&authored_patch(
-        "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.elf, b.analyzer.binary, b.analyzer.include_any], .. b.defaults.policy_patch }",
-    ))
-    .unwrap();
+    let replace = |values: &str| {
+        authored_patch(&[(
+            "analyzers",
+            &format!(r#"{{ kind = "replace", values = {{ {values} }} }}"#),
+        )])
+    };
+    let first = evaluate_default_patch(&replace(r#""binary", "elf", "include_any""#)).unwrap();
+    let second = evaluate_default_patch(&replace(r#""elf", "binary", "include_any""#)).unwrap();
 
     assert_ne!(first.identity.sha256, second.identity.sha256);
     assert_eq!(
