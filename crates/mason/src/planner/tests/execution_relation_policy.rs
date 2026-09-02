@@ -67,7 +67,7 @@ fn assert_relation_policy_fixture_contract(declaration: &PackageSpec) {
 
 #[test]
 fn relation_policy_source_less_declaration_is_exact_and_role_validated() {
-    let recipe = execution_fixture_package_directory("relation-policy").join("stone.glu");
+    let recipe = execution_fixture_package_directory("relation-policy").join("stone.lua");
     let loaded = crate::Recipe::load_authored(&recipe)
         .unwrap_or_else(|error| panic!("relation-policy: evaluate authored fixture: {error:#}"));
     assert_relation_policy_fixture_contract(&loaded.declaration);

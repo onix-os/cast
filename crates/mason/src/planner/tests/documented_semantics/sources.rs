@@ -7,7 +7,7 @@ use stone_recipe::{
         CollectionRulePlan, DerivationPlan, InputOrigin, JobExecutableRole, JobStepSection, LockedSource, NetworkMode,
         PackageInputSelection, PathRuleKind, StepPlan,
     },
-    package::{GluonPackageEvaluator, PackageSpec, StepSpec},
+    package::{LuaPackageEvaluator, PackageSpec, StepSpec},
 };
 
 use super::{assert_x86_64_platform, dependency_names};
@@ -146,7 +146,7 @@ fn assert_disabled_factory_variant() {
         .join("../../docs/examples/gluon/packages/optional-component-source-graph");
     let source_root = SourceRoot::new(&root).expect("open optional component example source root");
     let evaluator = DeclarationEvaluator::<PackageSpec>::with_source_root(
-        &GluonPackageEvaluator::default(),
+        &LuaPackageEvaluator::default(),
         source_root,
     );
     let source = Source::new(

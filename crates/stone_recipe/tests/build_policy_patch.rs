@@ -5,7 +5,7 @@ use declarative_config::{
 use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::{
     AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
-    EnvironmentBindingSpec, EnvironmentCondition, GluonBuildPolicyEvaluator, RetiredTargetPolicySpec, TextSpec,
+    EnvironmentBindingSpec, EnvironmentCondition, LuaBuildPolicyEvaluator, RetiredTargetPolicySpec, TextSpec,
     ValuePatch,
 };
 
@@ -15,7 +15,7 @@ type PolicyEvaluationError = DeclarationEvaluationError<BuildPolicyConversionErr
 fn repository_policy() -> BuildPolicySpec {
     let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
     let evaluator = DeclarationEvaluator::<BuildPolicySpec>::with_source_root(
-        &GluonBuildPolicyEvaluator::default(),
+        &LuaBuildPolicyEvaluator::default(),
         source_root.clone(),
     );
     let source = source_root
@@ -30,18 +30,18 @@ fn repository_policy() -> BuildPolicySpec {
 }
 
 fn evaluate_patch(
-    evaluator: &GluonBuildPolicyEvaluator,
+    evaluator: &LuaBuildPolicyEvaluator,
     source: &Source,
 ) -> Result<PatchEvaluation, PolicyEvaluationError> {
     DeclarationEvaluator::<BuildPolicyPatchSpec>::evaluate(evaluator, source)
 }
 
 fn evaluate_default_patch(source: &Source) -> Result<PatchEvaluation, PolicyEvaluationError> {
-    evaluate_patch(&GluonBuildPolicyEvaluator::default(), source)
+    evaluate_patch(&LuaBuildPolicyEvaluator::default(), source)
 }
 
 fn evaluate_patch_with_inputs(
-    evaluator: &GluonBuildPolicyEvaluator,
+    evaluator: &LuaBuildPolicyEvaluator,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<PatchEvaluation, PolicyEvaluationError> {
@@ -190,7 +190,7 @@ b.policy_patch {
 #[test]
 fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
     let source = authored_patch("b.defaults.policy_patch");
-    let evaluator = GluonBuildPolicyEvaluator::default();
+    let evaluator = LuaBuildPolicyEvaluator::default();
     let plain = evaluate_patch(&evaluator, &source).unwrap();
     let first = evaluate_patch_with_inputs(&evaluator, &source, b"first").unwrap();
     let second = evaluate_patch_with_inputs(&evaluator, &source, b"second").unwrap();

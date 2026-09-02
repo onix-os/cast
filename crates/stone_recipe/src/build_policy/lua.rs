@@ -15,8 +15,9 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Diagnostic, Evaluation as DeclarationEvaluation,
-    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, DeclarationInputEvaluator, Diagnostic,
+    Evaluation as DeclarationEvaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source,
+    SourceRoot,
 };
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_option, lua_string, pretty_lua};
 
@@ -132,23 +133,58 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for LuaBuildPolicyEvaluator {
     }
 }
 
-/// One registered build-policy layer language (`.glu` or `.lua`), selected by a
-/// layer file's extension. Both engines reach the same validated
+impl DeclarationInputEvaluator<BuildPolicySpec> for LuaBuildPolicyEvaluator {
+    fn evaluate_with_inputs_within(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<DeclarationEvaluation<BuildPolicySpec, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs_within_as::<LuaBuildPolicySpec>(source, explicit_inputs, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let policy: BuildPolicySpec = evaluation.value.into();
+        policy.validate().map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: policy,
+            identity: evaluation.identity,
+        })
+    }
+}
+
+impl DeclarationInputEvaluator<BuildPolicyPatchSpec> for LuaBuildPolicyEvaluator {
+    fn evaluate_with_inputs_within(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>, DeclarationEvaluationError<Self::Error>>
+    {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs_within_as::<LuaBuildPolicyPatchSpec>(source, explicit_inputs, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(DeclarationEvaluation {
+            value: evaluation.value.into(),
+            identity: evaluation.identity,
+        })
+    }
+}
+
+/// One registered build-policy layer language, selected by a layer file's
+/// extension. Every engine reaches the same validated
 /// [`BuildPolicySpec`]/[`BuildPolicyPatchSpec`] with a shared conversion error,
 /// so the composition loader stays language-neutral.
 #[derive(Debug, Clone)]
 pub enum BuildPolicyEvaluator {
-    Gluon(super::GluonBuildPolicyEvaluator),
     Lua(LuaBuildPolicyEvaluator),
 }
 
 impl BuildPolicyEvaluator {
-    /// The registered layer languages, `.glu` first, sharing a conversion error.
-    pub fn registered() -> [Self; 2] {
-        [
-            Self::Gluon(super::GluonBuildPolicyEvaluator::default()),
-            Self::Lua(LuaBuildPolicyEvaluator::default()),
-        ]
+    /// The registered layer languages, sharing one conversion error.
+    pub fn registered() -> [Self; 1] {
+        [Self::Lua(LuaBuildPolicyEvaluator::default())]
     }
 }
 
@@ -158,9 +194,6 @@ impl DeclarationEvaluator<BuildPolicySpec> for BuildPolicyEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(evaluator) => {
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::language_spec(evaluator)
-            }
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::language_spec(evaluator)
             }
@@ -169,9 +202,6 @@ impl DeclarationEvaluator<BuildPolicySpec> for BuildPolicyEvaluator {
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(evaluator) => {
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(evaluator)
-            }
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(evaluator)
             }
@@ -180,9 +210,6 @@ impl DeclarationEvaluator<BuildPolicySpec> for BuildPolicyEvaluator {
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(evaluator) => Self::Gluon(
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(evaluator, source_root),
-            ),
             Self::Lua(evaluator) => Self::Lua(
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(evaluator, source_root),
             ),
@@ -198,7 +225,6 @@ impl DeclarationEvaluator<BuildPolicySpec> for BuildPolicyEvaluator {
         DeclarationEvaluationError<Self::Error>,
     > {
         match self {
-            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate_within(evaluator, source, deadline)
             }
@@ -212,9 +238,6 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for BuildPolicyEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(evaluator) => {
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::language_spec(evaluator)
-            }
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::language_spec(evaluator)
             }
@@ -223,9 +246,6 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for BuildPolicyEvaluator {
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(evaluator) => {
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::limits(evaluator)
-            }
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::limits(evaluator)
             }
@@ -234,9 +254,6 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for BuildPolicyEvaluator {
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(evaluator) => Self::Gluon(
-                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::with_source_root(evaluator, source_root),
-            ),
             Self::Lua(evaluator) => Self::Lua(
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::with_source_root(evaluator, source_root),
             ),
@@ -252,7 +269,6 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for BuildPolicyEvaluator {
         DeclarationEvaluationError<Self::Error>,
     > {
         match self {
-            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
             Self::Lua(evaluator) => {
                 <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate_within(evaluator, source, deadline)
             }

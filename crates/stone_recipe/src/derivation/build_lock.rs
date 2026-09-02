@@ -9,13 +9,11 @@ use super::CanonicalEncoder;
 
 use self::closure_validation::{detect_dependency_cycles, require_nonempty, require_reachable_packages};
 pub use self::{
-    gluon_codec::{BUILD_LOCK_GENERATED_GLUON_MARKER, GluonBuildLockCodec},
     lua::{LuaBuildLockCodec, encode_lua_lock},
     validation_errors::BuildLockValidationError,
 };
 
 mod closure_validation;
-mod gluon_codec;
 pub mod lua;
 mod validation_errors;
 

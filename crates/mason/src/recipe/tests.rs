@@ -19,7 +19,7 @@
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn canonical_source_lock(lock: &SourceLock) -> String {
-        GluonSourceLockCodec::default().encode(lock).unwrap()
+        LuaSourceLockCodec::default().encode(lock).unwrap()
     }
 
     fn gluon_recipe(source: &str) -> String {
@@ -55,7 +55,7 @@
 
     fn minimal_recipe() -> Recipe {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
         Recipe::load(root.path()).unwrap()
     }
 
@@ -64,7 +64,7 @@
             let path = entry.unwrap().path();
             if path.is_dir() {
                 find_stone_glu(&path, found);
-            } else if path.file_name().and_then(|name| name.to_str()) == Some("stone.glu") {
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("stone.lua") {
                 found.push(path);
             }
         }
@@ -72,7 +72,7 @@
 
     #[test]
     fn every_gluon_recipe_example_round_trips_through_lua() {
-        // Pair the authored `stone.glu` documentation corpus with generated Lua
+        // Pair the authored `stone.lua` documentation corpus with generated Lua
         // by emitting each loaded recipe and re-loading it through the `.lua`
         // path; every example must normalize to the same package value.
         let examples =
@@ -98,7 +98,7 @@
 
     fn recipe_from(source: &str) -> Recipe {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe(source)).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe(source)).unwrap();
         Recipe::load(root.path()).unwrap()
     }
 
@@ -194,8 +194,8 @@
     #[test]
     fn an_authorized_recipe_migration_switches_the_source_authority() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
-        let authored = Recipe::load_authored(dir.path().join("stone.glu")).unwrap();
+        fs::write(dir.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        let authored = Recipe::load_authored(dir.path().join("stone.lua")).unwrap();
 
         // The operator authors an equivalent Lua replacement elsewhere.
         let (_candidate, replacement) = lua_replacement(&authored.declaration);
@@ -205,7 +205,7 @@
 
         // The authored Gluon authority is gone; the Lua one is now sole and
         // discovery resolves it unambiguously.
-        assert!(!dir.path().join("stone.glu").exists());
+        assert!(!dir.path().join("stone.lua").exists());
         assert!(dir.path().join("stone.lua").exists());
         assert!(resolve_path(dir.path()).unwrap().ends_with("stone.lua"));
 
@@ -216,7 +216,7 @@
     #[test]
     fn a_rejected_recipe_migration_leaves_the_recipe_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(dir.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
 
         // A valid but non-equivalent Lua recipe (a different package name).
         let divergent = recipe_from(&SOURCE_SPEC.replace("example", "renamed"));
@@ -226,7 +226,7 @@
         assert_eq!(outcome, RecipeMigration::Rejected);
 
         // Fail-closed: the Gluon authority stays and no Lua file was installed.
-        assert!(dir.path().join("stone.glu").exists());
+        assert!(dir.path().join("stone.lua").exists());
         assert!(!dir.path().join("stone.lua").exists());
     }
 
@@ -289,10 +289,10 @@
     fn documented_recipe_examples_remain_loadable() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
 
-        let minimal = Recipe::load(examples.join("stone.glu")).unwrap();
+        let minimal = Recipe::load(examples.join("stone.lua")).unwrap();
         assert_eq!(minimal.declaration.meta.pname, "hello");
 
-        let composed = Recipe::load(examples.join("composed-stone.glu")).unwrap();
+        let composed = Recipe::load(examples.join("composed-stone.lua")).unwrap();
         assert_eq!(composed.declaration.meta.pname, "composed-hello");
         assert_eq!(
             composed.declaration.outputs[0].summary.as_deref(),
@@ -377,9 +377,9 @@
         fs::write(root.path().join("stone.yaml"), "ignored").unwrap();
 
         let missing = resolve_path(root.path()).unwrap_err();
-        assert!(matches!(missing, Error::MissingRecipe(path) if path.ends_with("stone.glu")));
+        assert!(matches!(missing, Error::MissingRecipe(path) if path.ends_with("stone.lua")));
 
-        let gluon = root.path().join("stone.glu");
+        let gluon = root.path().join("stone.lua");
         fs::write(&gluon, "{}").unwrap();
         assert_eq!(resolve_path(root.path()).unwrap(), gluon.canonicalize().unwrap());
     }
@@ -476,7 +476,7 @@
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("source.glu"), SOURCE_SPEC).unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             r#"
 let a = import! cast.authored.v1
 let source = import! "source.glu"
@@ -503,7 +503,7 @@ let source = import! "source.glu"
         let recipe = Recipe::load(root.path()).unwrap();
         let fingerprint = recipe.fingerprint;
 
-        assert_eq!(recipe.path, root.path().join("stone.glu").canonicalize().unwrap());
+        assert_eq!(recipe.path, root.path().join("stone.lua").canonicalize().unwrap());
         assert_eq!(recipe.declaration.meta.version, "1.2.3");
         assert_eq!(fingerprint.root_logical_name, RECIPE_ROOT_LOGICAL_NAME_V1);
         let mut modules = fingerprint
@@ -529,7 +529,7 @@ let source = import! "source.glu"
     fn invalid_gluon_preserves_source_diagnostics() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             r#"
 let a = import! cast.authored.v1
 {
@@ -564,7 +564,7 @@ let a = import! cast.authored.v1
         };
 
         assert_eq!(diagnostic.category, declarative_config::DiagnosticCategory::Type);
-        assert_eq!(diagnostic.source_name.as_deref(), Some("stone.glu"));
+        assert_eq!(diagnostic.source_name.as_deref(), Some("stone.lua"));
         assert!(diagnostic.span.is_some());
     }
 
@@ -572,7 +572,7 @@ let a = import! cast.authored.v1
     fn legacy_recipe_shape_is_not_an_implicit_fallback() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             format!("let source = {SOURCE_SPEC}\n{{ source }}"),
         )
         .unwrap();
@@ -587,7 +587,7 @@ let a = import! cast.authored.v1
     #[test]
     fn valid_source_lock_is_decoded_and_retained() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
             canonical_source_lock(&matching_source_lock()),
@@ -604,7 +604,7 @@ let a = import! cast.authored.v1
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         let limit = Limits::default().max_source_bytes;
         fs::File::create(&lock_path)
@@ -642,7 +642,7 @@ let a = import! cast.authored.v1
     #[test]
     fn malformed_schema_and_commit_lock_errors_include_the_lock_path() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
 
         let mut wrong_schema = matching_source_lock();
@@ -676,7 +676,7 @@ let a = import! cast.authored.v1
     #[test]
     fn authored_load_ignores_generated_lock_bytes_without_mutating_them() {
         let root = tempfile::tempdir().unwrap();
-        let recipe_path = root.path().join("stone.glu");
+        let recipe_path = root.path().join("stone.lua");
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         fs::write(&recipe_path, gluon_recipe(SOURCE_SPEC)).unwrap();
         fs::write(&lock_path, "not valid Gluon").unwrap();
@@ -691,7 +691,7 @@ let a = import! cast.authored.v1
     #[test]
     fn stale_source_lock_rejects_count_kind_url_hash_and_requested_ref() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
 
         let mut count = matching_source_lock();
@@ -744,7 +744,7 @@ let a = import! cast.authored.v1
     #[test]
     fn recipe_and_lock_fingerprints_are_deterministic() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
         let lock = canonical_source_lock(&SourceLock::default());
         fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), &lock).unwrap();
 
@@ -774,7 +774,7 @@ let a = import! cast.authored.v1
     #[test]
     fn explicit_build_timestamp_is_deterministic_and_ambient_free() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("stone.lua"), gluon_recipe(SOURCE_SPEC)).unwrap();
         let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
 
         let first = Recipe::load_at(root.path(), timestamp).unwrap();

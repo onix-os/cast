@@ -1,4 +1,4 @@
-use gluon_config::DiagnosticCategory;
+use declarative_config::DiagnosticCategory;
 
 use super::{
     super::{
@@ -284,14 +284,14 @@ fn checked_documentation_examples_use_the_exact_restricted_topology_loader() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/examples/gluon/boot-topology-aliases-esp.glu"
+                "/../../docs/examples/lua/boot-topology-aliases-esp.lua"
             )),
             false,
         ),
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/examples/gluon/boot-topology-distinct-xbootldr.glu"
+                "/../../docs/examples/lua/boot-topology-distinct-xbootldr.lua"
             )),
             true,
         ),

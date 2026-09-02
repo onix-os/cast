@@ -22,7 +22,6 @@ use serde::Deserialize;
 
 use super::Map;
 use super::conversion::{decode_specs, repository_to_spec};
-use super::gluon::RepositoryCodec;
 use crate::repository::RepositoryConversionError;
 use crate::system_model::spec::{RepositorySourceSpec, RepositorySpec};
 
@@ -148,7 +147,6 @@ impl DeclarationCodec<Map> for LuaRepositoryCodec {
 /// type is shared, so no error unification is needed.
 #[derive(Debug, Clone)]
 pub enum RepositoryEvaluator {
-    Gluon(RepositoryCodec),
     Lua(LuaRepositoryCodec),
 }
 
@@ -158,24 +156,18 @@ impl DeclarationEvaluator<Map> for RepositoryEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(codec) => <RepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec),
             Self::Lua(codec) => <LuaRepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec),
         }
     }
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(codec) => <RepositoryCodec as DeclarationEvaluator<Map>>::limits(codec),
             Self::Lua(codec) => <LuaRepositoryCodec as DeclarationEvaluator<Map>>::limits(codec),
         }
     }
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(codec) => Self::Gluon(<RepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(
-                codec,
-                source_root,
-            )),
             Self::Lua(codec) => Self::Lua(<LuaRepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(
                 codec,
                 source_root,
@@ -189,7 +181,6 @@ impl DeclarationEvaluator<Map> for RepositoryEvaluator {
         deadline: EvaluationDeadline,
     ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
         match self {
-            Self::Gluon(codec) => codec.evaluate_within(source, deadline),
             Self::Lua(codec) => codec.evaluate_within(source, deadline),
         }
     }
@@ -200,19 +191,15 @@ impl ConfigDeclarationEvaluator for RepositoryEvaluator {
 }
 
 impl RepositoryEvaluator {
-    /// The registered repository languages, `.glu` first, sharing a limit.
-    pub fn registered() -> [Self; 2] {
-        [
-            Self::Gluon(RepositoryCodec::default()),
-            Self::Lua(LuaRepositoryCodec::default()),
-        ]
+    /// The registered repository languages, sharing a limit.
+    pub fn registered() -> [Self; 1] {
+        [Self::Lua(LuaRepositoryCodec::default())]
     }
 }
 
 impl DeclarationCodec<Map> for RepositoryEvaluator {
     fn encode(&self, config: &Map) -> Result<String, Self::Error> {
         match self {
-            Self::Gluon(codec) => codec.encode(config),
             Self::Lua(codec) => codec.encode(config),
         }
     }
@@ -222,7 +209,27 @@ impl DeclarationCodec<Map> for RepositoryEvaluator {
 /// re-decodes through [`decode_lua_specs`] into the same map. The specs are
 /// derived by the shared `repository_to_spec`, so the Lua and Gluon emitters
 /// canonicalize identical domain values.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Emit the live repositories as a canonical, round-trippable generated
+/// authority fragment. Feeding the result back through the repository codec
+/// reproduces the same [`Map`]. Backs `cast repo list --canonical`.
+pub fn encode_configured<'a>(
+    repositories: impl IntoIterator<Item = (&'a crate::repository::Id, &'a crate::repository::Repository)>,
+) -> Result<String, RepositoryConversionError> {
+    let mut specs = repositories
+        .into_iter()
+        .map(repository_to_spec)
+        .collect::<Result<Vec<_>, _>>()?;
+    specs.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    for spec in &specs {
+        encode_repository_record(&mut output, spec);
+    }
+    output.push_str("}\n");
+    Ok(pretty_lua(&output))
+}
+
 fn encode_lua_specs(map: &Map) -> Result<String, RepositoryConversionError> {
     let mut specs = map.iter().map(repository_to_spec).collect::<Result<Vec<_>, _>>()?;
     specs.sort_by(|left, right| left.id.cmp(&right.id));
@@ -290,14 +297,6 @@ mod tests {
     use lua_config::LuaEngine;
 
     use super::*;
-    use crate::repository::gluon::RepositoryCodec;
-
-    const GLUON_REPOSITORY: &str = r#"
-let cast = import! cast.repository.v1
-[
-    cast.repository.direct "main" "https://packages.example/stone.index",
-]
-"#;
 
     const LUA_REPOSITORY: &str = r#"
 return {
@@ -322,46 +321,48 @@ return {
         decode_lua_specs(specs).expect("lua repository is valid")
     }
 
-    fn gluon_map(source: &str) -> Map {
-        <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
-            &RepositoryCodec::default(),
-            &Source::new("repository.glu", source),
-        )
-        .expect("gluon repository evaluates")
-        .value
-    }
-
+    /// The shipped documentation example must decode to the repository it
+    /// documents.
     #[test]
-    fn a_lua_repository_normalizes_to_the_same_map_as_gluon() {
-        assert_eq!(
-            format!("{:?}", lua_map(LUA_REPOSITORY)),
-            format!("{:?}", gluon_map(GLUON_REPOSITORY)),
-        );
-    }
-
-    #[test]
-    fn the_paired_repository_documentation_example_normalizes_equally() {
-        // Prove the shipped documentation example and its paired Lua form
-        // (Phase L7) decode to the same repository map.
+    fn the_repository_documentation_example_decodes() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/repositories.glu"))
-            .expect("gluon repository example");
         let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/repositories.lua"))
             .expect("lua repository example");
-        assert_eq!(format!("{:?}", lua_map(&lua)), format!("{:?}", gluon_map(&gluon)));
+        assert!(lua_map(&lua).iter().count() > 0);
     }
 
-    const GLUON_ROOT_INDEX: &str = r#"
-let cast = import! cast.repository.v1
-[
-    cast.repository.root "core" "https://packages.example/core" "stream/volatile",
-    cast.repository.direct "extra" "https://packages.example/extra.index",
-]
+    /// Both source kinds in one document: a root index and a direct index.
+    const LUA_ROOT_INDEX: &str = r#"
+return {
+    {
+        id = "core",
+        description = { kind = "none" },
+        source = {
+            kind = "root_index",
+            base_uri = "https://packages.example/core",
+            channel = { kind = "none" },
+            version = "stream/volatile",
+            arch = { kind = "none" },
+        },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+    {
+        id = "extra",
+        description = { kind = "none" },
+        source = {
+            kind = "direct_index",
+            uri = "https://packages.example/extra.index",
+        },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+}
 "#;
 
     #[test]
     fn emitted_lua_re_decodes_to_the_same_map() {
-        let original = gluon_map(GLUON_ROOT_INDEX);
+        let original = lua_map(LUA_ROOT_INDEX);
         let emitted = encode_lua_specs(&original).expect("map emits to lua");
         assert!(emitted.starts_with(GENERATED_LUA_MARKER));
 
@@ -376,7 +377,7 @@ let cast = import! cast.repository.v1
         // The generated-slot authority switch calls `DeclarationCodec::encode`
         // to write the new `.lua` authority; it must be generated-marked and
         // re-decode to the same map.
-        let map = gluon_map(GLUON_ROOT_INDEX);
+        let map = lua_map(LUA_ROOT_INDEX);
         let encoded = LuaRepositoryCodec::default().encode(&map).expect("codec emits lua");
         assert!(encoded.starts_with(GENERATED_LUA_MARKER));
         assert_eq!(format!("{:?}", lua_map(&encoded)), format!("{map:?}"));

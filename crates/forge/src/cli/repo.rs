@@ -199,11 +199,11 @@ fn add(
 fn list(manager: repository::Manager, canonical: bool) -> Result<(), Error> {
     let configured_repos = manager.list();
 
-    // `--canonical` emits the round-trippable generated Gluon authority fragment
+    // `--canonical` emits the round-trippable generated authority fragment
     // (an empty repo set still yields a valid empty authority); the default view
     // stays the human-readable summary below.
     if canonical {
-        print!("{}", repository::gluon::encode_configured(configured_repos)?);
+        print!("{}", repository::lua::encode_configured(configured_repos)?);
         return Ok(());
     }
 

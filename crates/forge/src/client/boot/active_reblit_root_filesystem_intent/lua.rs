@@ -182,7 +182,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::super::RootFilesystemIntentPolicy;
-    use super::super::gluon::gluon_value_for_test;
+    use super::super::normalization::materialize_root_argument;
     use super::*;
     use crate::Installation;
 
@@ -229,20 +229,22 @@ mod tests {
             })
     }
 
+    /// Decoding must land on exactly the value the shared normalization builds
+    /// from the same locator.
     #[test]
-    fn a_lua_root_intent_matches_the_gluon_normalization() {
+    fn a_lua_root_intent_matches_the_shared_normalization() {
         let fixture = Fixture::new();
 
         let lua = lua_value(&mut fixture.budget(), r#"return { root = "UUID=1111-2222" }"#)
             .expect("lua root intent evaluates");
-        let gluon =
-            gluon_value_for_test("UUID=1111-2222", &mut fixture.budget()).expect("gluon root intent normalizes");
+        let expected = materialize_root_argument("UUID=1111-2222".to_owned(), &mut fixture.budget())
+            .expect("shared normalization accepts the locator");
 
-        assert_eq!(lua, gluon);
+        assert_eq!(lua, expected);
     }
 
     #[test]
-    fn the_paired_root_filesystem_documentation_example_normalizes_equally() {
+    fn the_root_filesystem_documentation_example_decodes_to_its_locator() {
         let root_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let lua = std::fs::read_to_string(format!("{root_dir}/docs/examples/lua/root-filesystem.lua"))
             .expect("lua root-filesystem example");
@@ -250,8 +252,8 @@ mod tests {
         let locator = "PARTUUID=11111111-2222-3333-4444-555555555555";
 
         let lua_value = lua_value(&mut fixture.budget(), &lua).expect("lua example evaluates");
-        let gluon_value = gluon_value_for_test(locator, &mut fixture.budget()).expect("gluon normalizes");
-        assert_eq!(lua_value, gluon_value);
+        let expected = materialize_root_argument(locator.to_owned(), &mut fixture.budget()).expect("shared normalization");
+        assert_eq!(lua_value, expected);
     }
 
     #[test]

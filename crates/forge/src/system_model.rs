@@ -17,7 +17,6 @@ use thiserror::Error;
 
 use crate::{Package, dependency, repository};
 
-pub mod gluon;
 pub mod lua;
 mod rooted;
 pub mod spec;

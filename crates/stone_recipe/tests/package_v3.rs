@@ -8,7 +8,7 @@ use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, 
 use declarative_config::DiagnosticCategory;
 use stone_recipe::package::{
     BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec,
-    GluonPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
+    LuaPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -1037,13 +1037,13 @@ let abi_version: Int = a.abi_version
 }
 "#,
     );
-    let evaluator = GluonPackageEvaluator::default();
+    let evaluator = LuaPackageEvaluator::default();
 
     let first = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let repeated = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let changed = evaluate_package_with_inputs(&evaluator, &source, b"lock-v2").unwrap();
-    let typed = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
-        &GluonPackageEvaluator::default(),
+    let typed = <LuaPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+        &LuaPackageEvaluator::default(),
         &source,
         b"lock-v1",
     )

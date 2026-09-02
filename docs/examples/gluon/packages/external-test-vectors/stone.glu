@@ -1,5 +1,0 @@
-let a = import! cast.authored.v1
-let package = import! "./package.glu"
-let sources = import! "./sources.glu"
-
-package sources

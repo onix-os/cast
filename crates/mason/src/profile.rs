@@ -23,10 +23,8 @@ use thiserror::Error;
 
 use crate::Env;
 
-mod gluon;
 mod lua;
 
-pub use gluon::ProfileCodec;
 pub use lua::LuaProfileCodec;
 
 /// A unique [`Profile`] identifier.

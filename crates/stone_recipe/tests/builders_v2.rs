@@ -1,6 +1,6 @@
 use declarative_config::Source;
 use stone_recipe::package::{
-    AuthoredPackage, BuilderRequest, DependencySpec, GluonPackageEvaluator, HooksSpec, MetaSpec,
+    AuthoredPackage, BuilderRequest, DependencySpec, LuaPackageEvaluator, HooksSpec, MetaSpec,
     ProgramSpec, StepSpec, lower,
 };
 
@@ -63,7 +63,7 @@ fn a_minimal_authored_gluon_recipe_lowers_through_shared_rust() {
 "#,
     );
 
-    let package = GluonPackageEvaluator::default()
+    let package = LuaPackageEvaluator::default()
         .evaluate_authored(&source)
         .expect("minimal authored recipe lowers");
 
@@ -155,7 +155,7 @@ let scripts = a.scripts {
 "#,
     );
 
-    let package = GluonPackageEvaluator::default()
+    let package = LuaPackageEvaluator::default()
         .evaluate_authored(&source)
         .expect("rich authored recipe lowers");
 

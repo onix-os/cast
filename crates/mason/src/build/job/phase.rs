@@ -472,7 +472,7 @@ mod direct_tests {
     use crate::{BuildPolicy, Paths, Recipe};
 
     fn fixture() -> (Recipe, BuildPolicy, tempfile::TempDir) {
-        let recipe_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu");
+        let recipe_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua");
         let recipe = Recipe::load_at(recipe_path, DateTime::from_timestamp(1_700_000_000, 0).unwrap()).unwrap();
         (recipe, BuildPolicy::repository_for_tests(), crate::private_tempdir())
     }

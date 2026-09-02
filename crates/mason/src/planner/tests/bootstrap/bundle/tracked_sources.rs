@@ -1,5 +1,5 @@
 fn fixture_source_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution/source-trees")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution/source-trees")
 }
 
 fn tracked_bytes(tree: &str, relative: &str) -> Vec<u8> {

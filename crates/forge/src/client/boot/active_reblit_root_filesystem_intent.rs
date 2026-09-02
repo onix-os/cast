@@ -18,20 +18,18 @@ use config::declaration::RegisteredLanguages;
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, LanguageSpec, Source,
 };
-use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
+use declarative_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedRootFilesystemSource, capture_source, revalidate_source},
-    gluon::GluonRootFilesystemIntentEvaluator,
+
 };
 
 #[path = "active_reblit_root_filesystem_intent/filesystem.rs"]
 mod filesystem;
-#[path = "active_reblit_root_filesystem_intent/gluon.rs"]
-mod gluon;
 #[path = "active_reblit_root_filesystem_intent/lua.rs"]
 mod lua;
 #[path = "active_reblit_root_filesystem_intent/normalization.rs"]
@@ -459,11 +457,7 @@ fn evaluate_declaration(
     // evaluator is constructed by language rather than held together in a set:
     // two engines cannot borrow the budget mutably at once.
     let source = Source::new(logical_name, source_text);
-    if language == &gluon::language_spec() {
-        GluonRootFilesystemIntentEvaluator::new(budget)?
-            .evaluate(&source)
-            .map_err(lift_evaluation_error)
-    } else if language == &lua::language_spec() {
+    if language == &lua::language_spec() {
         lua::LuaRootFilesystemIntentEvaluator::new(budget)?
             .evaluate(&source)
             .map_err(lift_evaluation_error)
@@ -484,7 +478,7 @@ fn lift_evaluation_error(
 }
 
 fn registered_declaration_languages() -> RegisteredLanguages {
-    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+    RegisteredLanguages::new([lua::language_spec()])
         .expect("the production root-filesystem languages register distinct extensions")
 }
 
@@ -550,7 +544,7 @@ pub(in crate::client) enum ActiveReblitRootFilesystemIntentError {
     #[error("invalid root-filesystem evaluation contract: {reason}")]
     EvaluationContract { reason: &'static str },
     #[error(transparent)]
-    Evaluation(#[from] gluon_config::Diagnostic),
+    Evaluation(#[from] declarative_config::Diagnostic),
     #[error(transparent)]
     EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe root-filesystem intent inode at `{}`: {reason}", path.display())]

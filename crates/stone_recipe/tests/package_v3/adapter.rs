@@ -4,7 +4,7 @@ use declarative_config::{
 };
 use declarative_config::EvaluationIdentity;
 use stone_recipe::package::{
-    GluonPackageEvaluator, PackageConversionError, PackageSpec,
+    LuaPackageEvaluator, PackageConversionError, PackageSpec,
 };
 
 pub(super) type PackageEvaluation =
@@ -14,15 +14,15 @@ pub(super) type PackageDeclarationError =
 
 pub(super) fn rooted_package_evaluator(
     source_root: SourceRoot,
-) -> GluonPackageEvaluator {
+) -> LuaPackageEvaluator {
     DeclarationEvaluator::<PackageSpec>::with_source_root(
-        &GluonPackageEvaluator::default(),
+        &LuaPackageEvaluator::default(),
         source_root,
     )
 }
 
 pub(super) fn evaluate_package(
-    evaluator: &GluonPackageEvaluator,
+    evaluator: &LuaPackageEvaluator,
     source: &Source,
 ) -> Result<PackageEvaluation, PackageDeclarationError> {
     DeclarationEvaluator::<PackageSpec>::evaluate(evaluator, source)
@@ -31,11 +31,11 @@ pub(super) fn evaluate_package(
 pub(super) fn evaluate_default_package(
     source: &Source,
 ) -> Result<PackageEvaluation, PackageDeclarationError> {
-    evaluate_package(&GluonPackageEvaluator::default(), source)
+    evaluate_package(&LuaPackageEvaluator::default(), source)
 }
 
 pub(super) fn evaluate_package_with_inputs(
-    evaluator: &GluonPackageEvaluator,
+    evaluator: &LuaPackageEvaluator,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<PackageEvaluation, PackageDeclarationError> {

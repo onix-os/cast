@@ -13,10 +13,10 @@ use declarative_config::{
 use declarative_config::Diagnostic;
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicyEvaluator, BuildPolicyPatchSpec, BuildPolicySpec,
-    GluonBuildPolicyEvaluator, LuaBuildPolicyEvaluator, TargetPolicySpec,
+    LuaBuildPolicyEvaluator, TargetPolicySpec,
     layers::{
         BuildPolicyOperation, BuildPolicyRootConversionError,
-        BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
+        BuildPolicyRootSpec, LuaBuildPolicyRootEvaluator,
     },
 };
 use stone_recipe::derivation::{
@@ -47,8 +47,8 @@ impl BuildPolicy {
             manifest,
         } = root_declaration::load(policy_dir)?;
         let root_evaluator =
-            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
-                &GluonBuildPolicyRootEvaluator::default(),
+            <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
+                &LuaBuildPolicyRootEvaluator::default(),
                 source_root.clone(),
             );
         let mut layers = Vec::with_capacity(manifest.layers.len());
@@ -82,7 +82,7 @@ impl BuildPolicy {
         })?;
         let identity_inputs = policy_composition_identity(&manifest.name, &layers);
         let finalized_root =
-            <GluonBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
+            <LuaBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
                 &root_evaluator,
                 &root_source,
                 &identity_inputs,
@@ -131,17 +131,13 @@ impl BuildPolicy {
     }
 }
 
-/// Select the layer language by a layer file's extension, source-rooted so its
-/// (currently unused for `.lua`) imports resolve beneath the policy directory.
-/// A `.lua` layer decodes through the Lua adapter; anything else is Gluon.
-fn build_policy_evaluator_for(origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
-    let evaluator = if Path::new(origin).extension().and_then(|extension| extension.to_str())
-        == Some("lua")
-    {
-        BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default())
-    } else {
-        BuildPolicyEvaluator::Gluon(GluonBuildPolicyEvaluator::default())
-    };
+/// Build the layer evaluator, source-rooted so its imports resolve beneath the
+/// policy directory.
+///
+/// `origin` names the layer file whose language this selects; with one
+/// registered language every layer decodes through the Lua adapter.
+fn build_policy_evaluator_for(_origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
+    let evaluator = BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default());
     <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
         &evaluator,
         source_root.clone(),
@@ -375,32 +371,55 @@ mod tests {
 
     use super::*;
 
-    /// The shipped manifest — its foundation layer is Lua (`default.lua`).
-    const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.glu");
+    /// The shipped manifest — its foundation layer is `default.lua`.
+    const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.lua");
     /// The shipped Lua policy authority Cast loads.
     const REPOSITORY_DEFAULT_LUA: &str = include_str!("../data/policy/default.lua");
-    /// The retained Gluon policy + tuning catalogs, kept as the full-parity
-    /// composition-test fixtures and the source for regenerating `default.lua`.
-    const REPOSITORY_DEFAULT: &str = include_str!("../data/policy/default.glu");
-    const REPOSITORY_TUNING_FLAGS: &str = include_str!("../data/policy/tuning/flags.glu");
-    const REPOSITORY_TUNING_GROUPS: &str = include_str!("../data/policy/tuning/groups.glu");
-    /// An explicit Gluon foundation manifest, so composition-mechanics tests keep
-    /// exercising the modular Gluon path (module fingerprints, tuning-byte
-    /// participation) independently of the shipped Lua authority.
-    const GLUON_MANIFEST: &str = "let l = import! cast.build_policy.layers.v1\n\
-l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     fn fixture(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("tuning")).unwrap();
-        fs::write(root.path().join("policy.glu"), manifest).unwrap();
-        // Both authorities are present; the manifest chooses which is loaded, so
-        // Lua and Gluon manifests both resolve without a same-slot collision.
+        fs::write(root.path().join("policy.lua"), manifest).unwrap();
         fs::write(root.path().join("default.lua"), REPOSITORY_DEFAULT_LUA).unwrap();
-        fs::write(root.path().join("default.glu"), REPOSITORY_DEFAULT).unwrap();
-        fs::write(root.path().join("tuning/flags.glu"), REPOSITORY_TUNING_FLAGS).unwrap();
-        fs::write(root.path().join("tuning/groups.glu"), REPOSITORY_TUNING_GROUPS).unwrap();
         root
+    }
+
+    /// A layer manifest naming one operation per entry.
+    fn manifest(name: &str, layers: &[(&str, &[(&str, &str)])]) -> String {
+        let mut output = format!("return {{\n    name = {name:?},\n    layers = {{\n");
+        for (layer, entries) in layers {
+            output.push_str(&format!("        {{ name = {layer:?}, entries = {{ "));
+            for (operation, origin) in *entries {
+                output.push_str(&format!(
+                    "{{ operation = {{ kind = {operation:?} }}, origin = {origin:?} }}, "
+                ));
+            }
+            output.push_str("} },\n");
+        }
+        output.push_str("    },\n}\n");
+        output
+    }
+
+    /// A sparse policy patch: every field keeps its base value except
+    /// `build_subdir`. Patch fields are total, so each one is named.
+    fn build_subdir_patch(value: &str) -> String {
+        format!(
+            r#"return {{
+    build_subdir = {{ kind = "set", value = {value:?} }},
+    layout = {{ kind = "keep" }},
+    toolchains = {{ kind = "keep" }},
+    targets = {{ kind = "keep" }},
+    retired_targets = {{ kind = "keep" }},
+    sandbox = {{ kind = "keep" }},
+    build_root = {{ kind = "keep" }},
+    sources = {{ kind = "keep" }},
+    tuning = {{ kind = "keep" }},
+    environment = {{ kind = "keep" }},
+    builders = {{ kind = "keep" }},
+    analyzers = {{ kind = "keep" }},
+    pgo = {{ kind = "keep" }},
+}}
+"#
+        )
     }
 
     fn composition_digest(provenance: &PolicyProvenance) -> String {
@@ -596,15 +615,13 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     #[test]
     fn preserves_named_empty_layers_in_manifest_order_and_v2_identity() {
-        let root = fixture(
-            r#"
-let l = import! cast.build_policy.layers.v1
-l.policy "empty-layer-policy" [
-    l.layer "foundation" [l.add "default.glu"],
-    l.layer "reserved-site-layer" [],
-]
-"#,
-        );
+        let root = fixture(&manifest(
+            "empty-layer-policy",
+            &[
+                ("foundation", &[("add", "default.lua")]),
+                ("reserved-site-layer", &[]),
+            ],
+        ));
 
         let policy = BuildPolicy::load_from(root.path()).unwrap();
 
@@ -897,9 +914,9 @@ b.policy_patch {
             .unwrap()
             .load(
                 "policy.glu",
-                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<
                     BuildPolicyRootSpec,
-                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                >>::limits(&LuaBuildPolicyRootEvaluator::default())
                 .max_source_bytes,
             )
             .unwrap_err();
@@ -940,9 +957,9 @@ b.policy_patch {
             .unwrap()
             .load(
                 "policy.glu",
-                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<
                     BuildPolicyRootSpec,
-                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                >>::limits(&LuaBuildPolicyRootEvaluator::default())
                 .max_source_bytes,
             )
             .unwrap_err();

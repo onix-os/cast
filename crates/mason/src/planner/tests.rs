@@ -23,7 +23,7 @@ use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
     TuningSpec, UpstreamSpec,
     derivation::{
-        BuildLock, DerivationPlan, FilesystemPolicy, GluonBuildLockCodec,
+        BuildLock, DerivationPlan, FilesystemPolicy, LuaBuildLockCodec,
         InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
     },
     package::{DependencySpec, PackageSpec, StepSpec},
@@ -39,7 +39,7 @@ use crate::{
     package::{Packager, Publication},
     profile,
     source_lock::{
-        ArchiveResolution, GitResolution, GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
+        ArchiveResolution, GitResolution, LuaSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
         write_source_lock,
     },
 };
@@ -54,16 +54,16 @@ const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 fn canonical_build_lock(lock: &BuildLock) -> String {
-    GluonBuildLockCodec::default().encode(lock).unwrap()
+    LuaBuildLockCodec::default().encode(lock).unwrap()
 }
 
 fn canonical_source_lock(lock: &SourceLock) -> String {
-    GluonSourceLockCodec::default().encode(lock).unwrap()
+    LuaSourceLockCodec::default().encode(lock).unwrap()
 }
 
 fn evaluate_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, Box<dyn StdError>> {
     let source = std::str::from_utf8(bytes)?;
-    let evaluation = GluonSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
+    let evaluation = LuaSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
     Ok(evaluation.value)
 }
 const PACKAGE_EXAMPLES: [&str; 64] = [
@@ -135,32 +135,15 @@ const PACKAGE_EXAMPLES: [&str; 64] = [
 
 fn write_repository_policy_fixture(data_dir: &Path) {
     let policy_dir = data_dir.join("policy");
-    fs::create_dir_all(policy_dir.join("tuning")).unwrap();
+    fs::create_dir_all(&policy_dir).unwrap();
     fs::write(
-        policy_dir.join("policy.glu"),
-        include_str!("../../data/policy/policy.glu"),
+        policy_dir.join("policy.lua"),
+        include_str!("../../data/policy/policy.lua"),
     )
     .unwrap();
-    // The shipped manifest's foundation layer is the Lua authority; the Gluon
-    // sources remain as retained full-parity fixtures.
     fs::write(
         policy_dir.join("default.lua"),
         include_str!("../../data/policy/default.lua"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("default.glu"),
-        include_str!("../../data/policy/default.glu"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("tuning/flags.glu"),
-        include_str!("../../data/policy/tuning/flags.glu"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("tuning/groups.glu"),
-        include_str!("../../data/policy/tuning/groups.glu"),
     )
     .unwrap();
 }
@@ -226,7 +209,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
 ];
 
 fn execution_fixture_package_directory(name: &str) -> PathBuf {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution");
     if name == "userspace-profile" {
         fixtures.join(name)
     } else {
@@ -363,7 +346,7 @@ impl Fixture {
         let output_dir = root.path().join("output");
         let recipe_dir = root.path().join("recipe");
         let repository_dir = root.path().join("repository");
-        let recipe_path = recipe_dir.join("stone.glu");
+        let recipe_path = recipe_dir.join("stone.lua");
         let repository_index = repository_dir.join("stone.index");
 
         write_repository_policy_fixture(&data_dir);
@@ -516,7 +499,7 @@ cast.profiles [
             .map(|(name, authored_dir)| {
                 let recipe_dir = recipes_dir.join(&name);
                 copy_package_directory(&authored_dir, &recipe_dir);
-                let recipe_path = recipe_dir.join("stone.glu");
+                let recipe_path = recipe_dir.join("stone.lua");
                 let build_lock_path = crate::build_lock::path_for_recipe(&recipe_path);
                 if build_lock_path.exists() {
                     fs::remove_file(build_lock_path).unwrap();
@@ -623,8 +606,8 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
             let name = entry.file_name().into_string().unwrap();
             let path = entry.path();
             assert!(
-                path.join("stone.glu").is_file(),
-                "package example directory {path:?} has no stone.glu root"
+                path.join("stone.lua").is_file(),
+                "package example directory {path:?} has no stone.lua root"
             );
             (name, path)
         })
@@ -655,7 +638,7 @@ fn assert_package_example_readme_index(root: &Path, examples: &[(String, PathBuf
         let Some((label, target)) = row.split_once("`](packages/") else {
             continue;
         };
-        let Some((directory, _description)) = target.split_once("/stone.glu) |") else {
+        let Some((directory, _description)) = target.split_once("/stone.lua) |") else {
             panic!("malformed package example README row: {line}");
         };
         assert_eq!(label, directory, "package example README label and target disagree");

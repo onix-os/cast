@@ -12,10 +12,8 @@ use stone::relation::{Dependency, Kind as RelationKind, ParseError};
 /// declaration language, so it is owned here rather than by an adapter.
 pub const BUILD_POLICY_ABI_VERSION: u32 = 5;
 
-pub use self::gluon::{GLUON_BUILD_POLICY_ABI, GluonBuildPolicyEvaluator};
 pub use self::lua::{BuildPolicyEvaluator, LuaBuildPolicyEvaluator, encode_lua_policy};
 
-mod gluon;
 pub mod layers;
 mod lua;
 mod validation;

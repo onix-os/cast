@@ -207,21 +207,8 @@ impl DeclarationInputEvaluator<BuildPolicyRootSpec> for LuaBuildPolicyRootEvalua
 mod tests {
     use declarative_config::{DeclarationEvaluator, Source};
 
-    use super::super::GluonBuildPolicyRootEvaluator;
     use super::*;
 
-    const GLUON_MANIFEST: &str = r#"
-let cast = import! cast.build_policy.layers.v1
-cast.policy "base" [
-    cast.layer "core" [
-        cast.add "core/base.glu",
-        cast.modify "core/tuning.glu",
-    ],
-    cast.layer "arch" [
-        cast.replace "arch/x86_64.glu",
-    ],
-]
-"#;
 
     const LUA_MANIFEST: &str = r#"
 return {
@@ -251,41 +238,9 @@ return {
             .value
     }
 
-    fn gluon_spec(source: &str) -> BuildPolicyRootSpec {
-        GluonBuildPolicyRootEvaluator::default()
-            .evaluate(&Source::new("build-policy.glu", source))
-            .expect("gluon manifest evaluates")
-            .value
-    }
-
-    #[test]
-    fn a_lua_manifest_normalizes_to_the_same_spec_as_gluon() {
-        assert_eq!(lua_spec(LUA_MANIFEST), gluon_spec(GLUON_MANIFEST));
-    }
-
-    #[test]
-    fn the_lua_and_gluon_manifest_identities_differ_by_engine() {
-        let lua = LuaBuildPolicyRootEvaluator::default()
-            .evaluate(&Source::new("build-policy.lua", LUA_MANIFEST))
-            .unwrap()
-            .identity;
-        let gluon = GluonBuildPolicyRootEvaluator::default()
-            .evaluate(&Source::new("build-policy.glu", GLUON_MANIFEST))
-            .unwrap()
-            .identity;
-        assert_ne!(lua.engine.implementation(), gluon.engine.implementation());
-    }
 
     // The shipped repository-policy manifest (`crates/mason/data/policy/policy.glu`)
     // paired with its reviewed Lua form (Phase L7 corpus pairing).
-    const SHIPPED_POLICY_GLUON: &str = r#"
-let layers = import! cast.build_policy.layers.v1
-layers.policy "aerynos" [
-    layers.layer "foundation" [
-        layers.add "default.glu",
-    ],
-]
-"#;
 
     const SHIPPED_POLICY_LUA: &str = r#"
 return {
@@ -302,13 +257,16 @@ return {
 "#;
 
     #[test]
-    fn the_shipped_policy_manifest_pairs_to_an_equal_lua_form() {
-        assert_eq!(lua_spec(SHIPPED_POLICY_LUA), gluon_spec(SHIPPED_POLICY_GLUON));
+    fn the_shipped_policy_manifest_decodes_to_its_named_layers() {
+        let spec = lua_spec(SHIPPED_POLICY_LUA);
+        assert_eq!(spec.name, "aerynos");
+        assert_eq!(spec.layers.len(), 1);
+        assert_eq!(spec.layers[0].name, "foundation");
     }
 
     #[test]
     fn an_emitted_manifest_re_decodes_to_the_same_spec() {
-        let original = gluon_spec(GLUON_MANIFEST);
+        let original = lua_spec(SHIPPED_POLICY_LUA);
         let emitted = encode_lua_manifest(&original);
         assert!(emitted.starts_with(GENERATED_LUA_MARKER));
         assert_eq!(lua_spec(&emitted), original);

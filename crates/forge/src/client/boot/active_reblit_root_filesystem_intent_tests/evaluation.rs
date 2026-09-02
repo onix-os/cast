@@ -1,4 +1,4 @@
-use gluon_config::DiagnosticCategory;
+use declarative_config::DiagnosticCategory;
 
 use super::{
     super::ActiveReblitRootFilesystemIntentError,
@@ -179,7 +179,7 @@ fn exact_source_and_embedded_abi_participate_in_a_deterministic_fingerprint() {
 fn checked_documentation_example_uses_the_exact_restricted_loader() {
     let source = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/examples/gluon/root-filesystem.glu"
+        "/../../docs/examples/lua/root-filesystem.lua"
     ));
     let fixture = Fixture::new();
     fixture.write_source(source);

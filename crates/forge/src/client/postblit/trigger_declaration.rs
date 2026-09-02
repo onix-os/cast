@@ -6,7 +6,6 @@ use declarative_config::{
     Limits, Source, SourceRoot,
 };
 use triggers::{
-    GluonTriggerEvaluator,
     format::Trigger,
     lua::LuaTriggerEvaluator,
     registry::{TriggerAdapterError, TriggerEvaluator},
@@ -110,9 +109,8 @@ macro_rules! trigger_evaluator {
 trigger_evaluator!(TransactionTriggerEvaluator, TransactionTrigger);
 trigger_evaluator!(SystemTriggerEvaluator, SystemTrigger);
 
-fn registered_engines() -> [TriggerEvaluator; 2] {
+fn registered_engines() -> [TriggerEvaluator; 1] {
     [
-        TriggerEvaluator::Gluon(GluonTriggerEvaluator::default()),
         TriggerEvaluator::Lua(LuaTriggerEvaluator::default()),
     ]
 }

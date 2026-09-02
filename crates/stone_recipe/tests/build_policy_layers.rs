@@ -5,7 +5,7 @@ use declarative_config::{
 use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::layers::{
     BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation, BuildPolicyRootConversionError,
-    BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
+    BuildPolicyRootSpec, LuaBuildPolicyRootEvaluator,
 };
 
 type RootEvaluation = Evaluation<BuildPolicyRootSpec, EvaluationIdentity>;
@@ -14,7 +14,7 @@ type RootEvaluationError =
 
 fn evaluate(source: &Source) -> Result<RootEvaluation, RootEvaluationError> {
     DeclarationEvaluator::<BuildPolicyRootSpec>::evaluate(
-        &GluonBuildPolicyRootEvaluator::default(),
+        &LuaBuildPolicyRootEvaluator::default(),
         source,
     )
 }
@@ -24,7 +24,7 @@ fn evaluate_with_inputs(
     explicit_inputs: &[u8],
 ) -> Result<RootEvaluation, RootEvaluationError> {
     DeclarationInputEvaluator::<BuildPolicyRootSpec>::evaluate_with_inputs(
-        &GluonBuildPolicyRootEvaluator::default(),
+        &LuaBuildPolicyRootEvaluator::default(),
         source,
         explicit_inputs,
     )

@@ -8,7 +8,6 @@ use format::Trigger;
 use thiserror::Error;
 
 pub mod format;
-pub mod gluon;
 pub mod lua;
 pub mod registry;
 pub mod spec;
@@ -19,7 +18,6 @@ pub mod spec;
 /// here rather than by an adapter.
 pub const TRIGGER_ABI_VERSION: u32 = 1;
 
-pub use self::gluon::{GLUON_TRIGGER_ABI, GluonTriggerConversionError, GluonTriggerEvaluator};
 pub use self::spec::{
     HandlerSpec, InhibitorsSpec, KeyValueSpec, PathDefinitionSpec, PathKindSpec, TriggerConversionError, TriggerSpec,
 };

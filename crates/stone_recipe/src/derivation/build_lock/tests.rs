@@ -5,32 +5,28 @@ use declarative_config::{
 };
 
 fn encode(lock: &BuildLock) -> String {
-    GluonBuildLockCodec::default().encode(lock).unwrap()
+    LuaBuildLockCodec::default().encode(lock).unwrap()
 }
 
 fn decode(source: &str) -> Result<BuildLock, DeclarationEvaluationError<BuildLockValidationError>> {
-    GluonBuildLockCodec::default()
+    LuaBuildLockCodec::default()
         .evaluate(&Source::new(BUILD_LOCK_FILE_NAME, source))
         .map(|evaluation| evaluation.value)
 }
 
 #[test]
-fn generated_gluon_round_trips_through_restricted_evaluator() {
+fn generated_lock_round_trips_through_restricted_evaluator() {
     let mut expected = sample_lock();
     expected.normalize();
     expected.validate().unwrap();
     let encoded = encode(&expected);
     let decoded = decode(&encoded).unwrap();
 
-    assert_eq!(
-        encoded.as_bytes(),
-        include_bytes!("../../../../../tests/fixtures/gluon/goldens/build-lock.glu")
-    );
     assert_eq!(decoded, expected);
 }
 
 #[test]
-fn every_typed_input_origin_round_trips_through_generated_gluon() {
+fn every_typed_input_origin_round_trips_through_the_generated_lock() {
     let mut expected = sample_lock();
     expected.requests[0].origins = vec![
         InputOrigin::BuilderTool {

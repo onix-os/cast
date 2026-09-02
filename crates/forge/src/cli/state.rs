@@ -371,7 +371,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use crate::{Provider, repository, system_model};
-    use gluon_config::Source;
+    use declarative_config::Source;
 
     use super::*;
 
@@ -392,7 +392,7 @@ mod tests {
         let content = snapshot_content(&model);
         let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone())).unwrap();
 
-        assert!(content.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
+        assert!(content.starts_with(lua_config::GENERATED_LUA_MARKER));
         assert!(!content.contains("import!"));
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
     }

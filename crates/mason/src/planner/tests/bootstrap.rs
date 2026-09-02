@@ -8,7 +8,8 @@ use std::{
 
 use forge::package::Meta;
 use fs_err as fs;
-use gluon_config::{DiagnosticCategory, GluonEngine, ImportPolicy, LimitKind, Limits, SourceRoot};
+use declarative_config::{DiagnosticCategory, LimitKind, Limits, Source, SourceRoot};
+use lua_config::LuaEngine;
 use sha2::{Digest, Sha256};
 use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType};
 use url::Url;
@@ -28,8 +29,8 @@ mod execution_evidence;
 pub(crate) use execution_evidence::DelegatedExecutionOutcome;
 
 const BOOTSTRAP_SCHEMA_VERSION: i64 = 2;
-const MAX_BOOTSTRAP_GLUON_MODULE_BYTES: usize = 64 * 1024;
-const MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES: usize = 4 * MAX_BOOTSTRAP_GLUON_MODULE_BYTES;
+const MAX_BOOTSTRAP_CLOSURE_BYTES: usize = 64 * 1024;
+const MAX_BOOTSTRAP_CLOSURE_GRAPH_BYTES: usize = 4 * MAX_BOOTSTRAP_CLOSURE_BYTES;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -51,7 +52,7 @@ include!("bootstrap/system_integration_assets.rs");
 include!("bootstrap/temp_root.rs");
 include!("bootstrap/execution_cleanup.rs");
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[derive(Debug, serde::Deserialize)]
 struct BootstrapClosure {
     schema_version: i64,
     repository: RepositoryPin,
@@ -59,13 +60,13 @@ struct BootstrapClosure {
     packages: PackageSet,
 }
 
-#[derive(Debug, Clone, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[derive(Debug, Clone, serde::Deserialize)]
 struct FixtureClosure {
     name: String,
     package_ids: Vec<String>,
 }
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[derive(Debug, serde::Deserialize)]
 struct RepositoryPin {
     base_uri: String,
     channel: String,
@@ -74,13 +75,13 @@ struct RepositoryPin {
     index: IndexPin,
 }
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[derive(Debug, serde::Deserialize)]
 struct IndexPin {
     sha256: String,
     size: i64,
 }
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[derive(Debug, serde::Deserialize)]
 struct PackageSet {
     total_download_bytes: i64,
     sha256: Vec<String>,
@@ -225,7 +226,7 @@ fn assert_file_bytes_unchanged(fixture: &str, checkpoint: &str, label: &str, pat
 }
 
 fn bootstrap_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution/bootstrap")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution/bootstrap")
 }
 
 fn package_store() -> PathBuf {
@@ -234,25 +235,25 @@ fn package_store() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bootstrap-fixtures/packages"))
 }
 
-fn bootstrap_closure_evaluator(source_root: SourceRoot) -> GluonEngine {
-    let mut import_policy = ImportPolicy::new();
-    import_policy.enable_array_primitives();
+fn bootstrap_closure_evaluator(source_root: SourceRoot) -> LuaEngine {
     let limits = Limits {
-        max_source_bytes: MAX_BOOTSTRAP_GLUON_MODULE_BYTES,
-        max_imported_file_bytes: MAX_BOOTSTRAP_GLUON_MODULE_BYTES,
+        max_source_bytes: MAX_BOOTSTRAP_CLOSURE_BYTES,
+        max_imported_file_bytes: MAX_BOOTSTRAP_CLOSURE_BYTES,
         max_imports: 16,
-        max_import_graph_bytes: MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES,
+        max_import_graph_bytes: MAX_BOOTSTRAP_CLOSURE_GRAPH_BYTES,
         ..Limits::default()
     };
-    GluonEngine::new(limits)
-        .with_source_root(source_root)
-        .with_import_policy(import_policy)
+    LuaEngine::new(limits).with_source_root(source_root)
 }
 
-fn evaluate_bootstrap_closure() -> gluon_config::Evaluation<BootstrapClosure> {
-    let source_root = SourceRoot::new(bootstrap_root()).unwrap();
+fn evaluate_bootstrap_closure() -> declarative_config::Evaluation<BootstrapClosure, declarative_config::EvaluationIdentity>
+{
+    let root = bootstrap_root();
+    let source_root = SourceRoot::new(&root).unwrap();
+    let path = root.join("closure.lua");
+    let text = fs::read_to_string(&path).unwrap();
     bootstrap_closure_evaluator(source_root)
-        .evaluate_file::<BootstrapClosure>("closure.glu")
+        .evaluate_as::<BootstrapClosure>(&Source::new("closure.lua", &text))
         .unwrap()
 }
 
@@ -320,7 +321,7 @@ fn bootstrap_closure_imports_reject_symlinks_and_oversized_modules() {
     fs::remove_file(source_root.join("package_sets.glu")).unwrap();
     fs::write(
         source_root.join("package_sets.glu"),
-        vec![b' '; MAX_BOOTSTRAP_GLUON_MODULE_BYTES + 1],
+        vec![b' '; MAX_BOOTSTRAP_CLOSURE_BYTES + 1],
     )
     .unwrap();
     let size_error = evaluator.evaluate_file::<i64>("closure.glu").unwrap_err();
@@ -333,7 +334,7 @@ fn bootstrap_closure_import_graph_has_an_explicit_total_byte_boundary() {
     let root = crate::private_tempdir();
     let source_root = root.path().join("bootstrap");
     fs::create_dir(&source_root).unwrap();
-    let module_bytes = MAX_BOOTSTRAP_GLUON_MODULE_BYTES - 1024;
+    let module_bytes = MAX_BOOTSTRAP_CLOSURE_BYTES - 1024;
     let module_source = format!("\"{}\"", "x".repeat(module_bytes - 2));
     for name in ["one", "two", "three", "four", "five"] {
         fs::write(source_root.join(format!("{name}.glu")), &module_source).unwrap();
@@ -683,7 +684,7 @@ cast.profiles [
             .map(|name| {
                 let recipe_dir = recipes_dir.join(name);
                 copy_package_directory(&super::execution_fixture_package_directory(name), &recipe_dir);
-                ((*name).to_owned(), recipe_dir.join("stone.glu"))
+                ((*name).to_owned(), recipe_dir.join("stone.lua"))
             })
             .collect();
 

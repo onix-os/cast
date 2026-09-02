@@ -31,7 +31,7 @@ use crate::{
     build_lock, generated_lock,
     package::{Packager, ResolvedOutput},
     profile,
-    source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution},
+    source_lock::{LuaSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution},
 };
 
 mod freeze;
@@ -121,7 +121,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     }
     let requested_inputs = aggregate_inputs(unresolved_inputs);
 
-    let source_lock_codec = GluonSourceLockCodec::default();
+    let source_lock_codec = LuaSourceLockCodec::default();
     let source_lock_bytes = match generated_lock::read(
         &builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
         DeclarationEvaluator::<SourceLock>::limits(&source_lock_codec).max_source_bytes,
@@ -311,9 +311,9 @@ pub enum Error {
     ForgeInstallation(#[from] forge::installation::Error),
     #[error("`--refresh-repositories` requires `--update-lock`")]
     RefreshRequiresUpdate,
-    #[error("sources.lock.glu is required when a recipe declares sources")]
+    #[error("sources.lock.lua is required when a recipe declares sources")]
     MissingSourceLock,
-    #[error("read sources.lock.glu")]
+    #[error("read sources.lock.lua")]
     ReadSourceLock(#[source] Box<generated_lock::ReadError>),
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
@@ -347,7 +347,7 @@ mod tests {
     use fs_err as fs;
 
     use super::*;
-    use crate::source_lock::GluonSourceLockCodec;
+    use crate::source_lock::LuaSourceLockCodec;
     use stone_recipe::derivation::PhasePlan;
 
     fn package_shell(script: &str) -> StepSpec {
@@ -413,7 +413,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             format!(
                 r#"let a = import! cast.authored.v1
 {{
@@ -455,7 +455,7 @@ mod tests {
             })]);
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
-            GluonSourceLockCodec::default().encode(&lock).unwrap(),
+            LuaSourceLockCodec::default().encode(&lock).unwrap(),
         )
         .unwrap();
 

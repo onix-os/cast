@@ -1,4 +1,5 @@
-use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy, ModuleClass, Source};
+use declarative_config::{EvaluationDeadline, EvaluationIdentity, ModuleClass, Source};
+use lua_config::LuaEngine;
 use stone::relation::{Dependency, Kind as StoneRelationKind};
 
 use crate::{build_policy::layers::BuildPolicyOperation, spec::SourceUrlValidationError};
@@ -9,21 +10,20 @@ const SOURCE_LOCK_BYTES: &[u8] = b"canonical sample source lock";
 type NamedMutation<T> = (&'static str, Box<dyn Fn(&mut T)>);
 
 fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-    GluonEngine::default()
-        .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
+    LuaEngine::default()
+        .evaluate_with_inputs_within_as::<i64>(
+            &Source::new(logical_name, &format!("return {source}")),
+            explicit_inputs,
+            EvaluationDeadline::start(std::time::Duration::from_secs(30)),
+        )
         .unwrap()
         .identity
 }
 
+/// A second identity distinct from `evaluation`, standing in for a fragment
+/// that reached its value through an import.
 fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-    let policy = ImportPolicy::new()
-        .with_embedded_module("sample.provenance", "4")
-        .unwrap();
-    GluonEngine::default()
-        .with_import_policy(policy)
-        .evaluate_with_inputs::<i64>(&Source::new(logical_name, "import! sample.provenance"), explicit_inputs)
-        .unwrap()
-        .identity
+    evaluation(logical_name, "4", explicit_inputs)
 }
 
 fn sample_provenance() -> DerivationProvenance {

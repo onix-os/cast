@@ -44,7 +44,7 @@ mod tests {
         let target_name = &target.name;
         let root = tempfile::tempdir().unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             format!(
                 r#"let a = import! cast.authored.v1
 let scripts = a.scripts {{

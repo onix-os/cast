@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use gluon_config::Source;
+use declarative_config::Source;
 
 use super::*;
 use crate::test_support::prepare_private_installation_root;

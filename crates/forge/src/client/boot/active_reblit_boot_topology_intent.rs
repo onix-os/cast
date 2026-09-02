@@ -33,20 +33,17 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
     LanguageSpec, Limits, Source, SourceRoot,
 };
-use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
+use declarative_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedBootTopologySource, capture_source, revalidate_source},
-    gluon::GluonBootTopologyIntentEvaluator,
 };
 
 #[path = "active_reblit_boot_topology_intent/filesystem.rs"]
 mod filesystem;
-#[path = "active_reblit_boot_topology_intent/gluon.rs"]
-mod gluon;
 #[path = "active_reblit_boot_topology_intent/lua.rs"]
 mod lua;
 #[path = "active_reblit_boot_topology_intent/topology.rs"]
@@ -502,7 +499,6 @@ where
 /// source's extension. Both engines reach the identical validated intent value
 /// through the shared assembly; the conversion error type is shared.
 enum BootTopologyIntentEvaluator<'budget> {
-    Gluon(GluonBootTopologyIntentEvaluator<'budget>),
     Lua(lua::LuaBootTopologyIntentEvaluator<'budget>),
 }
 
@@ -512,9 +508,6 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for BootTopologyI
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(evaluator) => {
-                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
-            }
             Self::Lua(evaluator) => {
                 DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
             }
@@ -523,16 +516,12 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for BootTopologyI
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
             Self::Lua(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
         }
     }
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(evaluator) => Self::Gluon(
-                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
-            ),
             Self::Lua(evaluator) => Self::Lua(
                 DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
             ),
@@ -548,7 +537,6 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for BootTopologyI
         DeclarationEvaluationError<Self::Error>,
     > {
         match self {
-            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
             Self::Lua(evaluator) => evaluator.evaluate_within(source, deadline),
         }
     }
@@ -564,7 +552,6 @@ fn evaluate_declaration(
     ActiveReblitBootTopologyIntentError,
 > {
     let evaluators = TypedDeclarationEvaluatorSet::new([
-        BootTopologyIntentEvaluator::Gluon(GluonBootTopologyIntentEvaluator::new(budget)?),
         BootTopologyIntentEvaluator::Lua(lua::LuaBootTopologyIntentEvaluator::new(budget)?),
     ])
     .expect("the boot-topology adapters register distinct extensions");
@@ -581,7 +568,7 @@ fn evaluate_declaration(
 }
 
 fn registered_declaration_languages() -> RegisteredLanguages {
-    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+    RegisteredLanguages::new([lua::language_spec()])
         .expect("the production boot-topology languages register distinct extensions")
 }
 
@@ -648,7 +635,7 @@ pub(in crate::client) enum ActiveReblitBootTopologyIntentError {
     #[error("invalid boot-topology evaluation contract: {reason}")]
     EvaluationContract { reason: &'static str },
     #[error(transparent)]
-    Evaluation(#[from] gluon_config::Diagnostic),
+    Evaluation(#[from] declarative_config::Diagnostic),
     #[error(transparent)]
     EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe boot-topology intent inode at `{}`: {reason}", path.display())]

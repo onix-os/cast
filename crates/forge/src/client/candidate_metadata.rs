@@ -295,7 +295,7 @@ ID_LIKE=\"linux\"\n";
         assert_eq!(outputs.system_model_name(), c"system-model.glu");
         assert_eq!(
             outputs.system_model_authority().ownership_marker(),
-            system_model::gluon::GENERATED_GLUON_MARKER.as_bytes(),
+            lua_config::GENERATED_LUA_MARKER.as_bytes(),
         );
         assert!(
             outputs

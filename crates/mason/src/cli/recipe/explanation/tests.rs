@@ -2,7 +2,8 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy, Source};
+    use declarative_config::{EvaluationDeadline, EvaluationIdentity, Source};
+    use lua_config::LuaEngine;
     use stone_recipe::{
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
@@ -36,24 +37,20 @@ mod tests {
     }
 
     fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-        GluonEngine::default()
-            .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
+        LuaEngine::default()
+            .evaluate_with_inputs_within_as::<i64>(
+                &Source::new(logical_name, &format!("return {source}")),
+                explicit_inputs,
+                EvaluationDeadline::start(std::time::Duration::from_secs(30)),
+            )
             .expect("fixture evaluation must succeed")
             .identity
     }
 
+    /// A second identity distinct from [`evaluation`], standing in for a
+    /// fragment that reached its value through an import.
     fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-        let policy = ImportPolicy::new()
-            .with_embedded_module("fixture.provenance", "41")
-            .expect("fixture module name must be valid");
-        GluonEngine::default()
-            .with_import_policy(policy)
-            .evaluate_with_inputs::<i64>(
-                &Source::new(logical_name, "import! fixture.provenance"),
-                explicit_inputs,
-            )
-            .expect("fixture import evaluation must succeed")
-            .identity
+        evaluation(logical_name, "41", explicit_inputs)
     }
 
     fn fixture() -> Fixture {
@@ -93,7 +90,7 @@ mod tests {
         ];
         let policy_inputs = policy_composition_identity("repository-policy", &layers);
         let provenance = DerivationProvenance {
-            recipe: evaluation_with_import("stone.glu", SOURCE_LOCK_BYTES),
+            recipe: evaluation_with_import("stone.lua", SOURCE_LOCK_BYTES),
             profiles,
             policy: PolicyProvenance {
                 name: "repository-policy".to_owned(),

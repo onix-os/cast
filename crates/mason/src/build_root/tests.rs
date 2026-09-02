@@ -4,7 +4,7 @@ use declarative_config::{DeclarationEvaluator, Source};
 use forge::package::{Flags, Meta, Name};
 use stone_recipe::UpstreamSpec;
 use stone_recipe::derivation::{JobPlan, LockedOutput, LockedOutputRef};
-use stone_recipe::package::GluonPackageEvaluator;
+use stone_recipe::package::LuaPackageEvaluator;
 
 use super::*;
 
@@ -59,7 +59,7 @@ fn locked() -> LockedPackage {
 
 fn selected_inputs_package() -> PackageSpec {
     let source = Source::new(
-        "stone.glu",
+        "stone.lua",
         r#"let a = import! cast.authored.v1
 let scripts = a.empty.scripts
 let selected = {
@@ -112,14 +112,14 @@ let unrelated = {
 }
 "#,
     );
-    DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), &source)
+    DeclarationEvaluator::<PackageSpec>::evaluate(&LuaPackageEvaluator::default(), &source)
         .unwrap()
         .value
 }
 
 fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
     let source = Source::new(
-        "stone.glu",
+        "stone.lua",
         r#"let a = import! cast.authored.v1
 {
     meta = {
@@ -145,7 +145,7 @@ fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
 }
 "#,
     );
-    DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), &source)
+    DeclarationEvaluator::<PackageSpec>::evaluate(&LuaPackageEvaluator::default(), &source)
         .unwrap()
         .value
         .builder

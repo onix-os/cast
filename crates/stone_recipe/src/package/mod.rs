@@ -10,13 +10,11 @@
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 
-pub use self::gluon::{GLUON_AUTHORED_PRELUDE, GluonPackageEvaluator};
 
 mod authored;
 pub use authored::{AuthoredPackage, default_output_set_with_root, lower};
 mod builder_lowering;
 pub use builder_lowering::{BuilderRequest, lower_builder};
-mod gluon;
 mod lua;
 
 pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration, encode_lua_recipe};

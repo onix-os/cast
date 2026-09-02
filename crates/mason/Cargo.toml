@@ -24,7 +24,6 @@ config = { path = "../../crates/config" }
 container = { path = "../../crates/container" }
 declarative_config = { path = "../../crates/declarative_config" }
 gitwrap = { path = "../../crates/gitwrap" }
-gluon_config = { path = "../../crates/gluon_config" }
 lua_config = { path = "../../crates/lua_config" }
 forge = { path = "../forge" }
 tools_buildinfo = { path = "../../crates/tools_buildinfo" }
@@ -43,8 +42,6 @@ flate2.workspace = true
 glob.workspace = true
 fs-err.workspace = true
 futures-util.workspace = true
-gluon.workspace = true
-gluon_codegen.workspace = true
 hex.workspace = true
 humansize.workspace = true
 itertools.workspace = true

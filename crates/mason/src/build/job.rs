@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn job_directories_follow_non_default_sandbox_policy() {
         let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.lua")).unwrap();
         let mut policy = BuildPolicy::repository_for_tests();
         policy.spec.sandbox.hostname = "forge-builder".to_owned();
         policy.spec.sandbox.guest_root = "/forge".to_owned();

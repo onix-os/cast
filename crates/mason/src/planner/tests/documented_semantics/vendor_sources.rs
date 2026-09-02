@@ -281,7 +281,7 @@ fn freeze_variant(
         .join("independent-vendor-identity-variants")
         .join(name);
     copy_package_directory(&authored, &recipe_dir);
-    let recipe_path = recipe_dir.join("stone.glu");
+    let recipe_path = recipe_dir.join("stone.lua");
     fs::write(&recipe_path, recipe_source).expect("write independent vendor identity variant");
     let (source_lock_bytes, source_count) = synthesize_source_lock(&recipe_path);
     assert_eq!(source_count, 2);

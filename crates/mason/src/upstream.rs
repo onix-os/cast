@@ -514,11 +514,41 @@ mod tests {
     const SECOND_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SECOND_MATERIALIZATION_SHA256: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
+    /// One archive and one git upstream, in the order [`resolved_upstreams`]
+    /// resolves them.
+    const AUTHORED_SOURCE_FIXTURE: &str = r#"
+return {
+    meta = {
+        pname = "authored-source",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/authored-source",
+        license = { "MPL-2.0" },
+    },
+    builder = { kind = "cmake", flags = {}, run_tests = false },
+    sources = {
+        {
+            kind = "archive",
+            url = "https://example.invalid/source.tar.xz",
+            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            rename = { kind = "none" },
+            strip_dirs = { kind = "none" },
+            unpack = true,
+            unpack_dir = { kind = "none" },
+        },
+        {
+            kind = "git",
+            url = "https://example.invalid/source.git",
+            git_ref = "main",
+            clone_dir = { kind = "none" },
+        },
+    },
+}
+"#;
 
     fn evaluate_source_lock(bytes: &[u8]) -> SourceLock {
         let source = std::str::from_utf8(bytes).unwrap();
-        source_lock::GluonSourceLockCodec::default()
+        source_lock::LuaSourceLockCodec::default()
             .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, source))
             .unwrap()
             .value
@@ -805,7 +835,7 @@ mod tests {
     #[test]
     fn missing_lock_is_generated_without_mutating_source_and_then_consumed() {
         let directory = tempfile::tempdir().unwrap();
-        let recipe_path = directory.path().join("stone.glu");
+        let recipe_path = directory.path().join("stone.lua");
         let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
         let authored = AUTHORED_SOURCE_FIXTURE.to_owned();
         fs::write(&recipe_path, &authored).unwrap();
@@ -857,7 +887,7 @@ mod tests {
     #[test]
     fn resolved_git_materializations_follow_authored_indices_not_completion_order() {
         let directory = tempfile::tempdir().unwrap();
-        let recipe_path = directory.path().join("stone.glu");
+        let recipe_path = directory.path().join("stone.lua");
         let first_url = "https://example.invalid/first.git";
         let second_url = "https://example.invalid/second.git";
         fs::write(&recipe_path, gluon_two_git_recipe(first_url, second_url)).unwrap();
