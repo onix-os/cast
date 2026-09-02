@@ -61,7 +61,7 @@ struct TriggerEvaluator {
 impl TriggerEvaluator {
     fn new() -> Self {
         Self {
-            language: gluon_language(),
+            language: fixture_language(),
         }
     }
 }
@@ -113,7 +113,7 @@ struct ProfileCodec {
 impl ProfileCodec {
     fn new() -> Self {
         Self {
-            language: gluon_language(),
+            language: fixture_language(),
         }
     }
 }
@@ -171,7 +171,7 @@ struct InputSensitiveEvaluator {
 impl InputSensitiveEvaluator {
     fn new() -> Self {
         Self {
-            language: gluon_language(),
+            language: fixture_language(),
         }
     }
 }
@@ -233,10 +233,10 @@ impl DeclarationInputEvaluator<InputSensitiveDeclaration>
     }
 }
 
-fn gluon_language() -> LanguageSpec {
+fn fixture_language() -> LanguageSpec {
     LanguageSpec::new(
-        LanguageId::new("gluon").expect("fixture language is canonical"),
-        EngineId::new("gluon-vm", "0.18.3").expect("fixture engine is canonical"),
+        LanguageId::new("stanza").expect("fixture language is canonical"),
+        EngineId::new("stanza-vm", "0.18.3").expect("fixture engine is canonical"),
         "glu",
         "declaration-v1",
         FIXTURE_GENERATED_MARKER,
@@ -303,20 +303,20 @@ where
 
 #[test]
 fn language_and_engine_descriptors_reject_noncanonical_values() {
-    let language = gluon_language();
-    assert_eq!(language.language().as_str(), "gluon");
-    assert_eq!(language.engine().implementation(), "gluon-vm");
+    let language = fixture_language();
+    assert_eq!(language.language().as_str(), "stanza");
+    assert_eq!(language.engine().implementation(), "stanza-vm");
     assert_eq!(language.engine().version(), "0.18.3");
     assert_eq!(language.extension(), "glu");
     assert_eq!(language.source_profile(), "declaration-v1");
     assert_eq!(language.generated_marker(), FIXTURE_GENERATED_MARKER);
 
     assert!(LanguageId::new("").is_err());
-    assert!(LanguageId::new("Gluon").is_err());
-    assert!(EngineId::new("gluon vm", "0.18.3").is_err());
-    assert!(EngineId::new("gluon-vm", "").is_err());
-    let valid_language = LanguageId::new("gluon").unwrap();
-    let valid_engine = EngineId::new("gluon-vm", "0.18.3").unwrap();
+    assert!(LanguageId::new("Stanza").is_err());
+    assert!(EngineId::new("stanza vm", "0.18.3").is_err());
+    assert!(EngineId::new("stanza-vm", "").is_err());
+    let valid_language = LanguageId::new("stanza").unwrap();
+    let valid_engine = EngineId::new("stanza-vm", "0.18.3").unwrap();
     assert!(
         LanguageSpec::new(
             valid_language.clone(),
@@ -405,5 +405,5 @@ fn evaluation_owns_the_domain_value_and_identity() {
     };
 
     assert_eq!(evaluation.value.name, "reindex");
-    assert_eq!(evaluation.identity.language.as_str(), "gluon");
+    assert_eq!(evaluation.identity.language.as_str(), "stanza");
 }
