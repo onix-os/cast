@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    Diagnostic, EvaluationDeadline, LimitKind, Limits, Source, SourceRoot,
+    Diagnostic, EvaluationDeadline, LimitKind, Limits, Source, SourceRoot, SourceSpan,
     content_hash::sha256_checked,
 };
 
@@ -54,8 +54,10 @@ pub enum ImportRequest {
         reason: String,
     },
     /// An invalid import expression whose diagnostic is attached to its source.
+    /// `span` locates the offending region when the adapter's parser reports one.
     Invalid {
         message: String,
+        span: Option<SourceSpan>,
     },
 }
 
@@ -80,6 +82,15 @@ impl ImportRequest {
     pub fn invalid(message: impl Into<String>) -> Self {
         Self::Invalid {
             message: message.into(),
+            span: None,
+        }
+    }
+
+    /// An invalid import whose offending region the adapter's parser located.
+    pub fn invalid_at(message: impl Into<String>, span: SourceSpan) -> Self {
+        Self::Invalid {
+            message: message.into(),
+            span: Some(span),
         }
     }
 }
@@ -351,9 +362,10 @@ where
                 ImportRequest::Denied { requested, reason } => {
                     return Err(graph.denied(&pending, &requested, &reason));
                 }
-                ImportRequest::Invalid { message } => {
-                    return Err(Diagnostic::import(
+                ImportRequest::Invalid { message, span } => {
+                    return Err(Diagnostic::import_at(
                         Some(pending.source.logical_name().to_owned()),
+                        span,
                         message,
                     ));
                 }

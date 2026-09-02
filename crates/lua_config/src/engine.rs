@@ -284,16 +284,23 @@ where
         source: &Source,
         _deadline: EvaluationDeadline,
     ) -> Result<T, Diagnostic> {
-        use mlua::LuaSerdeExt as _;
-
         let value = evaluate_root_value(runtime, source)?;
-        runtime.lua.from_value::<T>(value).map_err(|error| {
+        let deserializer = mlua::serde::Deserializer::new(value);
+        serde_path_to_error::deserialize::<_, T>(deserializer).map_err(|error| {
+            let path = error.path().to_string();
+            let message = match path.as_str() {
+                "" | "." => format!("lua value does not match the target schema: {}", error.inner()),
+                path => format!(
+                    "lua value does not match the target schema at {path}: {}",
+                    error.inner()
+                ),
+            };
             Diagnostic::new(
                 DiagnosticCategory::Type,
                 None,
                 Some(source.logical_name().to_owned()),
                 None,
-                format!("lua value does not match the target schema: {error}"),
+                message,
             )
         })
     }

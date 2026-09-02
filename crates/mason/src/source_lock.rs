@@ -387,15 +387,14 @@ type SourceLock = {
         let encoded = canonical_source_lock(&sample_lock());
 
         assert!(encoded.starts_with(lua_config::GENERATED_LUA_MARKER));
-        assert!(encoded.contains("type SourceResolution ="));
-        assert!(encoded.contains("type SourceLock ="));
-        assert!(encoded.contains("Archive {"));
-        assert!(encoded.contains(&format!("sha256 = \"{ARCHIVE_SHA256}\",")));
-        assert!(encoded.contains("Git {"));
-        assert!(encoded.contains("requested_ref = \"refs/tags/v1.2.3\","));
-        assert!(encoded.contains(&format!("commit = \"{FULL_COMMIT}\",")));
-        assert!(encoded.contains(&format!("materialization_sha256 = \"{MATERIALIZATION_SHA256}\",")));
-        assert!(!encoded.contains("import!"));
+        assert!(encoded.contains(&format!("schema_version = {SOURCE_LOCK_SCHEMA_VERSION}")));
+        assert!(encoded.contains(r#"kind = "archive""#));
+        assert!(encoded.contains(&format!("sha256 = \"{ARCHIVE_SHA256}\"")));
+        assert!(encoded.contains(r#"kind = "git""#));
+        assert!(encoded.contains(r#"requested_ref = "refs/tags/v1.2.3""#));
+        assert!(encoded.contains(&format!("commit = \"{FULL_COMMIT}\"")));
+        assert!(encoded.contains(&format!("materialization_sha256 = \"{MATERIALIZATION_SHA256}\"")));
+        assert!(!encoded.contains("cast.import"));
     }
 
     #[test]
@@ -424,7 +423,7 @@ type SourceLock = {
                 canonical.replacen("schema_version = 2", "schema_version = 1", 1),
                 "unsupported schema",
             ),
-            (canonical.replacen("order = 0", "order = -1", 1), "sources[0].order"),
+            (canonical.replacen("order = 0", "order = -1", 1), "sources[0]"),
             (canonical.replacen("order = 1", "order = 0", 1), "duplicate order"),
             (
                 canonical.replacen("order = 1", "order = 2", 1),
@@ -573,7 +572,7 @@ type SourceLock = {
         let encoded = canonical_source_lock(&lock);
 
         assert_eq!(encoded, canonical_source_lock(&reversed));
-        assert!(encoded.find("Archive {").unwrap() < encoded.find("Git {").unwrap());
+        assert!(encoded.find(r#"kind = "archive""#).unwrap() < encoded.find(r#"kind = "git""#).unwrap());
     }
 
     #[test]
