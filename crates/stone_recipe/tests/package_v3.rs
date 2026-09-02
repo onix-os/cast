@@ -668,27 +668,9 @@ fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
         ("example", "1/../../escape", "meta.version"),
     ] {
         let source = authored(&format!(
-            r#"
-{{
-    meta = {{
-        pname = {pname:?}, version = {version:?}, release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-"#
+            r#"{{ meta = {{ pname = {pname:?}, version = {version:?}, release = 1,
+               homepage = "https://example.com", license = {{ "MPL-2.0" }} }}, builder = {} }}"#,
+            custom_builder("", ""),
         ));
 
         let error = evaluate_default_package(&source).unwrap_err();
@@ -701,41 +683,19 @@ fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
 
 #[test]
 fn evaluator_rejects_unsafe_or_duplicate_profile_keys() {
-    let unsafe_profile = authored(
-        r#"
-let profile_named = \name -> a.profile {
-    name,
-    builder = a.empty.builder,
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    profiles = [profile_named "emul32/../x86_64"],
-    .. base
-}
-"#,
-    );
+    let with_profiles = |names: &[&str]| {
+        let profiles = names
+            .iter()
+            .map(|name| profile(name, "", "", "", ""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        authored(&format!(
+            "{{ {}, builder = {}, profiles = {{ {profiles} }} }}",
+            meta("example"),
+            custom_builder("", ""),
+        ))
+    };
+    let unsafe_profile = with_profiles(&["emul32/../x86_64"]);
 
     let error = evaluate_default_package(&unsafe_profile).unwrap_err();
     assert!(matches!(
@@ -746,41 +706,7 @@ let base = {
         }) if name == "emul32/../x86_64"
     ));
 
-    let duplicate_profiles = authored(
-        r#"
-let profile_named = \name -> a.profile {
-    name,
-    builder = a.empty.builder,
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    profiles = [profile_named "native", profile_named "emul32/x86_64", profile_named "native"],
-    .. base
-}
-"#,
-    );
+    let duplicate_profiles = with_profiles(&["native", "emul32/x86_64", "native"]);
 
     let error = evaluate_default_package(&duplicate_profiles).unwrap_err();
     assert!(matches!(
@@ -795,42 +721,13 @@ let base = {
 
 #[test]
 fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
-    let source = authored(
-        r#"
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    options = a.some.options (a.options {
-        toolchain = a.toolchain.llvm,
-        cspgo = a.false,
-        samplepgo = a.false,
-        debug = a.true,
-        strip = a.true,
-        networking = a.true,
-        compressman = a.false,
-        lastrip = a.true,
-    }),
-    .. base
-}
-"#,
-    );
+    let source = authored(&format!(
+        r#"{{ {}, builder = {}, options = {{ toolchain = "llvm", cspgo = false,
+           samplepgo = false, debug = true, strip = true, networking = true,
+           compressman = false, lastrip = true }} }}"#,
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
 
