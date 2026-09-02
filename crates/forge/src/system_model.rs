@@ -27,10 +27,13 @@ pub(crate) use rooted::arm_after_rooted_system_source_retained;
 pub(crate) use rooted::load_rooted;
 
 /// User-authored desired system intent, relative to an installation root.
-pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.glu";
+pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.lua";
 
 /// Cast-generated normalized state snapshot, relative to a state root.
-pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
+pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.lua";
+
+/// Logical name used when evaluating a generated snapshot in memory.
+const SYSTEM_SNAPSHOT_FILE_NAME: &str = "system-model.lua";
 
 /// Engine-neutral failure to evaluate or convert a system declaration.
 pub type SystemDeclarationError = DeclarationEvaluationError<spec::ConversionError>;
@@ -41,6 +44,16 @@ pub fn intent_path(root: &Path) -> PathBuf {
 
 pub fn snapshot_path(root: &Path) -> PathBuf {
     root.join(SYSTEM_SNAPSHOT_PATH)
+}
+
+/// Owned authored source and its normalized generated system model.
+///
+/// Neither field names a declaration language, so every adapter that decodes
+/// authored intent produces this same value.
+#[derive(Debug, Clone)]
+pub(crate) struct SystemIntentDeclaration {
+    pub(crate) authored_source: String,
+    pub(crate) model: SystemModel,
 }
 
 pub(super) struct SystemParts {
@@ -84,7 +97,7 @@ impl SystemModel {
             disable_warning: parts.disable_warning,
             repositories: parts.repositories,
             packages: parts.packages,
-            source_fingerprint: gluon::generated_source_fingerprint(&generated_snapshot),
+            source_fingerprint: lua::generated_source_fingerprint(&generated_snapshot),
             generated_snapshot,
             fingerprint,
         }
@@ -93,8 +106,8 @@ impl SystemModel {
     pub(super) fn regenerate(parts: SystemParts) -> Result<Self, SystemDeclarationError> {
         let normalized = spec::from_domain(parts.disable_warning, &parts.repositories, &parts.packages)
             .map_err(DeclarationEvaluationError::conversion)?;
-        let generated = gluon::SystemSnapshotCodec::encode_normalized(&normalized);
-        evaluate_snapshot(&Source::new("system-model.glu", generated))
+        let generated = lua::encode_normalized(&normalized);
+        evaluate_snapshot(&Source::new(SYSTEM_SNAPSHOT_FILE_NAME, generated))
     }
 }
 
@@ -183,7 +196,7 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
         .file_stem()
         .and_then(OsStr::to_str)
         .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
-    let evaluator = gluon::SystemIntentEvaluator::default();
+    let evaluator = lua::LuaSystemIntentEvaluator::default();
     if path.extension().and_then(OsStr::to_str) != Some(evaluator.language_spec().extension()) {
         return Err(LoadError::InvalidPath(path.to_owned()));
     }
@@ -198,7 +211,7 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
 fn load_source(
     path: &Path,
     source: Source,
-    evaluator: &gluon::SystemIntentEvaluator,
+    evaluator: &lua::LuaSystemIntentEvaluator,
 ) -> Result<LoadedSystemModel, LoadError> {
     let evaluated = evaluator.evaluate(&source)?;
     Ok(loaded_from_declaration(path, evaluated.value, evaluated.identity))
@@ -206,7 +219,7 @@ fn load_source(
 
 fn loaded_from_declaration(
     path: &Path,
-    declaration: gluon::SystemIntentDeclaration,
+    declaration: SystemIntentDeclaration,
     authored_fingerprint: EvaluationIdentity,
 ) -> LoadedSystemModel {
     let authored_source = declaration.authored_source;
@@ -218,8 +231,8 @@ fn loaded_from_declaration(
         fingerprint: generated_fingerprint,
         ..
     } = declaration.model;
-    let source_fingerprint = if gluon::is_generated_snapshot(&authored_source) {
-        gluon::generated_source_fingerprint(&authored_source)
+    let source_fingerprint = if lua::is_generated_snapshot(&authored_source) {
+        lua::generated_source_fingerprint(&authored_source)
     } else {
         Some(authored_fingerprint.sha256.clone())
     };
@@ -240,7 +253,7 @@ fn loaded_from_declaration(
 }
 
 pub(crate) fn encode_snapshot(model: &SystemModel) -> Result<String, spec::ConversionError> {
-    <gluon::SystemSnapshotCodec as DeclarationCodec<SystemModel>>::encode(&gluon::SystemSnapshotCodec::default(), model)
+    <lua::LuaSystemEvaluator as DeclarationCodec<SystemModel>>::encode(&lua::LuaSystemEvaluator::default(), model)
 }
 
 /// Complete ownership and language policy for the generated snapshot slot.
@@ -250,15 +263,15 @@ pub(crate) fn encode_snapshot(model: &SystemModel) -> Result<String, spec::Conve
 /// singleton active language therefore carries the complete registration
 /// boundary into publication and proof.
 pub(crate) fn snapshot_authorities() -> RegisteredGeneratedDeclarationAuthorities {
-    let active = gluon::SystemSnapshotCodec::default().generated_authority();
+    let active = lua::LuaSystemEvaluator::default().generated_authority();
     RegisteredGeneratedDeclarationAuthorities::new([active.clone()], active)
         .expect("the generated system snapshot authority set is valid")
 }
 
 /// Evaluate one generated snapshot through the registered typed codec.
 pub(crate) fn evaluate_snapshot(source: &Source) -> Result<SystemModel, SystemDeclarationError> {
-    <gluon::SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
-        &gluon::SystemSnapshotCodec::default(),
+    <lua::LuaSystemEvaluator as DeclarationEvaluator<SystemModel>>::evaluate(
+        &lua::LuaSystemEvaluator::default(),
         source,
     )
     .map(|evaluation| evaluation.value)
@@ -284,7 +297,7 @@ pub(super) fn create_with_options(
 
 impl SystemModel {
     fn with_source_fingerprint(self, source_fingerprint: String) -> Result<Self, SystemDeclarationError> {
-        let snapshot = gluon::with_source_fingerprint(&self.generated_snapshot, &source_fingerprint);
+        let snapshot = lua::with_source_fingerprint(&self.generated_snapshot, &source_fingerprint);
         evaluate_snapshot(&Source::new("system-model.glu", snapshot))
     }
 
@@ -492,7 +505,7 @@ let cast = import! cast.system.v1
 
         assert_eq!(loaded.authored_source(), authored);
         assert_eq!(loaded.encoded(), authored);
-        assert!(gluon::is_generated_snapshot(loaded.generated_snapshot()));
+        assert!(lua::is_generated_snapshot(loaded.generated_snapshot()));
         assert_eq!(
             loaded
                 .fingerprint()
@@ -632,7 +645,7 @@ let cast = import! cast.system.v1
 
         assert_eq!(snapshot.source_fingerprint(), Some(authored_fingerprint.as_str()));
         assert_eq!(
-            gluon::generated_source_fingerprint(snapshot.encoded()).as_deref(),
+            lua::generated_source_fingerprint(snapshot.encoded()).as_deref(),
             Some(authored_fingerprint.as_str())
         );
 

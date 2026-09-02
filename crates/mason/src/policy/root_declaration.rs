@@ -15,7 +15,7 @@ use declarative_config::{
 use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::layers::{
     BuildPolicyRootConversionError, BuildPolicyRootSpec,
-    GluonBuildPolicyRootEvaluator,
+    LuaBuildPolicyRootEvaluator,
 };
 
 use super::Error;
@@ -69,14 +69,14 @@ struct PolicyRootDeclaration {
 }
 
 struct PolicyRootDeclarationEvaluator {
-    evaluator: GluonBuildPolicyRootEvaluator,
+    evaluator: LuaBuildPolicyRootEvaluator,
     source_root: Option<SourceRoot>,
 }
 
 impl Default for PolicyRootDeclarationEvaluator {
     fn default() -> Self {
         Self {
-            evaluator: GluonBuildPolicyRootEvaluator::default(),
+            evaluator: LuaBuildPolicyRootEvaluator::default(),
             source_root: None,
         }
     }

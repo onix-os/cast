@@ -201,7 +201,7 @@ impl Manager {
         // We save it as a map for easy merging across
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
-        let codec = repository::RepositoryCodec::default();
+        let codec = repository::LuaRepositoryCodec::default();
         let active_language = codec.language_spec().clone();
         let evaluators =
             DeclarationEvaluatorSet::new([codec]).expect("one validated repository adapter has no extension collision");
@@ -500,7 +500,7 @@ impl Manager {
 
         // Delete config, only succeeds for configs that live in their
         // own config file w/ matching repo name
-        let adapter = repository::RepositoryCodec::default();
+        let adapter = repository::LuaRepositoryCodec::default();
         let active_language = adapter.language_spec().clone();
         let evaluators = DeclarationEvaluatorSet::new([adapter])
             .expect("one validated repository adapter has no extension collision");
@@ -535,7 +535,7 @@ impl Manager {
             cached.repository.active = active;
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
-            let codec = repository::RepositoryCodec::default();
+            let codec = repository::LuaRepositoryCodec::default();
             let active_language = codec.language_spec().clone();
             let evaluators = DeclarationEvaluatorSet::new([codec])
                 .expect("one validated repository adapter has no extension collision");

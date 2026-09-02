@@ -7,6 +7,7 @@ use declarative_config::{
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, ImportPolicy, Source};
 
+use super::SystemIntentDeclaration;
 use super::{SystemModel, spec};
 
 mod encoding;
@@ -15,13 +16,6 @@ pub use self::encoding::GENERATED_GLUON_MARKER;
 
 pub const SYSTEM_ABI_VERSION: u32 = 1;
 pub const GLUON_SYSTEM_ABI: &str = include_str!("../../gluon/system.glu");
-
-/// Owned authored source and its normalized generated system model.
-#[derive(Debug, Clone)]
-pub(crate) struct SystemIntentDeclaration {
-    pub(crate) authored_source: String,
-    pub(crate) model: SystemModel,
-}
 
 /// Stateful Gluon adapter for authored system intent.
 #[derive(Debug, Clone)]

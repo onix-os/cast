@@ -18,6 +18,7 @@ mod lua;
 pub const BUILD_POLICY_LAYERS_ABI_VERSION: u32 = 1;
 
 pub use self::gluon::{GLUON_BUILD_POLICY_LAYERS_ABI, GluonBuildPolicyRootEvaluator};
+pub use self::lua::LuaBuildPolicyRootEvaluator;
 
 /// One total state transition in an authored policy layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

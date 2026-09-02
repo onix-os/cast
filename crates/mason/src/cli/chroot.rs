@@ -20,8 +20,8 @@ use thiserror::Error;
 )]
 pub struct Command {
     #[arg(
-        default_value = "./stone.glu",
-        help = "Path to a stone.glu or stone.lua recipe file or recipe directory"
+        default_value = "./stone.lua",
+        help = "Path to a stone.lua recipe file or recipe directory"
     )]
     recipe: PathBuf,
 }
@@ -84,7 +84,7 @@ mod tests {
     fn default_recipe_is_gluon() {
         let command = Command::try_parse_from(["chroot"]).unwrap();
 
-        assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+        assert_eq!(command.recipe, PathBuf::from("./stone.lua"));
     }
 
     #[test]

@@ -29,9 +29,9 @@ mod explanation;
 const LONG_UPDATE_ABOUT: &str = concat!(
     "Refresh generated source resolution or suggest authored changes\n\n",
     "Cast typechecks the recipe and reports explicit field changes, but never\n",
-    "rewrites authored Gluon. Apply the suggestions to stone.glu manually.\n\n",
+    "rewrites the authored recipe. Apply the suggestions to stone.lua manually.\n\n",
     "With no --ver or --upstream values, Cast resolves the current authored\n",
-    "upstreams and atomically refreshes sources.lock.glu. Provide --ver and/or one\n",
+    "upstreams and atomically refreshes sources.lock.lua. Provide --ver and/or one\n",
     "or more --upstream values to request authored changes. When only a plain archive\n",
     "upstream is supplied, Cast derives the version from its URL. After applying\n",
     "upstream edits, run this command again without update values to regenerate the\n",
@@ -50,8 +50,8 @@ pub enum Subcommand {
     #[command(about = "Typecheck and validate a recipe without building it")]
     Check {
         #[arg(
-            default_value = "./stone.glu",
-            help = "Path to a stone.glu or stone.lua recipe file or recipe directory"
+            default_value = "./stone.lua",
+            help = "Path to a stone.lua recipe file or recipe directory"
         )]
         recipe: PathBuf,
     },
@@ -62,8 +62,8 @@ pub enum Subcommand {
     #[command(about = "Evaluate and print the concrete normalized package-v3 declaration")]
     Eval {
         #[arg(
-            default_value = "./stone.glu",
-            help = "Path to a package-v3 stone.glu or stone.lua file or recipe directory"
+            default_value = "./stone.lua",
+            help = "Path to a package-v3 stone.lua file or recipe directory"
         )]
         recipe: PathBuf,
     },
@@ -72,7 +72,7 @@ pub enum Subcommand {
         #[arg(
             short,
             long,
-            default_value = "./stone.glu",
+            default_value = "./stone.lua",
             help = "Authored Gluon recipe to validate and inspect"
         )]
         recipe: PathBuf,
@@ -84,7 +84,7 @@ pub enum Subcommand {
         )]
         release: Option<u64>,
     },
-    #[command(about = "Create a skeletal stone.glu recipe from source archive URIs")]
+    #[command(about = "Create a skeletal stone.lua recipe from source archive URIs")]
     New {
         #[arg(short, long, default_value = ".", help = "Location to output generated files")]
         output: PathBuf,
@@ -110,7 +110,7 @@ pub enum Subcommand {
         )]
         upstreams: Vec<UpdatedSource>,
         #[arg(
-            default_value = "./stone.glu",
+            default_value = "./stone.lua",
             help = "Authored Gluon recipe to validate and inspect"
         )]
         recipe: PathBuf,
@@ -125,7 +125,7 @@ pub enum Subcommand {
 
 #[derive(Debug, Args)]
 pub struct PlanCommand {
-    #[arg(default_value = "./stone.glu", help = "Authored Gluon package factory")]
+    #[arg(default_value = "./stone.lua", help = "Authored Gluon package factory")]
     recipe: PathBuf,
     #[arg(long, default_value = "default-x86_64", help = "Explicit Cast repository profile")]
     profile: profile::Id,
@@ -159,7 +159,7 @@ pub struct PlanCommand {
 
 #[derive(Debug, Args)]
 pub struct ExplainCommand {
-    #[arg(default_value = "./stone.glu", help = "Authored Gluon package factory")]
+    #[arg(default_value = "./stone.lua", help = "Authored Gluon package factory")]
     recipe: PathBuf,
     #[arg(long, default_value = "default-x86_64", help = "Explicit Cast repository profile")]
     profile: profile::Id,
@@ -312,7 +312,7 @@ fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
 }
 
 fn new(env: Env, output: PathBuf, upstreams: Vec<Url>) -> Result<(), Error> {
-    const RECIPE_FILE: &str = "stone.glu";
+    const RECIPE_FILE: &str = "stone.lua";
 
     generate_new_recipe(&output, RECIPE_FILE, || Drafter::new(env, upstreams).run())?;
     println!("Saved {RECIPE_FILE} to {output:?}");
@@ -752,25 +752,25 @@ let version = "1.2.3"
         let check = Command::try_parse_from(["recipe", "check"]).unwrap();
         assert!(matches!(
             check.subcommand,
-            Subcommand::Check { recipe } if recipe == Path::new("./stone.glu")
+            Subcommand::Check { recipe } if recipe == Path::new("./stone.lua")
         ));
 
         let eval = Command::try_parse_from(["recipe", "eval"]).unwrap();
         assert!(matches!(
             eval.subcommand,
-            Subcommand::Eval { recipe } if recipe == Path::new("./stone.glu")
+            Subcommand::Eval { recipe } if recipe == Path::new("./stone.lua")
         ));
 
         let bump = Command::try_parse_from(["recipe", "bump"]).unwrap();
         assert!(matches!(
             bump.subcommand,
-            Subcommand::Bump { recipe, .. } if recipe == Path::new("./stone.glu")
+            Subcommand::Bump { recipe, .. } if recipe == Path::new("./stone.lua")
         ));
 
         let update = Command::try_parse_from(["recipe", "update"]).unwrap();
         assert!(matches!(
             update.subcommand,
-            Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.glu")
+            Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.lua")
         ));
 
         let plan = Command::try_parse_from([
@@ -785,14 +785,14 @@ let version = "1.2.3"
         assert!(matches!(
             plan.subcommand,
             Subcommand::Plan(PlanCommand { recipe, jobs, .. })
-                if recipe == Path::new("./stone.glu") && jobs.get() == 1
+                if recipe == Path::new("./stone.lua") && jobs.get() == 1
         ));
     }
 
     #[test]
     fn bump_suggests_a_manual_change_without_mutating_authored_expression() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("stone.glu");
+        let path = root.path().join("stone.lua");
         fs::write(&path, AUTHORED_EXPRESSION).unwrap();
 
         let error = bump(path.clone(), None).unwrap_err();
@@ -806,7 +806,7 @@ let version = "1.2.3"
     #[test]
     fn update_suggests_manual_changes_without_mutating_authored_expression() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("stone.glu");
+        let path = root.path().join("stone.lua");
         fs::write(&path, AUTHORED_EXPRESSION).unwrap();
 
         let error = update(
@@ -829,7 +829,7 @@ let version = "1.2.3"
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("new-package");
 
-        let error = generate_new_recipe(&output, "stone.glu", || {
+        let error = generate_new_recipe(&output, "stone.lua", || {
             Err(draft::Error::Io(io::Error::other("draft failed")))
         })
         .unwrap_err();
@@ -843,7 +843,7 @@ let version = "1.2.3"
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("new-package");
 
-        let error = generate_new_recipe(&output, "stone.glu", || {
+        let error = generate_new_recipe(&output, "stone.lua", || {
             Err(draft::Error::UnsupportedDraftSystem {
                 system: "python-pep517".to_owned(),
             })
@@ -862,7 +862,7 @@ let version = "1.2.3"
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("new-package");
 
-        let error = generate_new_recipe(&output, "stone.glu", || Err(draft::Error::UndetectedBuildSystem)).unwrap_err();
+        let error = generate_new_recipe(&output, "stone.lua", || Err(draft::Error::UndetectedBuildSystem)).unwrap_err();
 
         assert!(matches!(error, Error::Draft(draft::Error::UndetectedBuildSystem)));
         assert!(!output.exists());
@@ -873,7 +873,7 @@ let version = "1.2.3"
         use std::cell::Cell;
 
         let root = tempfile::tempdir().unwrap();
-        let recipe_path = root.path().join("stone.glu");
+        let recipe_path = root.path().join("stone.lua");
         fs::write(&recipe_path, b"authored bytes").unwrap();
         let drafted = Cell::new(false);
 
@@ -893,7 +893,7 @@ let version = "1.2.3"
     #[test]
     fn recipe_created_during_drafting_wins_and_is_never_replaced() {
         let root = tempfile::tempdir().unwrap();
-        let recipe_path = root.path().join("stone.glu");
+        let recipe_path = root.path().join("stone.lua");
 
         let error = generate_new_recipe(root.path(), "stone.glu", || {
             fs::write(&recipe_path, b"raced bytes").unwrap();
@@ -914,14 +914,14 @@ let version = "1.2.3"
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("new-package");
 
-        generate_new_recipe(&output, "stone.glu", || {
+        generate_new_recipe(&output, "stone.lua", || {
             Ok(draft::Draft {
                 stone: "generated bytes".to_owned(),
             })
         })
         .unwrap();
 
-        let recipe = output.join("stone.glu");
+        let recipe = output.join("stone.lua");
         assert_eq!(fs::read(&recipe).unwrap(), b"generated bytes");
         assert_eq!(fs::metadata(recipe).unwrap().mode() & 0o7777, 0o644);
     }
@@ -929,7 +929,7 @@ let version = "1.2.3"
     #[test]
     fn update_without_authored_changes_atomically_refreshes_the_generated_lock() {
         let root = tempfile::tempdir().unwrap();
-        let recipe_path = root.path().join("stone.glu");
+        let recipe_path = root.path().join("stone.lua");
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         fs::write(&recipe_path, AUTHORED_EXPRESSION).unwrap();
         fs::write(
@@ -967,7 +967,7 @@ let version = "1.2.3"
         use crate::source_lock::{ArchiveResolution, SourceLock, SourceResolution};
 
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("stone.glu");
+        let path = root.path().join("stone.lua");
         fs::write(&path, AUTHORED_WITH_ARCHIVE).unwrap();
         let lock = SourceLock::new(vec![SourceResolution::Archive(ArchiveResolution {
             order: 0,

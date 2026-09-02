@@ -30,7 +30,7 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
         manager::Source::ConfigManager(config_manager) => {
             println!("{count} {repo_plural} {require_plural} an updated repository declaration");
 
-            let codec = repository::RepositoryCodec::default();
+            let codec = repository::LuaRepositoryCodec::default();
             let evaluators = DeclarationEvaluatorSet::new([codec.clone()])
                 .expect("one validated repository adapter has no extension collision");
             let loaded_config = match config_manager.load_declarations(&evaluators) {

@@ -28,7 +28,7 @@ pub use gluon_adapter::{GENERATED_GLUON_MARKER, GluonSourceLockCodec};
 pub use lua::LuaSourceLockCodec;
 
 /// Canonical file name for generated source resolution data.
-pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
+pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.lua";
 
 /// Current schema written into [`SourceLock::schema_version`].
 pub const SOURCE_LOCK_SCHEMA_VERSION: u32 = 2;

@@ -10,7 +10,9 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use config::declaration::GeneratedDeclarationAuthority;
 use declarative_config::{
+    DeclarationCodec,
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec,
     Limits, Source, SourceRoot,
 };
@@ -19,7 +21,7 @@ use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
 use super::gluon::SystemSnapshotCodec;
-use super::{SYSTEM_SNAPSHOT_PATH, SystemModel, spec};
+use super::{SYSTEM_SNAPSHOT_PATH, SystemIntentDeclaration, SystemModel, spec};
 use crate::db::state::{Database, DeclarationMigrationCommit};
 use crate::declaration_migration::{
     BridgeError, DeclarationMigrationBlobStore, DeclarationMigrationRequest, migrate_declaration,
@@ -41,6 +43,55 @@ impl From<LuaSystemSpec> for spec::SystemSpec {
             repositories: value.repositories.into_iter().map(Into::into).collect(),
             packages: value.packages,
         }
+    }
+}
+
+/// Stateful Lua adapter for authored system intent.
+///
+/// Decodes the same authored table [`LuaSystemEvaluator`] reads, but normalizes
+/// it through [`SystemModel::regenerate`] so the result carries the canonical
+/// generated snapshot alongside the source that produced it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LuaSystemIntentEvaluator {
+    engine: LuaEngine,
+}
+
+impl DeclarationEvaluator<SystemIntentDeclaration> for LuaSystemIntentEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = spec::ConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<SystemIntentDeclaration, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let authored_source = source.text().to_owned();
+        let evaluated = self
+            .engine
+            .evaluate_within_as::<LuaSystemSpec>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let parts = spec::into_domain(spec::SystemSpec::from(evaluated.value))
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        let model = SystemModel::regenerate(parts)?;
+
+        Ok(Evaluation {
+            value: SystemIntentDeclaration { authored_source, model },
+            identity: evaluated.identity,
+        })
     }
 }
 
@@ -71,6 +122,24 @@ pub(super) fn with_source_fingerprint(generated: &str, source_fingerprint: &str)
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LuaSystemEvaluator {
     engine: LuaEngine,
+}
+
+impl LuaSystemEvaluator {
+    /// Neutral ownership descriptor for the fixed generated snapshot slot.
+    ///
+    /// The language descriptor selects the public extension while the marker
+    /// proves the bytes belong to Cast's system snapshot slot rather than to an
+    /// authored declaration.
+    pub(crate) fn generated_authority(&self) -> GeneratedDeclarationAuthority {
+        GeneratedDeclarationAuthority::new(self.language_spec().clone(), GENERATED_LUA_MARKER)
+            .expect("the generated system snapshot authority is valid")
+    }
+}
+
+impl DeclarationCodec<SystemModel> for LuaSystemEvaluator {
+    fn encode(&self, model: &SystemModel) -> Result<String, Self::Error> {
+        encode_lua_system(model)
+    }
 }
 
 impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
@@ -117,8 +186,12 @@ impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
 /// document canonicalize their repositories identically.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn encode_lua_system(model: &SystemModel) -> Result<String, spec::ConversionError> {
-    let system = spec::SystemSpec::try_from(model)?;
+    Ok(encode_normalized(&spec::SystemSpec::try_from(model)?))
+}
 
+/// Encode an already-normalized spec. `regenerate` holds a `SystemSpec` rather
+/// than a `SystemModel`, so both entry points share this one body.
+pub(super) fn encode_normalized(system: &spec::SystemSpec) -> String {
     let mut output = String::from(GENERATED_LUA_MARKER);
     output.push_str("return {\n");
     writeln!(output, "    disable_warning = {},", system.disable_warning).unwrap();
@@ -136,7 +209,7 @@ pub(crate) fn encode_lua_system(model: &SystemModel) -> Result<String, spec::Con
     }
     output.push_str("},\n");
     output.push_str("}\n");
-    Ok(pretty_lua(&output))
+    pretty_lua(&output)
 }
 
 /// Failure building a system-model migration request. Every path fails closed —

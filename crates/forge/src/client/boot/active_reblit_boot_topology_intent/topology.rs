@@ -10,7 +10,7 @@ use super::{
 };
 
 /// Logical name of the fixed machine-local boot-topology slot.
-pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/boot-topology.glu";
+pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/boot-topology.lua";
 
 const MAX_PARTUUID_DIAGNOSTIC_BYTES: usize = 64;
 const MAX_MOUNT_POINT_BYTES: usize = 4_095;

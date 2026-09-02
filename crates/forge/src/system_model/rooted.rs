@@ -15,7 +15,7 @@ use std::{
 use config::declaration::{RootDeclarationSlot, TypedDeclarationEvaluatorSet};
 use declarative_config::{DeclarationEvaluator, Source, SourceRoot};
 
-use super::{LoadError, LoadedSystemModel, gluon::SystemIntentEvaluator, load_source};
+use super::{LoadError, LoadedSystemModel, load_source, lua::LuaSystemIntentEvaluator};
 
 const SOURCE_MODE_MASK: u32 = 0o7777;
 
@@ -63,7 +63,7 @@ pub(crate) fn load_rooted(
     directory_path: &Path,
     directory: &std::fs::File,
 ) -> Result<Option<LoadedSystemModel>, LoadError> {
-    let evaluators = TypedDeclarationEvaluatorSet::new([SystemIntentEvaluator::default()])
+    let evaluators = TypedDeclarationEvaluatorSet::new([LuaSystemIntentEvaluator::default()])
         .expect("one validated system-intent adapter has no extension collision");
     let slot = RootDeclarationSlot::new("system", "system.glu").expect("the canonical system-intent slot is valid");
     let discovered = slot
@@ -113,7 +113,7 @@ fn require_slot(
     directory_path: &Path,
     directory: &std::fs::File,
     slot: &RootDeclarationSlot,
-    evaluators: &TypedDeclarationEvaluatorSet<super::gluon::SystemIntentDeclaration, SystemIntentEvaluator>,
+    evaluators: &TypedDeclarationEvaluatorSet<super::SystemIntentDeclaration, LuaSystemIntentEvaluator>,
     expected: &config::declaration::DiscoveredRootDeclaration,
 ) -> Result<(), LoadError> {
     let actual = slot

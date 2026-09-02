@@ -46,8 +46,8 @@ pub struct Command {
     #[arg(short, long, default_value = ".", help = "Directory to store build results")]
     output: PathBuf,
     #[arg(
-        default_value = "./stone.glu",
-        help = "Path to a stone.glu or stone.lua recipe file or recipe directory"
+        default_value = "./stone.lua",
+        help = "Path to a stone.lua recipe file or recipe directory"
     )]
     recipe: PathBuf,
     #[arg(
@@ -219,7 +219,7 @@ mod tests {
         let command =
             Command::try_parse_from(["build", "--target", "x86_64", "--source-date-epoch", "1700000000"]).unwrap();
 
-        assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+        assert_eq!(command.recipe, PathBuf::from("./stone.lua"));
         assert_eq!(command.jobs, NonZeroU32::new(1).unwrap());
     }
 
