@@ -23,7 +23,7 @@ fn metadata_decoration_never_follows_a_candidate_lib_symlink() {
     assert_eq!(directory_identity(&fixture.archived_root), old_wrapper);
     assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"outside-candidate");
     assert!(!external.join("os-release").exists());
-    assert!(!external.join("system-model.glu").exists());
+    assert!(!external.join("system-model.lua").exists());
     assert!(
         fs::symlink_metadata(preserved.join("usr/lib"))
             .unwrap()
@@ -64,7 +64,7 @@ fn metadata_decoration_never_follows_an_os_info_symlink() {
 
 #[test]
 fn existing_metadata_outputs_are_preserved_without_mutating_regular_or_hardlinked_inodes() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let fixture = Fixture::new(true);
         let external = fixture
             .client
@@ -126,7 +126,7 @@ fn successful_metadata_publication_creates_independent_sealed_files() {
             report_applied_error,
             "an applied-but-reported-error publication must complete the parent sync suffix"
         );
-        for name in ["os-release", "system-model.glu"] {
+        for name in ["os-release", "system-model.lua"] {
             let path = fixture.archived_root.join("usr/lib").join(name);
             let metadata = fs::symlink_metadata(&path).unwrap();
             assert!(metadata.file_type().is_file(), "metadata {name}");
@@ -145,7 +145,7 @@ fn a_second_metadata_name_collision_preserves_the_partial_candidate_without_repl
     fs::write(&external, b"external-model-must-survive").unwrap();
     let external_identity = inode_identity(&external);
     let hook_external = external.clone();
-    let hook_output = staging.join("usr/lib/system-model.glu");
+    let hook_output = staging.join("usr/lib/system-model.lua");
     super::super::candidate_metadata::arm_after_first_publication(move || {
         fs::hard_link(&hook_external, &hook_output).unwrap();
     });
@@ -165,11 +165,11 @@ fn a_second_metadata_name_collision_preserves_the_partial_candidate_without_repl
     assert_eq!(fs::read(&external).unwrap(), b"external-model-must-survive");
     assert!(preserved.join("usr/lib/os-release").is_file());
     assert_eq!(
-        inode_identity(&preserved.join("usr/lib/system-model.glu")),
+        inode_identity(&preserved.join("usr/lib/system-model.lua")),
         external_identity
     );
     assert_eq!(
-        fs::read(preserved.join("usr/lib/system-model.glu")).unwrap(),
+        fs::read(preserved.join("usr/lib/system-model.lua")).unwrap(),
         b"external-model-must-survive"
     );
     assert_eq!(
@@ -201,7 +201,7 @@ fn deleting_the_first_metadata_output_during_pair_publication_preserves_the_part
         b"old-wrapper"
     );
     assert!(!preserved.join("usr/lib/os-release").exists());
-    assert!(preserved.join("usr/lib/system-model.glu").is_file());
+    assert!(preserved.join("usr/lib/system-model.lua").is_file());
     assert_eq!(
         fs::read(fixture.client.installation.root.join("usr/live-sentinel")).unwrap(),
         b"live"
@@ -239,7 +239,7 @@ fn replacing_the_first_metadata_output_during_pair_publication_never_adopts_the_
         fs::read(preserved.join("usr/lib/os-release")).unwrap(),
         b"external-release-must-survive"
     );
-    assert!(preserved.join("usr/lib/system-model.glu").is_file());
+    assert!(preserved.join("usr/lib/system-model.lua").is_file());
     assert_eq!(
         fs::read(fixture.client.installation.root.join("usr/live-sentinel")).unwrap(),
         b"live"

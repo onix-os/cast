@@ -2,7 +2,8 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy, Source};
+    use declarative_config::{AbiCatalog, EvaluationDeadline, EvaluationIdentity, Source};
+    use lua_config::LuaEngine;
     use stone_recipe::{
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
@@ -36,21 +37,32 @@ mod tests {
     }
 
     fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-        GluonEngine::default()
-            .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
+        LuaEngine::default()
+            .evaluate_with_inputs_within_as::<i64>(
+                &Source::new(logical_name, &format!("return {source}")),
+                explicit_inputs,
+                EvaluationDeadline::start(std::time::Duration::from_secs(30)),
+            )
             .expect("fixture evaluation must succeed")
             .identity
     }
 
+    /// A second identity distinct from [`evaluation`], reached through a
+    /// resolved embedded module so the rendered provenance carries a module
+    /// list rather than an empty one.
     fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-        let policy = ImportPolicy::new()
-            .with_embedded_module("fixture.provenance", "41")
-            .expect("fixture module name must be valid");
-        GluonEngine::default()
-            .with_import_policy(policy)
-            .evaluate_with_inputs::<i64>(
-                &Source::new(logical_name, "import! fixture.provenance"),
+        let mut catalog = AbiCatalog::new();
+        assert!(catalog.insert_source(
+            "fixture.provenance",
+            "fixture.provenance",
+            Source::new("fixture.provenance", "return 41"),
+        ));
+        LuaEngine::default()
+            .with_abi_catalog(catalog)
+            .evaluate_with_inputs_within_as::<i64>(
+                &Source::new(logical_name, r#"return cast.import("fixture.provenance")"#),
                 explicit_inputs,
+                EvaluationDeadline::start(std::time::Duration::from_secs(30)),
             )
             .expect("fixture import evaluation must succeed")
             .identity
@@ -62,11 +74,11 @@ mod tests {
         let profiles = vec![
             ProfileFragmentProvenance {
                 logical_name: "vendor/base".to_owned(),
-                evaluation: evaluation_with_import("profile.d/base.glu", &[]),
+                evaluation: evaluation_with_import("profile.d/base.lua", &[]),
             },
             ProfileFragmentProvenance {
                 logical_name: "site/local".to_owned(),
-                evaluation: evaluation("profile.d/local.glu", "42", &[]),
+                evaluation: evaluation("profile.d/local.lua", "42", &[]),
             },
         ];
         let layers = vec![
@@ -74,8 +86,8 @@ mod tests {
                 name: "foundation".to_owned(),
                 transitions: vec![PolicyTransitionProvenance {
                     operation: BuildPolicyOperation::Add,
-                    origin: "default.glu".to_owned(),
-                    evaluation: evaluation_with_import("default.glu", &[]),
+                    origin: "default.lua".to_owned(),
+                    evaluation: evaluation_with_import("default.lua", &[]),
                 }],
             },
             PolicyLayerProvenance {
@@ -86,18 +98,18 @@ mod tests {
                 name: "override".to_owned(),
                 transitions: vec![PolicyTransitionProvenance {
                     operation: BuildPolicyOperation::Modify,
-                    origin: "override.glu".to_owned(),
-                    evaluation: evaluation("override.glu", "43", &[]),
+                    origin: "override.lua".to_owned(),
+                    evaluation: evaluation("override.lua", "43", &[]),
                 }],
             },
         ];
         let policy_inputs = policy_composition_identity("repository-policy", &layers);
         let provenance = DerivationProvenance {
-            recipe: evaluation_with_import("stone.glu", SOURCE_LOCK_BYTES),
+            recipe: evaluation_with_import("stone.lua", SOURCE_LOCK_BYTES),
             profiles,
             policy: PolicyProvenance {
                 name: "repository-policy".to_owned(),
-                root: evaluation("policy.glu", "44", &policy_inputs),
+                root: evaluation("policy.lua", "44", &policy_inputs),
                 layers,
             },
         };
@@ -171,7 +183,7 @@ mod tests {
                     output: "out".to_owned(),
                     origins: vec![
                         InputOrigin::Policy {
-                            source: "policy.glu".to_owned(),
+                            source: "policy.lua".to_owned(),
                             field: "build_root.analyzer_tools.llvm.objcopy".to_owned(),
                             index: 0,
                         },

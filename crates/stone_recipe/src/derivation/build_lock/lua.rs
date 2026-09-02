@@ -3,9 +3,9 @@
 //! The build-lock domain types are engine-neutral and carry their own semantic
 //! `validate`, so the Lua adapter decodes an authored manifest straight into
 //! [`BuildLock`] via serde (using the tagged Lua encoding for the input-origin
-//! and role variants) and runs the identical validation the Gluon codec runs.
-//! Equivalent Gluon and Lua sources normalize to equal locks with intentionally
-//! distinct evaluation identities.
+//! and role variants) and runs the shared semantic validation. Equivalent
+//! sources in any configuration language normalize to equal locks with
+//! intentionally distinct evaluation identities.
 
 use std::fmt::Write as _;
 
@@ -24,10 +24,12 @@ use super::{
 
 /// Emit a build lock as canonical, generated-marked Lua source that re-decodes
 /// through this adapter into the same [`BuildLock`]. This is the lock's write
-/// path — what a generated-slot authority switch writes when it converts a
-/// `build.lock.glu` to `build.lock.lua`.
-
+/// path — what a generated slot writes as `build.lock.lua`.
 pub fn encode_lua_lock(lock: &BuildLock) -> String {
+    let mut lock = lock.clone();
+    lock.normalize();
+    let lock = &lock;
+
     let mut output = String::from(GENERATED_LUA_MARKER);
     let _ = write!(
         output,

@@ -17,7 +17,6 @@ use thiserror::Error;
 
 use crate::{Package, dependency, repository};
 
-pub mod gluon;
 pub mod lua;
 mod rooted;
 pub mod spec;
@@ -298,7 +297,7 @@ pub(super) fn create_with_options(
 impl SystemModel {
     fn with_source_fingerprint(self, source_fingerprint: String) -> Result<Self, SystemDeclarationError> {
         let snapshot = lua::with_source_fingerprint(&self.generated_snapshot, &source_fingerprint);
-        evaluate_snapshot(&Source::new("system-model.glu", snapshot))
+        evaluate_snapshot(&Source::new(SYSTEM_SNAPSHOT_FILE_NAME, snapshot))
     }
 
     fn regenerate_with_source(
@@ -313,7 +312,7 @@ impl SystemModel {
     }
 
     /// Sync package selections through domain values and regenerate a
-    /// canonical snapshot. No authored Gluon source is modified.
+    /// canonical snapshot. No authored declaration source is modified.
     pub fn sync_packages(self, packages: &[Package]) -> Result<SystemModel, UpdateError> {
         let source_fingerprint = self.source_fingerprint;
         let selected = self.packages;
@@ -403,15 +402,19 @@ mod tests {
     use crate::{Provider, Repository, package};
 
     fn authored_source() -> String {
-        r#"// Authored intent is retained exactly.
-let cast = import! cast.system.v1
-
-{
-    repositories = [
-        cast.repository.direct "local" "file:///var/cache/local.index",
-    ],
-    packages = ["alpha"],
-    .. cast.system
+        r#"-- Authored intent is retained exactly.
+return {
+    disable_warning = false,
+    repositories = {
+        {
+            id = "local",
+            description = { kind = "none" },
+            source = { kind = "direct_index", uri = "file:///var/cache/local.index" },
+            priority = { kind = "none" },
+            enabled = { kind = "none" },
+        },
+    },
+    packages = { "alpha" },
 }
 "#
         .to_owned()
@@ -455,8 +458,8 @@ let cast = import! cast.system.v1
     fn canonical_paths_separate_authored_intent_from_generated_state() {
         let root = Path::new("/target");
 
-        assert_eq!(intent_path(root), root.join("etc/cast/system.glu"));
-        assert_eq!(snapshot_path(root), root.join("usr/lib/system-model.glu"));
+        assert_eq!(intent_path(root), root.join("etc/cast/system.lua"));
+        assert_eq!(snapshot_path(root), root.join("usr/lib/system-model.lua"));
         assert_ne!(intent_path(root), snapshot_path(root));
     }
 
@@ -467,7 +470,7 @@ let cast = import! cast.system.v1
         let public_etc = public_root.join("etc");
         let directory = public_etc.join("cast");
         fs::create_dir_all(&directory).unwrap();
-        let source_path = directory.join("system.glu");
+        let source_path = directory.join("system.lua");
         fs::write(&source_path, authored_source()).unwrap();
         fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let retained_directory = std::fs::File::open(&directory).unwrap();
@@ -491,15 +494,16 @@ let cast = import! cast.system.v1
 
         assert_eq!(loaded.path(), source_path);
         assert!(loaded.packages.contains(&Provider::package_name("alpha")));
-        assert!(!evacuated_etc.join("cast/system.glu").exists());
+        assert!(!evacuated_etc.join("cast/system.lua").exists());
     }
 
     #[test]
     fn load_retains_authored_source_and_records_both_fingerprints() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
-        let authored = authored_source();
+        let path = temporary.path().join("system.lua");
+        let authored = "-- Authored intent is retained exactly.\nreturn cast.import(\"./selection.lua\")\n".to_owned();
         fs::write(&path, &authored).unwrap();
+        fs::write(temporary.path().join("selection.lua"), authored_source()).unwrap();
 
         let loaded = load(&path).unwrap().unwrap();
 
@@ -513,7 +517,7 @@ let cast = import! cast.system.v1
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
-            ["cast.system.v1"]
+            ["selection.lua"]
         );
         assert!(loaded.generated_fingerprint().modules.is_empty());
         assert_ne!(loaded.fingerprint().sha256, loaded.generated_fingerprint().sha256);
@@ -522,7 +526,7 @@ let cast = import! cast.system.v1
     #[test]
     fn generated_snapshot_loads_and_round_trips_canonically() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system-model.glu");
+        let path = temporary.path().join("system-model.lua");
         let model = create(
             repository::Map::with([(
                 repository::Id::new("local"),
@@ -544,10 +548,10 @@ let cast = import! cast.system.v1
     #[test]
     fn fixed_loader_keeps_engine_and_conversion_errors_typed_with_exact_paths() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         fs::write(
             &path,
-            "let cast = import! cast.system.v1\n{ packages = [1], .. cast.system }",
+            "return { disable_warning = false, repositories = {}, packages = { 1 } }",
         )
         .unwrap();
 
@@ -564,16 +568,18 @@ let cast = import! cast.system.v1
 
         fs::write(
             &path,
-            r#"let cast = import! cast.system.v1
-{
-    repositories = [cast.repository.direct_with {
-        id = "bad",
-        description = cast.optional.none,
-        uri = "https://example.test/index.stone",
-        priority = cast.optional.some (-1),
-        enabled = cast.optional.none,
-    }],
-    .. cast.system
+            r#"return {
+    disable_warning = false,
+    repositories = {
+        {
+            id = "bad",
+            description = { kind = "none" },
+            source = { kind = "direct_index", uri = "https://example.test/index.stone" },
+            priority = { kind = "some", value = -1 },
+            enabled = { kind = "none" },
+        },
+    },
+    packages = {},
 }
 "#,
         )
@@ -592,25 +598,30 @@ let cast = import! cast.system.v1
     }
 
     #[test]
-    fn fixed_loader_accepts_only_the_registered_gluon_extension() {
+    fn fixed_loader_accepts_only_the_registered_extension() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.lua");
-        fs::write(&path, authored_source()).unwrap();
+        let unregistered = temporary.path().join("system.glu");
+        fs::write(&unregistered, authored_source()).unwrap();
 
-        assert!(matches!(load(&path), Err(LoadError::InvalidPath(found)) if found == path));
+        assert!(matches!(load(&unregistered), Err(LoadError::InvalidPath(found)) if found == unregistered));
+
+        let registered = temporary.path().join("system.lua");
+        fs::write(&registered, authored_source()).unwrap();
+
+        assert!(load(&registered).unwrap().is_some());
     }
 
     #[test]
     fn fixed_loader_keeps_relative_imports_beneath_its_retained_root() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
-        fs::write(&path, "import! \"./selection.glu\"").unwrap();
+        let path = temporary.path().join("system.lua");
+        fs::write(&path, "return cast.import(\"./selection.lua\")").unwrap();
         fs::write(
-            temporary.path().join("selection.glu"),
-            r#"let cast = import! cast.system.v1
-{
-    packages = ["alpha"],
-    .. cast.system
+            temporary.path().join("selection.lua"),
+            r#"return {
+    disable_warning = false,
+    repositories = {},
+    packages = { "alpha" },
 }
 "#,
         )
@@ -626,14 +637,14 @@ let cast = import! cast.system.v1
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
-            ["cast.system.v1", "selection.glu"]
+            ["selection.lua"]
         );
     }
 
     #[test]
     fn authored_fingerprint_is_embedded_and_preserved_across_updates() {
         let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("system.glu");
+        let path = temporary.path().join("system.lua");
         fs::write(&path, authored_source()).unwrap();
         let loaded = load(&path).unwrap().unwrap();
         let authored_fingerprint = loaded.fingerprint().sha256.clone();
@@ -701,7 +712,7 @@ let cast = import! cast.system.v1
             Some("https://new.example.test/index.stone")
         );
         assert!(!updated.repositories.contains_id(&repository::Id::new("not-added")));
-        let evaluated = evaluate_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
+        let evaluated = evaluate_snapshot(&Source::new(SYSTEM_SNAPSHOT_FILE_NAME, updated.encoded())).unwrap();
         assert_eq!(evaluated.encoded(), updated.encoded());
         assert_eq!(evaluated.fingerprint(), updated.fingerprint());
     }

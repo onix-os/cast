@@ -467,7 +467,7 @@ pub enum Error {
     MissingMaterializationDigest(usize),
     #[error("validate generated source lock")]
     GeneratedSourceLock(#[source] Box<source_lock::ValidationError>),
-    #[error("write Gluon source lock {path:?}")]
+    #[error("write generated source lock {path:?}")]
     WriteSourceLock {
         path: std::path::PathBuf,
         #[source]
@@ -514,43 +514,83 @@ mod tests {
     const SECOND_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SECOND_MATERIALIZATION_SHA256: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
+    /// One archive and one git upstream, in the order [`resolved_upstreams`]
+    /// resolves them.
+    const AUTHORED_SOURCE_FIXTURE: &str = r#"
+return {
+    meta = {
+        pname = "authored-source",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/authored-source",
+        license = { "MPL-2.0" },
+    },
+    builder = { kind = "cmake", flags = {}, run_tests = false },
+    sources = {
+        {
+            kind = "archive",
+            url = "https://example.invalid/source.tar.xz",
+            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            rename = { kind = "none" },
+            strip_dirs = { kind = "none" },
+            unpack = true,
+            unpack_dir = { kind = "none" },
+        },
+        {
+            kind = "git",
+            url = "https://example.invalid/source.git",
+            git_ref = "main",
+            clone_dir = { kind = "none" },
+        },
+    },
+}
+"#;
 
     fn evaluate_source_lock(bytes: &[u8]) -> SourceLock {
         let source = std::str::from_utf8(bytes).unwrap();
-        source_lock::GluonSourceLockCodec::default()
+        source_lock::LuaSourceLockCodec::default()
             .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, source))
             .unwrap()
             .value
     }
 
-    fn gluon_two_git_recipe(first_url: &str, second_url: &str) -> String {
+    fn two_git_recipe(first_url: &str, second_url: &str) -> String {
         format!(
-            r#"let a = import! cast.authored.v1
-{{
+            r#"return {{
     meta = {{
         pname = "example",
         version = "1.2.3",
         release = 1,
         homepage = "https://example.com",
-        license = ["MPL-2.0"],
+        license = {{ "MPL-2.0" }},
     }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [
-        a.source.git "{first_url}" "main",
-        a.source.git "{second_url}" "stable",
-    ],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = {{
+        kind = "custom",
+        spec = {{
+            required_tools = {{}},
+            environment = {{}},
+            phases = {{
+                setup = {{ steps = {{}} }},
+                build = {{ steps = {{}} }},
+                install = {{ steps = {{}} }},
+                check = {{ steps = {{}} }},
+                workload = {{ steps = {{}} }},
+            }},
+            supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }},
+        }},
+    }},
+    sources = {{
+        {{ kind = "git", url = "{first_url}", git_ref = "main", clone_dir = {{ kind = "none" }} }},
+        {{ kind = "git", url = "{second_url}", git_ref = "stable", clone_dir = {{ kind = "none" }} }},
+    }},
+    native_build_inputs = {{}},
+    build_inputs = {{}},
+    check_inputs = {{}},
+    profiles = {{}},
+    architectures = {{}},
+    tuning = {{}},
+    emul32 = false,
+    mold = false,
 }}"#
         )
     }
@@ -805,7 +845,7 @@ mod tests {
     #[test]
     fn missing_lock_is_generated_without_mutating_source_and_then_consumed() {
         let directory = tempfile::tempdir().unwrap();
-        let recipe_path = directory.path().join("stone.glu");
+        let recipe_path = directory.path().join("stone.lua");
         let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
         let authored = AUTHORED_SOURCE_FIXTURE.to_owned();
         fs::write(&recipe_path, &authored).unwrap();
@@ -857,10 +897,10 @@ mod tests {
     #[test]
     fn resolved_git_materializations_follow_authored_indices_not_completion_order() {
         let directory = tempfile::tempdir().unwrap();
-        let recipe_path = directory.path().join("stone.glu");
+        let recipe_path = directory.path().join("stone.lua");
         let first_url = "https://example.invalid/first.git";
         let second_url = "https://example.invalid/second.git";
-        fs::write(&recipe_path, gluon_two_git_recipe(first_url, second_url)).unwrap();
+        fs::write(&recipe_path, two_git_recipe(first_url, second_url)).unwrap();
         let recipe = Recipe::load_authored(&recipe_path).unwrap();
 
         let stored = vec![

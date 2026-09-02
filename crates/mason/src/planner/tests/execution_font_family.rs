@@ -271,14 +271,14 @@ fn validate_font_family_assets(snapshot: &FontFamilySnapshot) -> Result<(), Stri
 
 fn font_family_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
     let package_root = execution_fixture_package_directory("font-family");
-    let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
+    let recipe = crate::Recipe::load_authored(package_root.join("stone.lua")).unwrap();
     let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )
     .unwrap();
     let source_tree = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gluon/execution/source-trees/cast-font-family-fixture-1.0.0");
+        .join("../../tests/fixtures/execution/source-trees/cast-font-family-fixture-1.0.0");
     (recipe.declaration, lock, source_tree)
 }
 

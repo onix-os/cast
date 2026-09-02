@@ -52,7 +52,7 @@ impl SourceWitness {
     }
 }
 
-/// Load `system.glu` beneath one exact retained `etc/cast` directory.
+/// Load `system.lua` beneath one exact retained `etc/cast` directory.
 ///
 /// `directory_path` is diagnostic only. Absence is established with one
 /// descriptor-relative `openat2`, never `Path::exists`. A present source and
@@ -65,7 +65,7 @@ pub(crate) fn load_rooted(
 ) -> Result<Option<LoadedSystemModel>, LoadError> {
     let evaluators = TypedDeclarationEvaluatorSet::new([LuaSystemIntentEvaluator::default()])
         .expect("one validated system-intent adapter has no extension collision");
-    let slot = RootDeclarationSlot::new("system", "system.glu").expect("the canonical system-intent slot is valid");
+    let slot = RootDeclarationSlot::new("system", "system.lua").expect("the canonical system-intent slot is valid");
     let discovered = slot
         .discover_at(directory_path, directory, evaluators.languages())
         .map_err(LoadError::RootedDiscovery)?;

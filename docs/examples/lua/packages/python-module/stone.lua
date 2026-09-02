@@ -10,99 +10,102 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "python3"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "python3"
+                }
+            },
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "python3 -m build --wheel --no-isolation"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "python3 -m installer --destdir \"${CAST_INSTALL_ROOT}\" --validate-record all dist/*.whl"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/python3",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "python3"
+                                    }
+                                }
+                            },
+                            script = "python3 -m pytest -q"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "python3 -m build --wheel --no-isolation"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "python3 -m installer --destdir \"${CAST_INSTALL_ROOT}\" --validate-record all dist/*.whl"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/python3",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "python3"
-                                }
-                            }
-                        },
-                        script = "python3 -m pytest -q"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

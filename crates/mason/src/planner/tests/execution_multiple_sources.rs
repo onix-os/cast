@@ -144,7 +144,7 @@ fn validate_multiple_sources_contract(package: &PackageSpec, lock: &SourceLock) 
 
 fn multiple_sources_contract_fixture() -> (PackageSpec, SourceLock) {
     let package = execution_fixture_package_directory("multiple-sources");
-    let recipe = crate::Recipe::load_authored(package.join("stone.glu")).unwrap();
+    let recipe = crate::Recipe::load_authored(package.join("stone.lua")).unwrap();
     let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
@@ -321,7 +321,7 @@ fn multiple_sources_declaration_and_lock_mutations_fail_closed() {
 #[test]
 fn multiple_sources_raw_and_git_fixture_tampering_never_becomes_consumable() {
     let (package, lock) = multiple_sources_contract_fixture();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution");
     let temporary = crate::private_tempdir();
 
     let SourceResolution::Archive(raw) = &lock.sources[2] else {

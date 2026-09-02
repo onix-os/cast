@@ -77,7 +77,7 @@ pub fn command() -> Command {
 #[derive(Debug, Parser)]
 #[command(
     name = "export",
-    about = "Export a state as a standalone generated system-model.glu snapshot"
+    about = "Export a state as a standalone generated system-model.lua snapshot"
 )]
 struct Export {
     /// State id to export or current state if omitted
@@ -85,7 +85,7 @@ struct Export {
     id: Option<state::Id>,
     /// Export to the provided path or stdout if not supplied
     ///
-    /// If supplied without a path or path is a directory, outputs to "system-model-{hostname}-fstxn-{id}.glu"
+    /// If supplied without a path or path is a directory, outputs to "system-model-{hostname}-fstxn-{id}.lua"
     #[arg(short, long)]
     output: Option<Option<PathBuf>>,
 }
@@ -258,8 +258,8 @@ fn export(args: &ArgMatches, installation: Installation, verbose: bool) -> Resul
 
 fn export_filename(id: state::Id, hostname: Option<&str>) -> String {
     match hostname {
-        Some(hostname) => format!("system-model-{hostname}-fstxn-{id}.glu"),
-        None => format!("system-model-fstxn-{id}.glu"),
+        Some(hostname) => format!("system-model-{hostname}-fstxn-{id}.lua"),
+        None => format!("system-model-fstxn-{id}.lua"),
     }
 }
 
@@ -371,16 +371,16 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use crate::{Provider, repository, system_model};
-    use gluon_config::Source;
+    use declarative_config::Source;
 
     use super::*;
 
     #[test]
-    fn export_filename_uses_the_gluon_snapshot_extension() {
+    fn export_filename_uses_the_snapshot_extension() {
         let id = state::Id::from(42);
 
-        assert_eq!(export_filename(id, Some("host")), "system-model-host-fstxn-42.glu");
-        assert_eq!(export_filename(id, None), "system-model-fstxn-42.glu");
+        assert_eq!(export_filename(id, Some("host")), "system-model-host-fstxn-42.lua");
+        assert_eq!(export_filename(id, None), "system-model-fstxn-42.lua");
     }
 
     #[test]
@@ -390,10 +390,10 @@ mod tests {
             [Provider::package_name("alpha")].into_iter().collect(),
         );
         let content = snapshot_content(&model);
-        let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone())).unwrap();
+        let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.lua", content.clone())).unwrap();
 
-        assert!(content.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
-        assert!(!content.contains("import!"));
+        assert!(content.starts_with(lua_config::GENERATED_LUA_MARKER));
+        assert!(!content.contains("cast.import"));
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
     }
 }

@@ -10,86 +10,89 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "sh"
-            },
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm755 \"${CAST_SOURCE_DIR}/net-audit\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/net-audit\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "sh"
+                },
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/sh",
-                            requirement = {
-                                kind = "binary",
-                                value = "sh"
-                            }
-                        },
-                        declared_programs = {
-                            {
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
                                 path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
                                     value = "bash"
                                 }
-                            }
-                        },
-                        script = "bash -n \"${CAST_SOURCE_DIR}/net-audit\""
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 \"${CAST_SOURCE_DIR}/net-audit\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/net-audit\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/sh",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "sh"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/bash",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "bash"
+                                    }
+                                }
+                            },
+                            script = "bash -n \"${CAST_SOURCE_DIR}/net-audit\""
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

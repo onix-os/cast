@@ -10,50 +10,53 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "base-builder-tool"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/base-phase-runner",
-                            requirement = {
-                                kind = "binary",
-                                value = "base-phase-runner"
-                            }
-                        },
-                        args = {
-                            "--generic"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "base-builder-tool"
                 }
             },
-            install = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/base-phase-runner",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "base-phase-runner"
+                                }
+                            },
+                            args = {
+                                "--generic"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {}
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            check = {
-                steps = {}
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

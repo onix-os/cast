@@ -10,116 +10,119 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mvn"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mvn"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                }
             },
-            {
-                kind = "binary",
-                value = "install"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "test -f pom.xml\ntest -f dependencies.lock\ntest -d vendor/m2"
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/mvn",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "mvn"
+                                    }
+                                }
+                            },
+                            script = "mvn --offline --batch-mode --no-transfer-progress \\\n    -Dmaven.repo.local=\"${CAST_SOURCE_DIR}/vendor/m2\" \\\n    -Dproject.build.outputTimestamp=\"${SOURCE_DATE_EPOCH}\" \\\n    -DskipTests package"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm644 target/pulse-router.jar \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/java/pulse-router/pulse-router.jar\"\ninstall -Dm755 packaging/pulse-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/pulse-router\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/mvn",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "mvn"
+                                    }
+                                }
+                            },
+                            script = "mvn --offline --batch-mode --no-transfer-progress \\\n    -Dmaven.repo.local=\"${CAST_SOURCE_DIR}/vendor/m2\" \\\n    -Dproject.build.outputTimestamp=\"${SOURCE_DATE_EPOCH}\" \\\n    test"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -f pom.xml\ntest -f dependencies.lock\ntest -d vendor/m2"
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/mvn",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "mvn"
-                                }
-                            }
-                        },
-                        script = "mvn --offline --batch-mode --no-transfer-progress \\\n    -Dmaven.repo.local=\"${CAST_SOURCE_DIR}/vendor/m2\" \\\n    -Dproject.build.outputTimestamp=\"${SOURCE_DATE_EPOCH}\" \\\n    -DskipTests package"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm644 target/pulse-router.jar \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/java/pulse-router/pulse-router.jar\"\ninstall -Dm755 packaging/pulse-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/pulse-router\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/mvn",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "mvn"
-                                }
-                            }
-                        },
-                        script = "mvn --offline --batch-mode --no-transfer-progress \\\n    -Dmaven.repo.local=\"${CAST_SOURCE_DIR}/vendor/m2\" \\\n    -Dproject.build.outputTimestamp=\"${SOURCE_DATE_EPOCH}\" \\\n    test"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

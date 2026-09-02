@@ -8,7 +8,7 @@ use adapter::{
 use declarative_config::Source;
 use stone_recipe::build_policy::{
     AnalyzerKind, BUILD_POLICY_ABI_VERSION, BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, ContextValue,
-    EnvironmentBindingSpec, EnvironmentCondition, GLUON_BUILD_POLICY_ABI, SandboxCredentialPolicySpec,
+    EnvironmentBindingSpec, EnvironmentCondition, SandboxCredentialPolicySpec,
     SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec,
 };
 
@@ -69,23 +69,17 @@ fn evaluates_repository_build_policy_as_typed_data() {
             AnalyzerKind::IncludeAny,
         ]
     );
-    for expected in ["cast.build_policy.v5", "tuning/flags.glu", "tuning/groups.glu"] {
-        assert!(
-            evaluated
-                .identity
-                .modules
-                .iter()
-                .any(|module| module.logical_name == expected),
-            "missing repository build-policy module {expected} from fingerprint"
-        );
-    }
+    // The shipped policy is a single self-contained declaration, so its
+    // identity binds the root source alone.
+    assert!(evaluated.identity.modules.is_empty());
+    assert_eq!(evaluated.identity.root_source_sha256.len(), 64);
 }
 
 #[test]
 fn repository_policy_relative_modules_require_an_explicit_source_root() {
     let error = evaluate_default_policy(&Source::new(
-        "default.glu",
-        include_str!("../../mason/data/policy/default.glu"),
+        "default.lua",
+        r#"return cast.import("tuning/flags.lua")"#,
     ))
     .unwrap_err();
 
@@ -96,39 +90,18 @@ fn repository_policy_relative_modules_require_an_explicit_source_root() {
     );
 }
 
+/// The ABI version is the hard compatibility boundary for `BuildPolicySpec`.
 #[test]
-fn build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired() {
+fn build_policy_v5_is_a_hard_abi_boundary() {
     assert_eq!(BUILD_POLICY_ABI_VERSION, 5);
-    let advertised_marker = format!("abi_version = {BUILD_POLICY_ABI_VERSION},");
-    assert_eq!(
-        GLUON_BUILD_POLICY_ABI
-            .lines()
-            .filter(|line| line.trim_start().starts_with("abi_version ="))
-            .map(str::trim)
-            .collect::<Vec<_>>(),
-        [advertised_marker.as_str()],
-        "cast.build_policy.v5 must advertise exactly the Rust ABI version",
-    );
-    for retired in [
-        "cast.build_policy.v4",
-        "boulder.build_policy.v3",
-        "cast.build_policy.v3",
-        "cast.build_policy.v2",
-    ] {
-        let error = evaluate_default_policy(&Source::new("retired-policy.glu", format!("import! {retired}"))).unwrap_err();
-        assert!(error.to_string().contains(retired));
-    }
 }
 
 #[test]
 fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
     let (evaluator, source) = repository_policy();
     let original = evaluate_policy(&evaluator, &source).unwrap();
-    let alternative_source = source.text().replace(
-        "dev = p.sandbox_filesystems.dev.minimal",
-        "dev = p.sandbox_filesystems.dev.none",
-    );
-    let alternative = evaluate_policy(&evaluator, &Source::new("default.glu", alternative_source)).unwrap();
+    let alternative_source = source.text().replace(r#"dev = "minimal""#, r#"dev = "none""#);
+    let alternative = evaluate_policy(&evaluator, &Source::new("default.lua", alternative_source)).unwrap();
 
     assert_eq!(alternative.value.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(alternative.value.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
@@ -140,12 +113,11 @@ fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
 #[test]
 fn legacy_read_only_proc_selector_is_not_available() {
     let (evaluator, source) = repository_policy();
-    let legacy_source = source.text().replace(
-        "tmp = p.sandbox_filesystems.tmp.empty",
-        "proc = p.sandbox_filesystems.proc.read_only,\n        tmp = p.sandbox_filesystems.tmp.empty",
-    );
+    let legacy_source = source
+        .text()
+        .replace(r#"tmp = "empty""#, "proc = \"read_only\",\n            tmp = \"empty\"");
 
-    let error = evaluate_policy(&evaluator, &Source::new("default.glu", legacy_source)).unwrap_err();
+    let error = evaluate_policy(&evaluator, &Source::new("default.lua", legacy_source)).unwrap_err();
 
     assert!(error.to_string().contains("proc"));
 }
@@ -962,7 +934,7 @@ fn compiler_commands_are_absolute_tokenized_and_provider_bound() {
     assert!(policy.toolchains.llvm.cc.args.is_empty());
     assert_eq!(policy.toolchains.llvm.objcpp.args, ["-E", "-"]);
     assert_eq!(policy.toolchains.gnu.cpp.args, ["-E"]);
-    assert!(!include_str!("../../mason/data/policy/default.glu").contains("ldc2"));
+    assert!(!include_str!("../../mason/data/policy/default.lua").contains("ldc2"));
 
     let mut mismatched = policy;
     mismatched.toolchains.llvm.cc.program.path = "/usr/bin/gcc".to_owned();

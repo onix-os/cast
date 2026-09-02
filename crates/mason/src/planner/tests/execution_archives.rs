@@ -24,7 +24,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let temporary = crate::private_tempdir();
     let cache = temporary.path().join("source-cache");
     let shared = temporary.path().join("shared");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution");
     let packages = root.join("packages");
     let archives = root.join("archives");
     let git_bundles = root.join("git-bundles");
@@ -104,7 +104,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let mut sourceful_fixtures = 0_usize;
     let mut source_less_fixtures = 0_usize;
     for name in EXECUTION_FIXTURES {
-        let recipe_path = execution_fixture_package_directory(name).join("stone.glu");
+        let recipe_path = execution_fixture_package_directory(name).join("stone.lua");
         let recipe = crate::Recipe::load_authored(&recipe_path)
             .unwrap_or_else(|error| panic!("{name}: evaluate execution fixture: {error:#}"));
         if name == "autotools" {
@@ -190,12 +190,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 .fingerprint
                 .modules
                 .iter()
-                .find(|module| module.logical_name == "factory.glu")
-                .expect("factory-override: local Gluon factory is absent from recipe provenance");
+                .find(|module| module.logical_name == "factory.lua")
+                .expect("factory-override: local factory is absent from recipe provenance");
             assert_eq!(
                 factory.sha256,
                 hex::encode(Sha256::digest(
-                    fs::read(packages.join(name).join("factory.glu")).unwrap()
+                    fs::read(packages.join(name).join("factory.lua")).unwrap()
                 )),
                 "factory-override: recipe provenance does not bind the exact imported factory"
             );

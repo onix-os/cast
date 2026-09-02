@@ -10,31 +10,34 @@ return {
         }
     },
     builder = {
-        required_tools = {},
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
+        kind = "custom",
+        spec = {
+            required_tools = {},
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {}
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {}
-            },
-            check = {
-                steps = {}
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {
@@ -58,7 +61,7 @@ return {
             include_in_manifest = true,
             summary = {
                 kind = "some",
-                value = "Minimal Gluon recipe example"
+                value = "Minimal recipe example"
             },
             description = {
                 kind = "none"

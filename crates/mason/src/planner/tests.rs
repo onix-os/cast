@@ -23,7 +23,7 @@ use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
     TuningSpec, UpstreamSpec,
     derivation::{
-        BuildLock, DerivationPlan, FilesystemPolicy, GluonBuildLockCodec,
+        BuildLock, DerivationPlan, FilesystemPolicy, LuaBuildLockCodec,
         InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
     },
     package::{DependencySpec, PackageSpec, StepSpec},
@@ -39,7 +39,7 @@ use crate::{
     package::{Packager, Publication},
     profile,
     source_lock::{
-        ArchiveResolution, GitResolution, GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
+        ArchiveResolution, GitResolution, LuaSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
         write_source_lock,
     },
 };
@@ -54,16 +54,16 @@ const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 fn canonical_build_lock(lock: &BuildLock) -> String {
-    GluonBuildLockCodec::default().encode(lock).unwrap()
+    LuaBuildLockCodec::default().encode(lock).unwrap()
 }
 
 fn canonical_source_lock(lock: &SourceLock) -> String {
-    GluonSourceLockCodec::default().encode(lock).unwrap()
+    LuaSourceLockCodec::default().encode(lock).unwrap()
 }
 
 fn evaluate_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, Box<dyn StdError>> {
     let source = std::str::from_utf8(bytes)?;
-    let evaluation = GluonSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
+    let evaluation = LuaSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
     Ok(evaluation.value)
 }
 const PACKAGE_EXAMPLES: [&str; 64] = [
@@ -135,32 +135,15 @@ const PACKAGE_EXAMPLES: [&str; 64] = [
 
 fn write_repository_policy_fixture(data_dir: &Path) {
     let policy_dir = data_dir.join("policy");
-    fs::create_dir_all(policy_dir.join("tuning")).unwrap();
+    fs::create_dir_all(&policy_dir).unwrap();
     fs::write(
-        policy_dir.join("policy.glu"),
-        include_str!("../../data/policy/policy.glu"),
+        policy_dir.join("policy.lua"),
+        include_str!("../../data/policy/policy.lua"),
     )
     .unwrap();
-    // The shipped manifest's foundation layer is the Lua authority; the Gluon
-    // sources remain as retained full-parity fixtures.
     fs::write(
         policy_dir.join("default.lua"),
         include_str!("../../data/policy/default.lua"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("default.glu"),
-        include_str!("../../data/policy/default.glu"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("tuning/flags.glu"),
-        include_str!("../../data/policy/tuning/flags.glu"),
-    )
-    .unwrap();
-    fs::write(
-        policy_dir.join("tuning/groups.glu"),
-        include_str!("../../data/policy/tuning/groups.glu"),
     )
     .unwrap();
 }
@@ -195,7 +178,7 @@ const EXECUTION_FIXTURES: [&str; 28] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 28] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -223,15 +206,12 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
     "relation-policy",
     "split",
     "system-integration-assets",
+    "userspace-profile",
 ];
 
 fn execution_fixture_package_directory(name: &str) -> PathBuf {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon");
-    if name == "userspace-profile" {
-        fixtures.join(name)
-    } else {
-        fixtures.join("execution/packages").join(name)
-    }
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/execution");
+    fixtures.join("packages").join(name)
 }
 
 #[path = "tests/bootstrap.rs"]
@@ -304,41 +284,83 @@ pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
     bootstrap::run_delegated_execution_fixture()
 }
 
-const RECIPE: &str = r#"let a = import! cast.authored.v1
-
-let scripts = a.scripts {
-    build = a.phase [a.step.shell "printf planner-hermetic > build.log"],
-    .. a.empty.scripts
-}
-
-let root = {
-    summary = a.optional.set "Hermetic planner fixture",
-    description = a.optional.set "Hermetic planner fixture",
-    runtime_inputs = [a.dep.binary "planner-runtime"],
-    .. a.output "out"
-}
-
-{
+const RECIPE: &str = r#"return {
     meta = {
         pname = "planner-hermetic",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid/planner-hermetic",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.shell scripts [],
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.with_root root,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = {
+        kind = "custom",
+        spec = {
+            required_tools = {
+                { kind = "binary", value = "bash" },
+            },
+            environment = {},
+            phases = {
+                setup = { steps = {} },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = { kind = "binary", value = "bash" },
+                            },
+                            declared_programs = {},
+                            script = "printf planner-hermetic > build.log",
+                        },
+                    },
+                },
+                install = { steps = {} },
+                check = { steps = {} },
+                workload = { steps = {} },
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true,
+            },
+        },
+    },
+    sources = {},
+    native_build_inputs = {},
+    build_inputs = {},
+    check_inputs = {},
+    outputs = {
+        {
+            name = "out",
+            include_in_manifest = true,
+            summary = { kind = "some", value = "Hermetic planner fixture" },
+            description = { kind = "some", value = "Hermetic planner fixture" },
+            provides_exclude = {},
+            runtime_inputs = {
+                { kind = "binary", value = "planner-runtime" },
+            },
+            runtime_exclude = {},
+            paths = {},
+            conflicts = {},
+        },
+    },
+    options = {
+        toolchain = "llvm",
+        cspgo = false,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    },
+    profiles = {},
+    architectures = {},
+    tuning = {},
+    emul32 = false,
+    mold = false,
 }
 "#;
 
@@ -363,7 +385,7 @@ impl Fixture {
         let output_dir = root.path().join("output");
         let recipe_dir = root.path().join("recipe");
         let repository_dir = root.path().join("repository");
-        let recipe_path = recipe_dir.join("stone.glu");
+        let recipe_path = recipe_dir.join("stone.lua");
         let repository_index = repository_dir.join("stone.index");
 
         write_repository_policy_fixture(&data_dir);
@@ -376,18 +398,34 @@ impl Fixture {
 
         let index_uri = Url::from_file_path(&repository_index).unwrap();
         fs::write(
-            config_dir.join("profile.d/planner-hermetic.glu"),
+            config_dir.join("profile.d/planner-hermetic.lua"),
             format!(
-                r#"let cast = import! cast.profile.v1
-
-cast.profiles [
-    cast.profile "{PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-    cast.profile "{ALTERNATE_PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-]
+                r#"return {{
+    {{
+        id = "{PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+    {{
+        id = "{ALTERNATE_PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+}}
 "#,
             ),
         )
@@ -497,15 +535,22 @@ impl PackageExampleMatrix {
         fs::create_dir_all(&output_dir).unwrap();
         let index_uri = Url::from_file_path(&repository_index).unwrap();
         fs::write(
-            config_dir.join("profile.d/planner-example-matrix.glu"),
+            config_dir.join("profile.d/planner-example-matrix.lua"),
             format!(
-                r#"let cast = import! cast.profile.v1
-
-cast.profiles [
-    cast.profile "{EXAMPLE_PROFILE}" [
-        cast.repository.direct "fixture" "{index_uri}",
-    ],
-]
+                r#"return {{
+    {{
+        id = "{EXAMPLE_PROFILE}",
+        repositories = {{
+            {{
+                id = "fixture",
+                description = {{ kind = "none" }},
+                source = {{ kind = "direct_index", uri = "{index_uri}" }},
+                priority = {{ kind = "none" }},
+                enabled = {{ kind = "none" }},
+            }},
+        }},
+    }},
+}}
 "#,
             ),
         )
@@ -516,7 +561,7 @@ cast.profiles [
             .map(|(name, authored_dir)| {
                 let recipe_dir = recipes_dir.join(&name);
                 copy_package_directory(&authored_dir, &recipe_dir);
-                let recipe_path = recipe_dir.join("stone.glu");
+                let recipe_path = recipe_dir.join("stone.lua");
                 let build_lock_path = crate::build_lock::path_for_recipe(&recipe_path);
                 if build_lock_path.exists() {
                     fs::remove_file(build_lock_path).unwrap();
@@ -614,7 +659,7 @@ cast.profiles [
 }
 
 fn package_example_roots() -> Vec<(String, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/packages");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
     let mut examples = fs::read_dir(&root)
         .unwrap()
         .map(|entry| entry.unwrap())
@@ -623,8 +668,8 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
             let name = entry.file_name().into_string().unwrap();
             let path = entry.path();
             assert!(
-                path.join("stone.glu").is_file(),
-                "package example directory {path:?} has no stone.glu root"
+                path.join("stone.lua").is_file(),
+                "package example directory {path:?} has no stone.lua root"
             );
             (name, path)
         })
@@ -655,7 +700,7 @@ fn assert_package_example_readme_index(root: &Path, examples: &[(String, PathBuf
         let Some((label, target)) = row.split_once("`](packages/") else {
             continue;
         };
-        let Some((directory, _description)) = target.split_once("/stone.glu) |") else {
+        let Some((directory, _description)) = target.split_once("/stone.lua) |") else {
             panic!("malformed package example README row: {line}");
         };
         assert_eq!(label, directory, "package example README label and target disagree");

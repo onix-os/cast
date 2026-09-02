@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-mod gluon;
 mod lua;
 
 /// Version of the ordered build-policy layer ABI.
@@ -17,7 +16,6 @@ mod lua;
 /// it is owned here rather than by an adapter.
 pub const BUILD_POLICY_LAYERS_ABI_VERSION: u32 = 1;
 
-pub use self::gluon::{GLUON_BUILD_POLICY_LAYERS_ABI, GluonBuildPolicyRootEvaluator};
 pub use self::lua::LuaBuildPolicyRootEvaluator;
 
 /// One total state transition in an authored policy layer.

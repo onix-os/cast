@@ -317,6 +317,6 @@ pub enum Error {
     #[error("io")]
     Io(#[from] std::io::Error),
 
-    #[error("load Gluon system intent")]
+    #[error("load authored system intent")]
     LoadSystemModel(#[from] system_model::LoadError),
 }

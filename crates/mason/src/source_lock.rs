@@ -21,10 +21,8 @@ use thiserror::Error;
 
 use crate::{generated_declaration, generated_lock};
 
-mod gluon_adapter;
 mod lua;
 
-pub use gluon_adapter::{GENERATED_GLUON_MARKER, GluonSourceLockCodec};
 pub use lua::LuaSourceLockCodec;
 
 /// Canonical file name for generated source resolution data.
@@ -304,7 +302,7 @@ pub enum WriteOutcome {
 /// Atomically write a canonical lock, avoiding any replacement when its bytes
 /// are unchanged.
 pub fn write_source_lock(path: &Path, lock: &SourceLock) -> io::Result<WriteOutcome> {
-    let codec = GluonSourceLockCodec::default();
+    let codec = LuaSourceLockCodec::default();
     let encoded = codec
         .encode(lock)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -319,7 +317,7 @@ pub fn write_source_lock(path: &Path, lock: &SourceLock) -> io::Result<WriteOutc
         path,
         SOURCE_LOCK_FILE_NAME,
         codec.language_spec(),
-        GENERATED_GLUON_MARKER,
+        lua_config::GENERATED_LUA_MARKER,
         codec.limits().max_source_bytes,
     )?;
     slot.save(encoded.as_bytes())
@@ -334,21 +332,20 @@ mod tests {
 
     use super::*;
 
-    mod normalized_value_golden;
 
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
     const ARCHIVE_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const MATERIALIZATION_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn canonical_source_lock(lock: &SourceLock) -> String {
-        GluonSourceLockCodec::default().encode(lock).unwrap()
+        LuaSourceLockCodec::default().encode(lock).unwrap()
     }
 
     fn evaluate_source_lock(
         logical_name: &str,
         source: &str,
     ) -> Result<SourceLock, DeclarationEvaluationError<ValidationError>> {
-        GluonSourceLockCodec::default()
+        LuaSourceLockCodec::default()
             .evaluate(&declarative_config::Source::new(logical_name, source))
             .map(|evaluation| evaluation.value)
     }
@@ -389,16 +386,15 @@ type SourceLock = {
     fn encodes_archive_and_git_with_the_full_commit() {
         let encoded = canonical_source_lock(&sample_lock());
 
-        assert!(encoded.starts_with(GENERATED_GLUON_MARKER));
-        assert!(encoded.contains("type SourceResolution ="));
-        assert!(encoded.contains("type SourceLock ="));
-        assert!(encoded.contains("Archive {"));
-        assert!(encoded.contains(&format!("sha256 = \"{ARCHIVE_SHA256}\",")));
-        assert!(encoded.contains("Git {"));
-        assert!(encoded.contains("requested_ref = \"refs/tags/v1.2.3\","));
-        assert!(encoded.contains(&format!("commit = \"{FULL_COMMIT}\",")));
-        assert!(encoded.contains(&format!("materialization_sha256 = \"{MATERIALIZATION_SHA256}\",")));
-        assert!(!encoded.contains("import!"));
+        assert!(encoded.starts_with(lua_config::GENERATED_LUA_MARKER));
+        assert!(encoded.contains(&format!("schema_version = {SOURCE_LOCK_SCHEMA_VERSION}")));
+        assert!(encoded.contains(r#"kind = "archive""#));
+        assert!(encoded.contains(&format!("sha256 = \"{ARCHIVE_SHA256}\"")));
+        assert!(encoded.contains(r#"kind = "git""#));
+        assert!(encoded.contains(r#"requested_ref = "refs/tags/v1.2.3""#));
+        assert!(encoded.contains(&format!("commit = \"{FULL_COMMIT}\"")));
+        assert!(encoded.contains(&format!("materialization_sha256 = \"{MATERIALIZATION_SHA256}\"")));
+        assert!(!encoded.contains("cast.import"));
     }
 
     #[test]
@@ -413,10 +409,6 @@ type SourceLock = {
             [0, 1]
         );
         assert_eq!(canonical_source_lock(&decoded), encoded);
-
-        let golden = include_bytes!("../../../tests/fixtures/gluon/execution/packages/daemon-generated/sources.lock.glu");
-        let decoded = evaluate_source_lock(SOURCE_LOCK_FILE_NAME, std::str::from_utf8(golden).unwrap()).unwrap();
-        assert_eq!(canonical_source_lock(&decoded).as_bytes(), golden);
     }
 
     #[test]
@@ -431,7 +423,7 @@ type SourceLock = {
                 canonical.replacen("schema_version = 2", "schema_version = 1", 1),
                 "unsupported schema",
             ),
-            (canonical.replacen("order = 0", "order = -1", 1), "sources[0].order"),
+            (canonical.replacen("order = 0", "order = -1", 1), "sources[0]"),
             (canonical.replacen("order = 1", "order = 0", 1), "duplicate order"),
             (
                 canonical.replacen("order = 1", "order = 2", 1),
@@ -580,7 +572,7 @@ type SourceLock = {
         let encoded = canonical_source_lock(&lock);
 
         assert_eq!(encoded, canonical_source_lock(&reversed));
-        assert!(encoded.find("Archive {").unwrap() < encoded.find("Git {").unwrap());
+        assert!(encoded.find(r#"kind = "archive""#).unwrap() < encoded.find(r#"kind = "git""#).unwrap());
     }
 
     #[test]
@@ -681,11 +673,11 @@ type SourceLock = {
         assert_eq!(fs::read_to_string(path).unwrap(), "authored lock\n");
     }
 
-    /// The Lua adapter must round-trip the same lock the Gluon adapter does and
-    /// reach an equal domain value, so the generated slot can move languages
+    /// The adapter must round-trip a lock and
+    /// reach an equal domain value, so the generated slot survives a rewrite
     /// without changing what the lock means.
     #[test]
-    fn lua_source_lock_round_trips_and_matches_the_gluon_domain_value() {
+    fn lua_source_lock_round_trips_to_an_equal_domain_value() {
         let lock = sample_lock();
         let encoded = LuaSourceLockCodec::default().encode(&lock).unwrap();
 

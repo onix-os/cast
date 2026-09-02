@@ -10,196 +10,199 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "ln"
-            },
-            {
-                kind = "binary",
-                value = "test"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "ln"
+                },
+                {
+                    kind = "binary",
+                    value = "test"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-E",
-                            "-I",
-                            "include",
-                            "src/vector.c",
-                            "-o",
-                            "build/vector.i"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-fPIC",
-                            "-O2",
-                            "-c",
-                            "build/vector.i",
-                            "-o",
-                            "build/vector.o"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-shared",
-                            "-Wl,-soname,libvector-math.so.1",
-                            "build/vector.o",
-                            "-o",
-                            "build/libvector-math.so.1.0.0"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-I",
-                            "include",
-                            "tools/vector-calc.c",
-                            "build/libvector-math.so.1.0.0",
-                            "-o",
-                            "build/vector-calc"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
                             },
-                            {
-                                path = "/usr/bin/ln",
+                            args = {
+                                "-p",
+                                "build"
+                            }
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
                                 requirement = {
                                     kind = "binary",
-                                    value = "ln"
+                                    value = "cc"
                                 }
+                            },
+                            args = {
+                                "-E",
+                                "-I",
+                                "include",
+                                "src/vector.c",
+                                "-o",
+                                "build/vector.i"
                             }
                         },
-                        script = "\ninstall -Dm755 build/vector-calc \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-calc\"\ninstall -Dm755 build/libvector-math.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1.0.0\"\nln -s libvector-math.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1\"\nln -s libvector-math.so.1 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so\"\ninstall -Dm644 include/vector-math.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-math/vector-math.h\"\n"
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-fPIC",
+                                "-O2",
+                                "-c",
+                                "build/vector.i",
+                                "-o",
+                                "build/vector.o"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-shared",
+                                "-Wl,-soname,libvector-math.so.1",
+                                "build/vector.o",
+                                "-o",
+                                "build/libvector-math.so.1.0.0"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-I",
+                                "include",
+                                "tools/vector-calc.c",
+                                "build/libvector-math.so.1.0.0",
+                                "-o",
+                                "build/vector-calc"
+                            }
+                        }
                     }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/ln",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "ln"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm755 build/vector-calc \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-calc\"\ninstall -Dm755 build/libvector-math.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1.0.0\"\nln -s libvector-math.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1\"\nln -s libvector-math.so.1 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so\"\ninstall -Dm644 include/vector-math.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-math/vector-math.h\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/test",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "test"
+                                }
+                            },
+                            args = {
+                                "-s",
+                                "build/libvector-math.so.1.0.0"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/test",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "test"
+                                }
+                            },
+                            args = {
+                                "-x",
+                                "build/vector-calc"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/test",
-                            requirement = {
-                                kind = "binary",
-                                value = "test"
-                            }
-                        },
-                        args = {
-                            "-s",
-                            "build/libvector-math.so.1.0.0"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/test",
-                            requirement = {
-                                kind = "binary",
-                                value = "test"
-                            }
-                        },
-                        args = {
-                            "-x",
-                            "build/vector-calc"
-                        }
-                    }
-                }
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

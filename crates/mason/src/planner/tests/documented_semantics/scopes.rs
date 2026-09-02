@@ -24,7 +24,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         [UpstreamSpec::Archive { url, .. }] if url.ends_with("/scoped-client-1.2.0.tar.xz")
     ));
 
-    for module in ["packages.glu", "scope.glu"] {
+    for module in ["packages.lua", "scope.lua"] {
         assert!(
             plan.provenance
                 .recipe

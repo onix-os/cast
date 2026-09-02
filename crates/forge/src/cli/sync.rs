@@ -30,11 +30,11 @@ pub struct Command {
     #[arg(long)]
     dry_run: bool,
 
-    /// Sync against the provided Gluon system intent
+    /// Sync against the provided system intent
     ///
-    /// The supplied .glu expression is evaluated, and only its repositories and packages
+    /// The supplied declaration is evaluated, and only its repositories and packages
     /// will be used to create the new state
-    #[arg(value_name = "system.glu", long)]
+    #[arg(value_name = "system.lua", long)]
     import: Option<PathBuf>,
 }
 
@@ -81,16 +81,16 @@ mod tests {
         prepare_private_installation_root(temporary.path());
         let root = temporary.path().join("installation");
         let target = temporary.path().join("ephemeral-target");
-        let intent = temporary.path().join("import.glu");
+        let intent = temporary.path().join("import.lua");
         fs::create_dir(&root).unwrap();
         fs::create_dir(&target).unwrap();
         prepare_private_installation_root(&root);
         prepare_private_installation_root(&target);
-        let authored = r#"// This source is owned by the caller.
-let cast = import! cast.system.v1
-{
-    disable_warning = cast.boolean.true,
-    .. cast.system
+        let authored = r#"-- This source is owned by the caller.
+return {
+    disable_warning = true,
+    repositories = {},
+    packages = {},
 }
 "#;
         fs::write(&intent, authored).unwrap();

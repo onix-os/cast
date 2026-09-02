@@ -292,10 +292,10 @@ ID_LIKE=\"linux\"\n";
 
         assert_eq!(outputs.system_model_authorities(), &expected);
         assert_eq!(outputs.system_model_authority(), expected.active_authority(),);
-        assert_eq!(outputs.system_model_name(), c"system-model.glu");
+        assert_eq!(outputs.system_model_name(), c"system-model.lua");
         assert_eq!(
             outputs.system_model_authority().ownership_marker(),
-            system_model::gluon::GENERATED_GLUON_MARKER.as_bytes(),
+            lua_config::GENERATED_LUA_MARKER.as_bytes(),
         );
         assert!(
             outputs
@@ -313,7 +313,7 @@ ID_LIKE=\"linux\"\n";
             error,
             CandidateMetadataError::MissingGeneratedDeclarationMarker {
                 ref name,
-            } if name == "system-model.glu"
+            } if name == "system-model.lua"
         ));
     }
 
@@ -336,7 +336,7 @@ ID_LIKE=\"linux\"\n";
 
         assert_eq!(fs::read(usr_path.join("lib/os-release")).unwrap(), expected_release);
         assert_eq!(
-            fs::read(usr_path.join("lib/system-model.glu")).unwrap(),
+            fs::read(usr_path.join("lib/system-model.lua")).unwrap(),
             expected_snapshot
         );
     }

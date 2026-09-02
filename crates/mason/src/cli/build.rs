@@ -27,14 +27,14 @@ pub struct Command {
     #[arg(
         long,
         default_value_t = false,
-        help = "Resolve and atomically update build.lock.glu before building"
+        help = "Resolve and atomically update build.lock.lua before building"
     )]
     update_lock: bool,
     #[arg(
         long,
         default_value_t = false,
         requires = "update_lock",
-        help = "Refresh repositories before updating build.lock.glu"
+        help = "Refresh repositories before updating build.lock.lua"
     )]
     refresh_repositories: bool,
     #[arg(long, help = "Exact build target")]
@@ -215,7 +215,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_recipe_is_gluon() {
+    fn default_recipe_is_the_lua_recipe() {
         let command =
             Command::try_parse_from(["build", "--target", "x86_64", "--source-date-epoch", "1700000000"]).unwrap();
 

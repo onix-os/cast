@@ -7,7 +7,7 @@ use stone_recipe::{
         CollectionRulePlan, DerivationPlan, InputOrigin, JobExecutableRole, JobStepSection, LockedSource, NetworkMode,
         PackageInputSelection, PathRuleKind, StepPlan,
     },
-    package::{GluonPackageEvaluator, PackageSpec, StepSpec},
+    package::{LuaPackageEvaluator, PackageSpec, StepSpec},
 };
 
 use super::{assert_x86_64_platform, dependency_names};
@@ -143,18 +143,17 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
 
 fn assert_disabled_factory_variant() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/examples/gluon/packages/optional-component-source-graph");
+        .join("../../docs/examples/lua/packages/optional-component-source-graph");
     let source_root = SourceRoot::new(&root).expect("open optional component example source root");
     let evaluator = DeclarationEvaluator::<PackageSpec>::with_source_root(
-        &GluonPackageEvaluator::default(),
+        &LuaPackageEvaluator::default(),
         source_root,
     );
     let source = Source::new(
-        "disabled.glu",
-        r#"let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
+        "disabled.lua",
+        r#"local factory = cast.import("package.lua")
 
-make_package { component = a.false }
+return factory.make({ component = false })
 "#,
     );
     let disabled = DeclarationEvaluator::<PackageSpec>::evaluate(&evaluator, &source)

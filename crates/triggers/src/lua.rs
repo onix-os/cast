@@ -1,11 +1,11 @@
 //! Lua declaration adapter for the trigger domain (Phase L2, private).
 //!
-//! This decodes an authored Lua trigger into the *same* shared
-//! [`TriggerSpec`]/[`Trigger`] the Gluon adapter produces. Options and closed
-//! variants use the Lua tagged encoding (`{ kind = "some", value = ... }`);
-//! the conversion into the shared wire type mirrors the Gluon conversion
-//! exactly, so equivalent Gluon and Lua sources normalize to equal domain
-//! values. It is not yet registered for `.lua` discovery.
+//! This decodes an authored Lua trigger into the shared
+//! [`TriggerSpec`]/[`Trigger`]. Options and closed variants use the Lua tagged
+//! encoding (`{ kind = "some", value = ... }`); the conversion into the shared
+//! wire type is the neutral one, so equivalent sources in any configuration
+//! language normalize to equal domain values. It is not yet registered for
+//! `.lua` discovery.
 
 use std::fmt::Write as _;
 
@@ -28,9 +28,8 @@ use crate::spec::{
 /// Stateful read-only Lua adapter for the trigger declaration boundary.
 ///
 /// It decodes an authored Lua trigger into the shared [`TriggerSpec`] and runs
-/// the same [`Trigger`] validation the Gluon adapter uses, so both engines
-/// reach identical domain values with intentionally distinct evaluation
-/// identities.
+/// the shared [`Trigger`] validation, so every engine reaches identical domain
+/// values with intentionally distinct evaluation identities.
 #[derive(Debug, Clone, Default)]
 pub struct LuaTriggerEvaluator {
     engine: LuaEngine,
@@ -263,21 +262,6 @@ mod tests {
 
     use super::*;
     use crate::format::Trigger;
-    use crate::gluon::GluonTriggerEvaluator;
-
-    const GLUON_TRIGGER: &str = r#"
-let cast = import! cast.trigger.v1
-let base = cast.trigger "depmod" "Rebuild kernel module dependencies"
-{
-    paths = [
-        cast.path "/usr/lib/modules/(version:*)" ["depmod"] cast.optional.unset,
-    ],
-    handlers = [
-        cast.handler.named "depmod" (cast.handler.run "/usr/bin/depmod" ["$(version)"]),
-    ],
-    .. base
-}
-"#;
 
     const LUA_TRIGGER: &str = r#"
 return {
@@ -309,41 +293,12 @@ return {
         Trigger::try_from(TriggerSpec::from(spec)).expect("lua trigger is valid")
     }
 
-    fn gluon_trigger(source: &str) -> Trigger {
-        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
-            &GluonTriggerEvaluator::default(),
-            &Source::new("trigger.glu", source),
-        )
-        .expect("gluon trigger evaluates")
-        .value
-    }
 
+    /// The typed boundary must reach the same domain value the engine reaches
+    /// directly, so dispatching through `DeclarationEvaluator` adds no
+    /// conversion of its own.
     #[test]
-    fn a_lua_trigger_normalizes_to_the_same_domain_value_as_gluon() {
-        // `Trigger` holds compiled `fnmatch` patterns with interior mutability
-        // and so cannot derive `PartialEq`; compare the normalized debug form,
-        // which reflects the immutable pattern text and every domain field.
-        assert_eq!(
-            format!("{:?}", lua_trigger(LUA_TRIGGER)),
-            format!("{:?}", gluon_trigger(GLUON_TRIGGER)),
-        );
-    }
-
-    #[test]
-    fn the_paired_trigger_documentation_example_normalizes_equally() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/trigger.glu"))
-            .expect("gluon trigger example");
-        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/trigger.lua"))
-            .expect("lua trigger example");
-        assert_eq!(
-            format!("{:?}", lua_trigger(&lua)),
-            format!("{:?}", gluon_trigger(&gluon)),
-        );
-    }
-
-    #[test]
-    fn the_lua_trigger_evaluator_matches_gluon_through_the_typed_boundary() {
+    fn the_typed_boundary_matches_a_direct_engine_decode() {
         let evaluator = LuaTriggerEvaluator::default();
         let evaluation = <LuaTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
             &evaluator,
@@ -352,13 +307,13 @@ return {
         .expect("lua trigger evaluator succeeds");
         assert_eq!(
             format!("{:?}", evaluation.value),
-            format!("{:?}", gluon_trigger(GLUON_TRIGGER)),
+            format!("{:?}", lua_trigger(LUA_TRIGGER)),
         );
         assert_eq!(evaluation.identity.engine.implementation(), "lua");
     }
 
     #[test]
-    fn the_lua_and_gluon_identities_differ_by_engine() {
+    fn the_evaluation_identity_names_the_lua_engine() {
         let lua = LuaEngine::default()
             .evaluate_as::<LuaTriggerSpec>(&Source::new("trigger.lua", LUA_TRIGGER))
             .unwrap();

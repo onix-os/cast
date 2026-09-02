@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn reads_regular_locks_with_the_evaluator_source_limit() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("sources.lock.glu");
+        let path = root.path().join("sources.lock.lua");
         fs::write(&path, b"lock").unwrap();
 
         assert_eq!(read(&path, TEST_SOURCE_BYTE_LIMIT).unwrap(), b"lock");
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn only_initial_absence_is_classified_as_a_missing_lock() {
-        let path = PathBuf::from("sources.lock.glu");
+        let path = PathBuf::from("sources.lock.lua");
         let missing = ReadError::Inspect {
             path: path.clone(),
             source: io::Error::from(io::ErrorKind::NotFound),
@@ -255,7 +255,7 @@ mod tests {
     fn rejects_symlinks_without_reading_the_target() {
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target");
-        let link = root.path().join("sources.lock.glu");
+        let link = root.path().join("sources.lock.lua");
         fs::write(&target, b"lock").unwrap();
         symlink(&target, &link).unwrap();
 
@@ -282,7 +282,7 @@ mod tests {
             }
         ));
 
-        let fifo = root.path().join("build.lock.glu");
+        let fifo = root.path().join("build.lock.lua");
         nix::unistd::mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
         let error = read(&fifo, TEST_SOURCE_BYTE_LIMIT).unwrap_err();
         assert!(matches!(

@@ -96,7 +96,7 @@ fn candidate_pre_journal_legacy_hardlinked_archived_payload_fails_before_marker_
     let installation = &fixture.client.installation;
     let archived_usr = installation.root_path(fixture.candidate.id.to_string()).join("usr");
     let live_usr = installation.root.join("usr");
-    let payload = archived_usr.join("lib/system-model.glu");
+    let payload = archived_usr.join("lib/system-model.lua");
     let external = installation.root.join("legacy-archived-payload-hardlink");
     let archived_usr_identity = root_abi_inode(&archived_usr);
     let live_usr_identity = root_abi_inode(&live_usr);
@@ -359,7 +359,7 @@ fn ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive() {
     assert_eq!(root_abi_inode(&foreign), identity);
     assert_eq!(fs::read(&foreign).unwrap(), b"foreign ephemeral entry");
     assert!(!blit_root.join("usr/lib/os-release").exists());
-    assert!(!blit_root.join("usr/lib/system-model.glu").exists());
+    assert!(!blit_root.join("usr/lib/system-model.lua").exists());
 
     let isolation_temporary = tempfile::tempdir().unwrap();
     prepare_private_installation_root(isolation_temporary.path());
@@ -389,5 +389,5 @@ fn ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive() {
     assert_eq!(fs::read(&isolation_foreign).unwrap(), b"foreign isolation entry");
     assert_root_abi_links(&blit_root);
     assert!(!blit_root.join("usr/lib/os-release").exists());
-    assert!(!blit_root.join("usr/lib/system-model.glu").exists());
+    assert!(!blit_root.join("usr/lib/system-model.lua").exists());
 }

@@ -26,7 +26,7 @@ pub fn is_reserved_usr_layout_target(target: &str) -> bool {
         ".cast-tree-id.tmp",
         ".stateID",
         "lib/os-release",
-        "lib/system-model.glu",
+        "lib/system-model.lua",
     ]
     .into_iter()
     .any(|reserved| {
@@ -212,9 +212,9 @@ mod tests {
             "lib/os-release",
             "lib/os-release/child",
             "lib/os-release/nested/child",
-            "lib/system-model.glu",
-            "lib/system-model.glu/child",
-            "lib/system-model.glu/nested/child",
+            "lib/system-model.lua",
+            "lib/system-model.lua/child",
+            "lib/system-model.lua/nested/child",
         ] {
             assert!(is_reserved_usr_layout_target(target), "did not reserve {target:?}");
         }
@@ -234,10 +234,10 @@ mod tests {
             "lib/os-info.json",
             "lib/os-release-old",
             "lib/os-release.local/child",
-            "lib/system-model.glu-old",
-            "lib/system-model.glu.local/child",
+            "lib/system-model.lua-old",
+            "lib/system-model.lua.local/child",
             "share/lib/os-release",
-            "share/lib/system-model.glu",
+            "share/lib/system-model.lua",
             "share/.cast-tree-id",
             "share/.stateID",
         ] {

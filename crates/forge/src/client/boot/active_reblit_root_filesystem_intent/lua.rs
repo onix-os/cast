@@ -2,15 +2,16 @@
 //!
 //! Decodes an authored Lua root-filesystem declaration into the single root
 //! locator string, then runs the *same* `materialize_root_argument` bounded
-//! normalization the Gluon adapter runs — under the caller-owned budget, so the
+//! normalization every adapter runs — under the caller-owned budget, so the
 //! byte-limit, work-reservation, and deadline authority is identical. Equivalent
-//! Gluon and Lua sources reach the identical validated intent value.
+//! sources in any configuration language reach the identical validated intent
+//! value.
 //!
-//! This is the budget-integrated adapter registered alongside the Gluon one, so
-//! a retained `etc/cast/root-filesystem.lua` is discovered by extension and
+//! This is a budget-integrated registered adapter, so a retained
+//! `etc/cast/root-filesystem.lua` is discovered by extension and
 //! normalized under the same absolute deadline, byte limits, and work
-//! reservation. Its evaluation contract mirrors the Gluon adapter's strictness:
-//! the fixed slot name, no admitted external inputs, and — because the Lua root
+//! reservation. Its evaluation contract keeps the shared strictness: the fixed
+//! slot name, no admitted external inputs, and — because the Lua root
 //! declaration imports nothing — an empty module set.
 
 use std::cell::RefCell;
@@ -39,6 +40,7 @@ pub(super) fn language_spec() -> LanguageSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaRootFilesystemIntent {
     root: String,
 }
@@ -141,7 +143,7 @@ impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntent
 /// The normalization stores the locator verbatim (rejecting the reserved
 /// `root=` prefix, non-graphic bytes, quotes, and backslashes), so this is
 /// idempotent: emitting the validated locator and decoding it again yields the
-/// same intent. Because `etc/cast/root-filesystem.glu` is an *authored*,
+/// same intent. Because `etc/cast/root-filesystem.lua` is an *authored*,
 /// boot-critical slot, this is the canonical Lua an operator adopts as the
 /// verified replacement — never an authority Cast switches on its own.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -182,7 +184,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::super::RootFilesystemIntentPolicy;
-    use super::super::gluon::gluon_value_for_test;
+    use super::super::normalization::materialize_root_argument;
     use super::*;
     use crate::Installation;
 
@@ -229,20 +231,22 @@ mod tests {
             })
     }
 
+    /// Decoding must land on exactly the value the shared normalization builds
+    /// from the same locator.
     #[test]
-    fn a_lua_root_intent_matches_the_gluon_normalization() {
+    fn a_lua_root_intent_matches_the_shared_normalization() {
         let fixture = Fixture::new();
 
         let lua = lua_value(&mut fixture.budget(), r#"return { root = "UUID=1111-2222" }"#)
             .expect("lua root intent evaluates");
-        let gluon =
-            gluon_value_for_test("UUID=1111-2222", &mut fixture.budget()).expect("gluon root intent normalizes");
+        let expected = materialize_root_argument("UUID=1111-2222".to_owned(), &mut fixture.budget())
+            .expect("shared normalization accepts the locator");
 
-        assert_eq!(lua, gluon);
+        assert_eq!(lua, expected);
     }
 
     #[test]
-    fn the_paired_root_filesystem_documentation_example_normalizes_equally() {
+    fn the_root_filesystem_documentation_example_decodes_to_its_locator() {
         let root_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let lua = std::fs::read_to_string(format!("{root_dir}/docs/examples/lua/root-filesystem.lua"))
             .expect("lua root-filesystem example");
@@ -250,8 +254,8 @@ mod tests {
         let locator = "PARTUUID=11111111-2222-3333-4444-555555555555";
 
         let lua_value = lua_value(&mut fixture.budget(), &lua).expect("lua example evaluates");
-        let gluon_value = gluon_value_for_test(locator, &mut fixture.budget()).expect("gluon normalizes");
-        assert_eq!(lua_value, gluon_value);
+        let expected = materialize_root_argument(locator.to_owned(), &mut fixture.budget()).expect("shared normalization");
+        assert_eq!(lua_value, expected);
     }
 
     #[test]

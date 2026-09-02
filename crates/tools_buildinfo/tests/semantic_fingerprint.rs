@@ -69,7 +69,6 @@ fn discovery_is_checkout_and_creation_order_independent() {
             "crates/mason/src/lib.rs",
             "crates/stone/Cargo.toml",
             "crates/stone/build.rs",
-            "crates/stone/gluon/stone.glu",
             "crates/stone/src/lib.rs",
             "flake.lock",
             "flake.nix",

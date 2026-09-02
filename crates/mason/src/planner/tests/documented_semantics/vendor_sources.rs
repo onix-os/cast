@@ -144,7 +144,7 @@ pub(super) fn assert_semantics(
             },
         ] if destination == "application" && vendor_destination == "vendor"
     ));
-    for module in ["package.glu", "sources.glu"] {
+    for module in ["package.lua", "sources.lua"] {
         assert!(
             plan.provenance
                 .recipe
@@ -274,14 +274,14 @@ fn freeze_variant(
     recipe_source: &str,
 ) -> (PackageSpec, DerivationPlan) {
     let authored = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/examples/gluon/packages/independent-vendor-source");
+        .join("../../docs/examples/lua/packages/independent-vendor-source");
     let recipe_dir = matrix
         ._root
         .path()
         .join("independent-vendor-identity-variants")
         .join(name);
     copy_package_directory(&authored, &recipe_dir);
-    let recipe_path = recipe_dir.join("stone.glu");
+    let recipe_path = recipe_dir.join("stone.lua");
     fs::write(&recipe_path, recipe_source).expect("write independent vendor identity variant");
     let (source_lock_bytes, source_count) = synthesize_source_lock(&recipe_path);
     assert_eq!(source_count, 2);
@@ -304,46 +304,30 @@ fn freeze_variant(
     (evaluated.recipe.declaration.clone(), planned.plan)
 }
 
-const APPLICATION_VARIANT: &str = r#"let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
-let sources = import! "./sources.glu"
+const APPLICATION_VARIANT: &str = r#"local factory = cast.import("package.lua")
+local sources = cast.import("sources.lua")
 
-make_package {
-    application = {
+return factory.make({
+    application = sources.archive_lock({
         url = "https://example.invalid/vendor-note-next.tar.zst",
         digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        archive_name = "vendor-note-next.tar.zst",
         unpack_dir = "application",
-        lock = a.source.archive_with {
-            url = "https://example.invalid/vendor-note-next.tar.zst",
-            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            rename = a.optional.set "vendor-note-next.tar.zst",
-            strip_dirs = a.optional.set 1,
-            unpack = a.true,
-            unpack_dir = a.optional.set "application",
-        },
-    },
-    .. sources
-}
+    }),
+    vendor = sources.vendor,
+})
 "#;
 
-const VENDOR_VARIANT: &str = r#"let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
-let sources = import! "./sources.glu"
+const VENDOR_VARIANT: &str = r#"local factory = cast.import("package.lua")
+local sources = cast.import("sources.lua")
 
-make_package {
-    vendor = {
+return factory.make({
+    application = sources.application,
+    vendor = sources.archive_lock({
         url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
         digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        archive_name = "vendor-note-cargo-vendor-next.tar.zst",
         unpack_dir = "vendor",
-        lock = a.source.archive_with {
-            url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
-            hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            rename = a.optional.set "vendor-note-cargo-vendor-next.tar.zst",
-            strip_dirs = a.optional.set 1,
-            unpack = a.true,
-            unpack_dir = a.optional.set "vendor",
-        },
-    },
-    .. sources
-}
+    }),
+})
 "#;

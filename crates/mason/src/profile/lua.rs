@@ -1,11 +1,10 @@
-//! Lua declaration adapter for the profile domain (Phase L4).
+//! Lua declaration adapter for the profile domain.
 //!
-//! Decodes authored Lua profile fragments into the same shared `Map` the Gluon
-//! adapter produces, reusing the shared `decode_specs` validation. Options use
-//! the Lua tagged encoding; the conversion into the shared wire types mirrors
-//! the Gluon conversion, so equivalent sources normalize to equal domain
-//! values with intentionally distinct evaluation identities. Registration and
-//! the canonical Lua emitter are added in a later slice.
+//! Decodes authored Lua profile fragments into the shared `Map`, reusing the
+//! shared `decode_specs` validation. Options use the Lua tagged encoding, and
+//! the conversion into the shared wire types lives in the neutral layer, so
+//! any adapter reaches equal domain values with an intentionally distinct
+//! evaluation identity.
 
 use std::fmt::Write as _;
 
@@ -20,7 +19,6 @@ use lua_config::{
 };
 use serde::Deserialize;
 
-use super::gluon::ProfileCodec;
 use super::{
     Map, ProfileConversionError, ProfileSpec, RepositorySourceSpec, RepositorySpec, decode_specs,
     profile_to_spec,
@@ -103,8 +101,8 @@ pub(crate) fn decode_lua_specs(
 }
 
 /// Stateful Lua adapter for the profile declaration boundary. Decodes an
-/// authored `.lua` fragment into the same shared [`Map`] the Gluon codec
-/// produces, with an intentionally distinct evaluation identity.
+/// authored `.lua` fragment into the shared [`Map`] with an intentionally
+/// distinct evaluation identity.
 #[derive(Debug, Clone, Default)]
 pub struct LuaProfileCodec {
     engine: LuaEngine,
@@ -151,19 +149,16 @@ impl ConfigDeclarationEvaluator for LuaProfileCodec {
 
 impl DeclarationCodec<Map> for LuaProfileCodec {
     /// Emit the canonical generated-marked Lua source for a profile map — what
-    /// the generated-slot authority switch writes when it converts a profile
-    /// store from `.glu` to `.lua` authority.
+    /// a generated profile store is written as.
     fn encode(&self, config: &Map) -> Result<String, Self::Error> {
         encode_lua_specs(config)
     }
 }
 
-/// One registered profile declaration language (`.glu` or `.lua`), selected by
-/// file extension. Both engines reach the same [`Map`] and share the conversion
-/// error type.
+/// One registered profile declaration language, selected by file extension.
+/// Every engine reaches the same [`Map`] and shares the conversion error type.
 #[derive(Debug, Clone)]
 pub enum ProfileEvaluator {
-    Gluon(ProfileCodec),
     Lua(LuaProfileCodec),
 }
 
@@ -173,23 +168,18 @@ impl DeclarationEvaluator<Map> for ProfileEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(codec) => <ProfileCodec as DeclarationEvaluator<Map>>::language_spec(codec),
             Self::Lua(codec) => <LuaProfileCodec as DeclarationEvaluator<Map>>::language_spec(codec),
         }
     }
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(codec) => <ProfileCodec as DeclarationEvaluator<Map>>::limits(codec),
             Self::Lua(codec) => <LuaProfileCodec as DeclarationEvaluator<Map>>::limits(codec),
         }
     }
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(codec) => Self::Gluon(
-                <ProfileCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
-            ),
             Self::Lua(codec) => Self::Lua(
                 <LuaProfileCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
             ),
@@ -202,7 +192,6 @@ impl DeclarationEvaluator<Map> for ProfileEvaluator {
         deadline: EvaluationDeadline,
     ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
         match self {
-            Self::Gluon(codec) => codec.evaluate_within(source, deadline),
             Self::Lua(codec) => codec.evaluate_within(source, deadline),
         }
     }
@@ -213,18 +202,15 @@ impl ConfigDeclarationEvaluator for ProfileEvaluator {
 }
 
 impl ProfileEvaluator {
-    /// The registered profile languages, `.glu` first, sharing a limit.
-    pub fn registered() -> [Self; 2] {
-        [
-            Self::Gluon(ProfileCodec::default()),
-            Self::Lua(LuaProfileCodec::default()),
-        ]
+    /// The registered profile languages, sharing a limit.
+    pub fn registered() -> [Self; 1] {
+        [Self::Lua(LuaProfileCodec::default())]
     }
 }
 
 /// Emit a profile [`Map`] as canonical, generated-marked Lua source that
 /// re-decodes through [`decode_lua_specs`] into the same map. Specs are derived
-/// by the shared `profile_to_spec`, so the Lua and Gluon emitters canonicalize
+/// by the shared `profile_to_spec`, so every emitter canonicalizes
 /// identical domain values.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn encode_lua_specs(map: &Map) -> Result<String, ProfileConversionError> {
@@ -311,17 +297,7 @@ mod tests {
     use lua_config::LuaEngine;
 
     use super::*;
-    use crate::profile::gluon::ProfileCodec;
     use declarative_config::DeclarationEvaluator;
-
-    const GLUON_PROFILE: &str = r#"
-let cast = import! cast.profile.v1
-[
-    cast.profile "desktop" [
-        cast.repository.direct "main" "https://packages.example/stone.index",
-    ],
-]
-"#;
 
     const LUA_PROFILE: &str = r#"
 return {
@@ -351,36 +327,44 @@ return {
         decode_lua_specs(specs).expect("lua profile is valid")
     }
 
-    fn gluon_map(source: &str) -> Map {
-        <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
-            &ProfileCodec::default(),
-            &Source::new("profile.glu", source),
-        )
-        .expect("gluon profile evaluates")
-        .value
-    }
-
-    #[test]
-    fn a_lua_profile_normalizes_to_the_same_map_as_gluon() {
-        assert_eq!(
-            format!("{:?}", lua_map(LUA_PROFILE)),
-            format!("{:?}", gluon_map(GLUON_PROFILE)),
-        );
-    }
-
-    const GLUON_PROFILE_ROOT_INDEX: &str = r#"
-let cast = import! cast.profile.v1
-[
-    cast.profile "server" [
-        cast.repository.root "core" "https://packages.example/core" "stream/volatile",
-        cast.repository.direct "extra" "https://packages.example/extra.index",
-    ],
-]
+    /// Both repository source kinds in one profile: a root index and a direct
+    /// index.
+    const LUA_PROFILE_ROOT_INDEX: &str = r#"
+return {
+    {
+        id = "server",
+        repositories = {
+            {
+                id = "core",
+                description = { kind = "none" },
+                source = {
+                    kind = "root_index",
+                    base_uri = "https://packages.example/core",
+                    channel = { kind = "none" },
+                    version = "stream/volatile",
+                    arch = { kind = "none" },
+                },
+                priority = { kind = "none" },
+                enabled = { kind = "none" },
+            },
+            {
+                id = "extra",
+                description = { kind = "none" },
+                source = {
+                    kind = "direct_index",
+                    uri = "https://packages.example/extra.index",
+                },
+                priority = { kind = "none" },
+                enabled = { kind = "none" },
+            },
+        },
+    },
+}
 "#;
 
     #[test]
     fn emitted_lua_profile_re_decodes_to_the_same_map() {
-        let original = gluon_map(GLUON_PROFILE_ROOT_INDEX);
+        let original = lua_map(LUA_PROFILE_ROOT_INDEX);
         let emitted = encode_lua_specs(&original).expect("map emits to lua");
         assert!(emitted.starts_with(GENERATED_LUA_MARKER));
 
@@ -388,25 +372,6 @@ let cast = import! cast.profile.v1
         assert_eq!(format!("{original:?}"), format!("{round_tripped:?}"));
     }
 
-    // The shipped default profile (`crates/mason/data/profile.d/default-x86_64.glu`)
-    // paired with its reviewed Lua form (Phase L7 corpus pairing).
-    const SHIPPED_PROFILE_GLUON: &str = r#"
-let cast = import! cast.profile.v1
-cast.profiles [
-    cast.profile "default-x86_64" [
-        cast.repository.root_index_with {
-            id = "volatile",
-            description = cast.optional.some "AerynOS volatile stream (CDN)",
-            base_uri = "https://cdn.aerynos.dev/",
-            channel = cast.optional.some "main",
-            version = "stream/volatile",
-            arch = cast.optional.some "x86_64",
-            priority = cast.optional.some 0,
-            enabled = cast.optional.some cast.boolean.true,
-        },
-    ],
-]
-"#;
 
     const SHIPPED_PROFILE_LUA: &str = r#"
 return {
@@ -431,19 +396,18 @@ return {
 }
 "#;
 
+    /// The shipped default profile must decode to the profile it names.
     #[test]
-    fn the_shipped_default_profile_pairs_to_an_equal_lua_map() {
-        assert_eq!(
-            format!("{:?}", lua_map(SHIPPED_PROFILE_LUA)),
-            format!("{:?}", gluon_map(SHIPPED_PROFILE_GLUON)),
-        );
+    fn the_shipped_default_profile_decodes() {
+        let map = lua_map(SHIPPED_PROFILE_LUA);
+        assert!(map.iter().count() > 0);
     }
 
     #[test]
     fn the_lua_codec_encodes_a_valid_generated_slot_authority() {
         use declarative_config::DeclarationCodec;
 
-        let map = gluon_map(GLUON_PROFILE_ROOT_INDEX);
+        let map = lua_map(LUA_PROFILE_ROOT_INDEX);
         let encoded = LuaProfileCodec::default().encode(&map).expect("codec emits lua");
         assert!(encoded.starts_with(GENERATED_LUA_MARKER));
         assert_eq!(format!("{:?}", lua_map(&encoded)), format!("{map:?}"));

@@ -10,62 +10,65 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "sh"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "sh"
+                },
+                {
+                    kind = "binary",
+                    value = "ninja"
+                }
             },
-            {
-                kind = "binary",
-                value = "ninja"
-            }
-        },
-        environment = {
-            "cmake"
-        },
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "cmake_configure",
-                        flags = {
-                            "-DBUILD_BENCHMARKS=ON",
-                            "-DBUILD_TESTING=ON"
+            environment = {
+                "cmake"
+            },
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "cmake_configure",
+                            flags = {
+                                "-DBUILD_BENCHMARKS=ON",
+                                "-DBUILD_TESTING=ON"
+                            }
                         }
                     }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "cmake_build"
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "cmake_build"
+                        }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "cmake_install"
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "cmake_install"
+                        }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "cmake_test"
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "cmake_test"
+                        }
                     }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

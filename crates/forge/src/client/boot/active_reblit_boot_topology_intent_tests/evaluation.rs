@@ -1,4 +1,4 @@
-use gluon_config::DiagnosticCategory;
+use declarative_config::DiagnosticCategory;
 
 use super::{
     super::{
@@ -29,9 +29,10 @@ fn alias_intent_exposes_only_revalidated_typed_identity_and_exact_provenance() {
     );
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
-    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
-    assert_eq!(fingerprint.modules.len(), 1);
-    assert_eq!(fingerprint.modules[0].logical_name, "cast.boot_topology.v2");
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.lua");
+    // The Lua topology declaration is self-contained, so its provenance is the
+    // one authored source and nothing else.
+    assert!(fingerprint.modules.is_empty());
 }
 
 #[test]
@@ -182,10 +183,11 @@ fn distinct_form_rejects_duplicate_mount_selectors_independently_of_partuuid() {
 
 #[test]
 fn relative_host_and_unknown_embedded_imports_are_all_rejected() {
-    for imported in ["\"other.glu\"", "std.fs", "cast.system.v1"] {
+    for imported in ["other.lua", "std.fs", "cast.system.v1"] {
         let fixture = Fixture::new();
         fixture.write_source(format!(
-            "let _ = import! {imported}\nlet cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }}\n"
+            "local _ = cast.import({imported:?})\n{}",
+            authored_alias(ESP_PARTUUID)
         ));
         assert!(matches!(
             fixture.prepare(),
@@ -196,32 +198,62 @@ fn relative_host_and_unknown_embedded_imports_are_all_rejected() {
 }
 
 #[test]
-fn v1_module_is_rejected_without_a_compatibility_fallback() {
-    let fixture = Fixture::new();
-    fixture.write_source(format!(
-        "let cast = import! cast.boot_topology.v1\ncast.boot_topology.aliases_esp \"{ESP_PARTUUID}\"\n"
+fn the_superseded_v1_form_is_rejected_without_a_compatibility_fallback() {
+    let imported = Fixture::new();
+    imported.write_source(format!(
+        "local _ = cast.import(\"cast.boot_topology.v1\")\n{}",
+        authored_alias(ESP_PARTUUID)
     ));
     assert!(matches!(
-        fixture.prepare(),
+        imported.prepare(),
         Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
             if diagnostic.category == DiagnosticCategory::Import
+    ));
+
+    // The v1 selector was a bare PARTUUID with no mount point; the current
+    // declaration accepts only the closed selector record.
+    let bare_selector = Fixture::new();
+    bare_selector.write_source(format!(
+        "return {{ esp = \"{ESP_PARTUUID}\", boot = {{ kind = \"alias_esp\" }} }}\n"
+    ));
+    assert!(matches!(
+        bare_selector.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Type
     ));
 }
 
 #[test]
-fn api_import_is_mandatory_and_unknown_output_fields_are_rejected() {
-    let no_api = Fixture::new();
-    no_api.write_source(format!(
-        "type BootTarget = | AliasEsp\n{{ esp = {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }}, boot = AliasEsp }}\n"
+fn no_api_import_is_admitted_and_unknown_output_fields_are_rejected() {
+    // The declaration admits no ABI import at all, so importing the versioned
+    // API is itself rejected before evaluation.
+    let imported_api = Fixture::new();
+    imported_api.write_source(format!(
+        "local _ = cast.import(\"cast.boot_topology.v2\")\n{}",
+        authored_alias(ESP_PARTUUID)
     ));
-    assert!(no_api.prepare().is_err());
+    assert!(matches!(
+        imported_api.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Import
+    ));
 
     let unknown = Fixture::new();
     unknown.write_source(format!(
-        "let cast = import! cast.boot_topology.v2\n{{ unexpected = \"input\", .. cast.boot_topology.aliases_esp {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }} }}\n"
+        "return {{ unexpected = \"input\", esp = {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }}, boot = {{ kind = \"alias_esp\" }} }}\n"
     ));
     assert!(matches!(
         unknown.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Type
+    ));
+
+    let unknown_selector_field = Fixture::new();
+    unknown_selector_field.write_source(format!(
+        "return {{ esp = {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\", unexpected = \"input\" }}, boot = {{ kind = \"alias_esp\" }} }}\n"
+    ));
+    assert!(matches!(
+        unknown_selector_field.prepare(),
         Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
             if diagnostic.category == DiagnosticCategory::Type
     ));
@@ -232,7 +264,7 @@ fn api_import_is_mandatory_and_unknown_output_fields_are_rejected() {
     ] {
         let missing_field = Fixture::new();
         missing_field.write_source(format!(
-            "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {incomplete_selector}\n"
+            "return {{ esp = {incomplete_selector}, boot = {{ kind = \"alias_esp\" }} }}\n"
         ));
         assert!(matches!(
             missing_field.prepare(),
@@ -243,7 +275,7 @@ fn api_import_is_mandatory_and_unknown_output_fields_are_rejected() {
 }
 
 #[test]
-fn exact_source_and_embedded_abi_participate_in_deterministic_fingerprint() {
+fn exact_source_bytes_participate_in_deterministic_fingerprint() {
     let first = Fixture::new();
     first.write_source(authored_alias(ESP_PARTUUID));
     let first_prepared = first.prepare().unwrap();
@@ -272,10 +304,10 @@ fn exact_source_and_embedded_abi_participate_in_deterministic_fingerprint() {
         .fingerprint()
         .clone();
     assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
-    assert_eq!(
-        first_fingerprint.modules[0].sha256,
-        changed_fingerprint.modules[0].sha256
-    );
+    // No module set participates: the Lua declaration imports nothing, so the
+    // authored bytes are the whole fingerprinted graph.
+    assert!(first_fingerprint.modules.is_empty());
+    assert!(changed_fingerprint.modules.is_empty());
 }
 
 #[test]
@@ -284,14 +316,14 @@ fn checked_documentation_examples_use_the_exact_restricted_topology_loader() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/examples/gluon/boot-topology-aliases-esp.glu"
+                "/../../docs/examples/lua/boot-topology-aliases-esp.lua"
             )),
             false,
         ),
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/examples/gluon/boot-topology-distinct-xbootldr.glu"
+                "/../../docs/examples/lua/boot-topology-distinct-xbootldr.lua"
             )),
             true,
         ),

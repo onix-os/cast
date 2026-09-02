@@ -80,7 +80,7 @@ impl LuaEngine {
     /// Deserialize the root value into `T` while binding `explicit_inputs` into
     /// the evaluation identity, under one caller-established budget. Domain
     /// adapters that admit external inputs (hashed into provenance) use this so
-    /// the Lua identity commits to the same inputs the Gluon adapter does.
+    /// the Lua identity commits to the same inputs every adapter does.
     pub fn evaluate_with_inputs_within_as<T>(
         &self,
         source: &Source,
@@ -256,8 +256,8 @@ where
 }
 
 /// A typed decoder that runs the authored root chunk and deserializes its final
-/// value into `T` via serde. Domain adapters use this to reach the same shared
-/// wire types the Gluon adapters decode into.
+/// value into `T` via serde. Domain adapters use this to reach the shared wire
+/// types every configuration-language adapter decodes into.
 pub struct LuaSerdeDecoder<T>(PhantomData<fn() -> T>);
 
 impl<T> LuaSerdeDecoder<T> {
@@ -284,16 +284,23 @@ where
         source: &Source,
         _deadline: EvaluationDeadline,
     ) -> Result<T, Diagnostic> {
-        use mlua::LuaSerdeExt as _;
-
         let value = evaluate_root_value(runtime, source)?;
-        runtime.lua.from_value::<T>(value).map_err(|error| {
+        let deserializer = mlua::serde::Deserializer::new(value);
+        serde_path_to_error::deserialize::<_, T>(deserializer).map_err(|error| {
+            let path = error.path().to_string();
+            let message = match path.as_str() {
+                "" | "." => format!("lua value does not match the target schema: {}", error.inner()),
+                path => format!(
+                    "lua value does not match the target schema at {path}: {}",
+                    error.inner()
+                ),
+            };
             Diagnostic::new(
                 DiagnosticCategory::Type,
                 None,
                 Some(source.logical_name().to_owned()),
                 None,
-                format!("lua value does not match the target schema: {error}"),
+                message,
             )
         })
     }
@@ -381,10 +388,21 @@ fn evaluate_chunk(
     let import_name = name.to_owned();
     let import = lua
         .create_function(move |_lua, requested: mlua::String| {
-            let key = requested.to_str()?;
+            let requested = requested.to_str()?;
+            // Modules are stored under their normalized alias, so a relative
+            // request must be normalized the same way its module was.
+            let key = match normalize_relative(&requested) {
+                Ok(relative) => relative.alias().to_owned(),
+                Err(_) => requested.to_string(),
+            };
             // Every import was resolved and loaded by the shared graph already;
             // an unresolved name here is an internal invariant break.
-            loaded_for_import.get::<Value>(&*key)
+            match loaded_for_import.get::<Value>(key.as_str())? {
+                Value::Nil => Err(mlua::Error::external(format!(
+                    "import {requested} was not loaded by the shared graph"
+                ))),
+                value => Ok(value),
+            }
         })
         .map_err(|error| Diagnostic::internal(format!("lua import binding failed in {import_name}: {error}")))?;
     cast.set("import", import)
@@ -649,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_and_gluon_style_identities_differ_by_engine() {
+    fn an_evaluation_identity_is_deterministic_and_names_its_engine() {
         let engine = LuaEngine::default();
         let first = engine
             .evaluate::<i64>(&Source::new("root.lua", "return 7"))

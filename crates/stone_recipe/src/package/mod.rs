@@ -1,22 +1,21 @@
 //! Typed package declarations for the language-agnostic `cast.authored.v1` ABI.
 //!
-//! A recipe — in Gluon or Lua — is decoded into the minimal [`AuthoredPackage`]
-//! and lowered by shared Rust ([`lower`]) into one concrete [`PackageSpec`].
-//! Authoring defaults and builder lowering live in Rust, not in a config
-//! language, so either language can author a complete package on its own. This
+//! A recipe — in any configuration language — is decoded into the minimal
+//! [`AuthoredPackage`] and lowered by shared Rust ([`lower`]) into one concrete
+//! [`PackageSpec`]. Authoring defaults and builder lowering live in Rust, not
+//! in a config language, so any one language can author a complete package on
+//! its own. This
 //! module deliberately contains values only: Rust never receives or retains a
 //! config-language closure or a second recipe model.
 
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 
-pub use self::gluon::{GLUON_AUTHORED_PRELUDE, GluonPackageEvaluator};
 
 mod authored;
 pub use authored::{AuthoredPackage, default_output_set_with_root, lower};
 mod builder_lowering;
 pub use builder_lowering::{BuilderRequest, lower_builder};
-mod gluon;
 mod lua;
 
 pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration, encode_lua_recipe};
@@ -27,7 +26,7 @@ pub use validation::{
     DependencyKind, DependencyRole, PackageConversionError, PackageValidationLimits,
 };
 
-/// One pure, concrete package declaration returned by a Gluon package factory.
+/// One pure, concrete package declaration returned by a package factory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSpec {
     pub meta: MetaSpec,
@@ -190,7 +189,7 @@ impl SupportedHooksSpec {
     }
 }
 
-/// A completely structural build contract returned by a pure Gluon module.
+/// A completely structural build contract returned by a pure declaration module.
 ///
 /// The module owns phase membership, symbolic tool capabilities, environment
 /// selection, and the supported hook surface. Repository policy remains the

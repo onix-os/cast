@@ -1,11 +1,10 @@
 //! Engine-neutral evaluation identity.
 //!
-//! This is the language-agnostic successor to the Gluon-specific fingerprint.
-//! It commits to the same evaluation inputs the shared pipeline already
-//! prepares — validated language/engine descriptors, the caller-supplied
-//! configuration ABI and evaluator-policy identities, the resource policy, the
-//! root source, the canonical prepared-module graph, and explicit inputs — and
-//! hashes them under a new neutral domain that shares no bytes with v1.
+//! It commits to the evaluation inputs the shared pipeline already prepares —
+//! validated language/engine descriptors, the caller-supplied configuration ABI
+//! and evaluator-policy identities, the resource policy, the root source, the
+//! canonical prepared-module graph, and explicit inputs — and hashes them under
+//! one neutral domain separator.
 //!
 //! The core invents no ABI or policy names. Adapters pass the typed descriptors
 //! that identify their own configuration contract, so two engines that produce
@@ -22,9 +21,7 @@ use crate::{
     ModuleClass, PreparedGraph, Source, content_hash::sha256_checked,
 };
 
-/// Hash-domain separator. Deliberately disjoint from the v1
-/// `os-tools-gluon-evaluation\0` domain so no v1 aggregate can collide with a
-/// v2 aggregate over otherwise-identical material.
+/// Hash-domain separator for the neutral evaluation identity.
 const IDENTITY_HASH_DOMAIN: &[u8] = b"os-tools-declaration-evaluation\0";
 
 /// Version of the neutral hash encoding itself. Bumping this deliberately

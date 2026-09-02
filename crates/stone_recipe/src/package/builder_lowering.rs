@@ -1,12 +1,11 @@
 //! Language-agnostic structural builder lowering.
 //!
-//! This is the Rust replacement for the former Gluon `cast.builders.*` modules
-//! (`builders/cmake.glu`, `meson.glu`, `cargo.glu`, `autotools.glu`). An authored
-//! recipe — in any configuration language — supplies a minimal [`BuilderRequest`]
-//! (a builder kind plus its flags/features), and this module lowers it into the
-//! fully structural [`BuilderSpec`] the domain and executor consume. Because the
-//! lowering lives here rather than in a config-language module, Gluon and Lua are
-//! interchangeable authoring syntaxes: neither hosts the builder logic.
+//! An authored recipe — in any configuration language — supplies a minimal
+//! [`BuilderRequest`] (a builder kind plus its flags/features), and this module
+//! lowers it into the fully structural [`BuilderSpec`] the domain and executor
+//! consume. Because the lowering lives here rather than in a config-language
+//! module, configuration-language adapters are interchangeable authoring
+//! syntaxes: none of them hosts the builder logic.
 
 use super::{
     BuilderEnvironmentSpec, BuilderSpec, DependencySpec, PhaseSpec, PhasesSpec, StepSpec,
@@ -121,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cmake_lowers_to_the_same_structure_the_gluon_module_produced() {
+    fn cmake_lowers_to_the_full_structural_builder_spec() {
         let spec = lower_builder(BuilderRequest::Cmake {
             flags: vec!["-DBUILD_SHARED_LIBS=ON".to_owned()],
             run_tests: true,

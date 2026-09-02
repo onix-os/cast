@@ -6,30 +6,30 @@ derivation_explain {
   identity {
     cast_version = "0.26.6"
     cast_fingerprint = "sha256:cast"
-    recipe = "a2281e18389f66f5a796f9098fc15b2c11f38985c6a3d80d3eb9acf5a9898e19"
+    recipe = "7c48d863a448f6609d2b7ac53040c7f7bbf2af9360aa16f058f90d08221c2af9"
     source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-    build_lock = "32456c462be2a20abd3717c4dcf9a1a8dbd420c8f1361cc38aed5a0e344bf8ff"
+    build_lock = "e1831b675f96f61e797379311aa680ee543e1c6b5762c5f473e854f5db9b6cd5"
     request = "locked-request-fingerprint"
   }
   recipe_provenance {
     evaluation {
-      root_logical_name = "stone.glu"
-      root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
-      language = "gluon"
+      root_logical_name = "stone.lua"
+      root_source_sha256 = "4fa7d3a58305bee8e0f196d972384ba229c9d86d42d66dcb3b6ad563fc4982fc"
+      language = "lua"
       source_profile = "declaration-v1"
-      engine_implementation = "gluon-vm"
-      engine_version = "0.18.3"
+      engine_implementation = "lua"
+      engine_version = "5.4.7"
       configuration_abi = "cast.configuration"
       configuration_abi_version = "1"
       evaluator_policy = "1"
       resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
       explicit_inputs_sha256 = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-      sha256 = "a2281e18389f66f5a796f9098fc15b2c11f38985c6a3d80d3eb9acf5a9898e19"
+      sha256 = "7c48d863a448f6609d2b7ac53040c7f7bbf2af9360aa16f058f90d08221c2af9"
       modules {
         module 0 {
-          identity = "embedded:fixture.provenance"
+          identity = "fixture.provenance"
           logical_name = "fixture.provenance"
-          sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+          sha256 = "a116ca3f9b3f12f341f5c6cadf066ee59e28ec46cd4f13df0b157593e4fd0a3d"
         }
       }
     }
@@ -66,7 +66,7 @@ derivation_explain {
   resolved_identities {
     policy {
       name = "repository-policy"
-      fingerprint = "afcce8de10267fffaa8bf20970dfb10d3ea6442d8f16a96c030f5bdb12173e94"
+      fingerprint = "a241eebb3f359f089fd384f8a4a89ba6ad7f97c4a1cd1511d38962019a08a5a1"
     }
     target {
       name = "x86_64"
@@ -74,7 +74,7 @@ derivation_explain {
     }
     profile {
       name = "default-x86_64"
-      fingerprint = "837426ad9a89e3a7997cf7734c0bd8317269ad199c69c6f77fd000ed7039a98a"
+      fingerprint = "83183bdd571ffd5a4ef65948b0da67acd927700ca131ec16ce8c3c008434849d"
     }
     toolchain {
       name = "llvm"
@@ -90,23 +90,23 @@ derivation_explain {
       order = 0
       logical_name = "vendor/base"
       evaluation {
-        root_logical_name = "profile.d/base.glu"
-        root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
-        language = "gluon"
+        root_logical_name = "profile.d/base.lua"
+        root_source_sha256 = "4fa7d3a58305bee8e0f196d972384ba229c9d86d42d66dcb3b6ad563fc4982fc"
+        language = "lua"
         source_profile = "declaration-v1"
-        engine_implementation = "gluon-vm"
-        engine_version = "0.18.3"
+        engine_implementation = "lua"
+        engine_version = "5.4.7"
         configuration_abi = "cast.configuration"
         configuration_abi_version = "1"
         evaluator_policy = "1"
         resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
         explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        sha256 = "e7602f5055f5f19ad1d26972502fdeb9692ce2a51df07618cbd8612cbdd3cb8b"
+        sha256 = "16122d0341e105cb7fd1cf55c6b03ca088a3d13845d579ba29b3ab58d56f23d4"
         modules {
           module 0 {
-            identity = "embedded:fixture.provenance"
+            identity = "fixture.provenance"
             logical_name = "fixture.provenance"
-            sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+            sha256 = "a116ca3f9b3f12f341f5c6cadf066ee59e28ec46cd4f13df0b157593e4fd0a3d"
           }
         }
       }
@@ -115,18 +115,18 @@ derivation_explain {
       order = 1
       logical_name = "site/local"
       evaluation {
-        root_logical_name = "profile.d/local.glu"
-        root_source_sha256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
-        language = "gluon"
+        root_logical_name = "profile.d/local.lua"
+        root_source_sha256 = "e115c9b995f74018636bff111f65edb17dc88607987af947e055b0736097ff6e"
+        language = "lua"
         source_profile = "declaration-v1"
-        engine_implementation = "gluon-vm"
-        engine_version = "0.18.3"
+        engine_implementation = "lua"
+        engine_version = "5.4.7"
         configuration_abi = "cast.configuration"
         configuration_abi_version = "1"
         evaluator_policy = "1"
         resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
         explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        sha256 = "ed6ec16d2652bb461269a4d1e203edd788ffb20abf9490380064d850efcd6151"
+        sha256 = "8da1706ba9a91d9e40f066b0dd7e97d655f75df3713e9a15172d659672030b7d"
         modules {
         }
       }
@@ -136,18 +136,18 @@ derivation_explain {
     name = "repository-policy"
     final_root {
       evaluation {
-        root_logical_name = "policy.glu"
-        root_source_sha256 = "71ee45a3c0db9a9865f7313dd3372cf60dca6479d46261f3542eb9346e4a04d6"
-        language = "gluon"
+        root_logical_name = "policy.lua"
+        root_source_sha256 = "578bc8c69725ef285a52520008ac4fcb443845af3b53e70d2591f5ca26716acb"
+        language = "lua"
         source_profile = "declaration-v1"
-        engine_implementation = "gluon-vm"
-        engine_version = "0.18.3"
+        engine_implementation = "lua"
+        engine_version = "5.4.7"
         configuration_abi = "cast.configuration"
         configuration_abi_version = "1"
         evaluator_policy = "1"
         resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
-        explicit_inputs_sha256 = "d2016334fedf9032b9f80d323755e594ae8048000a446bc2a7c1760a9545dd8d"
-        sha256 = "afcce8de10267fffaa8bf20970dfb10d3ea6442d8f16a96c030f5bdb12173e94"
+        explicit_inputs_sha256 = "806a863dfb4d325b508af2bc39fe78db3efdb5bf39af5f0679d5edd3c27ae450"
+        sha256 = "a241eebb3f359f089fd384f8a4a89ba6ad7f97c4a1cd1511d38962019a08a5a1"
         modules {
         }
       }
@@ -162,25 +162,25 @@ derivation_explain {
             entry_order = 0
             global_order = 0
             operation = "add"
-            origin = "default.glu"
+            origin = "default.lua"
             evaluation {
-              root_logical_name = "default.glu"
-              root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
-              language = "gluon"
+              root_logical_name = "default.lua"
+              root_source_sha256 = "4fa7d3a58305bee8e0f196d972384ba229c9d86d42d66dcb3b6ad563fc4982fc"
+              language = "lua"
               source_profile = "declaration-v1"
-              engine_implementation = "gluon-vm"
-              engine_version = "0.18.3"
+              engine_implementation = "lua"
+              engine_version = "5.4.7"
               configuration_abi = "cast.configuration"
               configuration_abi_version = "1"
               evaluator_policy = "1"
               resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
               explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-              sha256 = "c28517daf730dde54735cd3264ecdc70b6914e18414caa390a977d3d2567987d"
+              sha256 = "32e3d925cf6e824a492e3b3bd7d895454c1a4715d781ec14c47bcacd2b6dcf29"
               modules {
                 module 0 {
-                  identity = "embedded:fixture.provenance"
+                  identity = "fixture.provenance"
                   logical_name = "fixture.provenance"
-                  sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+                  sha256 = "a116ca3f9b3f12f341f5c6cadf066ee59e28ec46cd4f13df0b157593e4fd0a3d"
                 }
               }
             }
@@ -202,20 +202,20 @@ derivation_explain {
             entry_order = 0
             global_order = 1
             operation = "modify"
-            origin = "override.glu"
+            origin = "override.lua"
             evaluation {
-              root_logical_name = "override.glu"
-              root_source_sha256 = "44cb730c420480a0477b505ae68af508fb90f96cf0ec54c6ad16949dd427f13a"
-              language = "gluon"
+              root_logical_name = "override.lua"
+              root_source_sha256 = "6d07e1a2e38fc20dafecf9b1e1a65edd9bb9923279aac0a1cea17c75d1ead7dd"
+              language = "lua"
               source_profile = "declaration-v1"
-              engine_implementation = "gluon-vm"
-              engine_version = "0.18.3"
+              engine_implementation = "lua"
+              engine_version = "5.4.7"
               configuration_abi = "cast.configuration"
               configuration_abi_version = "1"
               evaluator_policy = "1"
               resource_policy_sha256 = "d514d31c91444e13197619f083de1aea245051c3b783a62273faca533e49aed5"
               explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-              sha256 = "5960945fc388eef7f4cb2addad8361fd7977a9def3280118d9ff5512d4efc32b"
+              sha256 = "9f85a7f774195289d552f4d7261070dd64ff95f255dbf79205a71ae8832e5b6b"
               modules {
               }
             }
@@ -419,7 +419,7 @@ derivation_explain {
       origins {
         origin 0 {
           kind = "policy"
-          source = "policy.glu"
+          source = "policy.lua"
           field = "build_root.analyzer_tools.llvm.objcopy"
           index = 0
         }
@@ -897,6 +897,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "5775185b6fa14b1b04dbfaa514f559d6acc3afa3bbb6fe878b5e9f878d4b5d6e"
+    derivation_id = "15edbd4bef717087e514521d8cb07539cb9a6755b58dd13bf7a3a021f289b4f5"
   }
 }

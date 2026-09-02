@@ -67,13 +67,13 @@ pub enum Subcommand {
         )]
         recipe: PathBuf,
     },
-    #[command(about = "Suggest a release bump without rewriting authored Gluon")]
+    #[command(about = "Suggest a release bump without rewriting the authored recipe")]
     Bump {
         #[arg(
             short,
             long,
             default_value = "./stone.lua",
-            help = "Authored Gluon recipe to validate and inspect"
+            help = "Authored recipe to validate and inspect"
         )]
         recipe: PathBuf,
         #[arg(
@@ -111,7 +111,7 @@ pub enum Subcommand {
         upstreams: Vec<UpdatedSource>,
         #[arg(
             default_value = "./stone.lua",
-            help = "Authored Gluon recipe to validate and inspect"
+            help = "Authored recipe to validate and inspect"
         )]
         recipe: PathBuf,
         #[arg(
@@ -125,7 +125,7 @@ pub enum Subcommand {
 
 #[derive(Debug, Args)]
 pub struct PlanCommand {
-    #[arg(default_value = "./stone.lua", help = "Authored Gluon package factory")]
+    #[arg(default_value = "./stone.lua", help = "Authored package recipe")]
     recipe: PathBuf,
     #[arg(long, default_value = "default-x86_64", help = "Explicit Cast repository profile")]
     profile: profile::Id,
@@ -146,20 +146,20 @@ pub struct PlanCommand {
     #[arg(
         long,
         default_value_t = false,
-        help = "Resolve and atomically refresh build.lock.glu"
+        help = "Resolve and atomically refresh build.lock.lua"
     )]
     update_lock: bool,
     #[arg(
         long,
         default_value_t = false,
-        help = "Refresh repositories before updating build.lock.glu"
+        help = "Refresh repositories before updating build.lock.lua"
     )]
     refresh_repositories: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct ExplainCommand {
-    #[arg(default_value = "./stone.lua", help = "Authored Gluon package factory")]
+    #[arg(default_value = "./stone.lua", help = "Authored package recipe")]
     recipe: PathBuf,
     #[arg(long, default_value = "default-x86_64", help = "Explicit Cast repository profile")]
     profile: profile::Id,
@@ -291,7 +291,7 @@ fn eval(path: PathBuf) -> Result<(), Error> {
 }
 
 fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
-    let recipe = load_authored_gluon(&recipe)?;
+    let recipe = load_authored_recipe(&recipe)?;
     let previous = u64::try_from(recipe.declaration.meta.release).expect("validated package release");
     let proposed = match release {
         Some(release) => release,
@@ -385,7 +385,7 @@ fn update(
     if version.is_none() && sources.is_empty() {
         return refresh_source_lock(&env, recipe_path);
     }
-    let recipe = load_authored_gluon(recipe_path)?;
+    let recipe = load_authored_recipe(recipe_path)?;
 
     if sources.len() > recipe.declaration.sources.len() {
         return Err(Error::TooManyUpstreamUpdates {
@@ -527,7 +527,7 @@ impl SuggestedChange {
     }
 }
 
-fn load_authored_gluon(path: &Path) -> Result<recipe::Recipe, Error> {
+fn load_authored_recipe(path: &Path) -> Result<recipe::Recipe, Error> {
     let recipe = match recipe::Recipe::load(path) {
         Ok(recipe) => recipe,
         Err(recipe::Error::StaleSourceLock { path, source }) => {
@@ -680,59 +680,62 @@ mod tests {
     use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
 
     use super::*;
-    use crate::source_lock::GluonSourceLockCodec;
+    use crate::source_lock::LuaSourceLockCodec;
 
-    const AUTHORED_EXPRESSION: &str = r#"let a = import! cast.authored.v1
-let release = 1
-let version = "1.2.3"
-{
+    /// An authored recipe whose identity fields are bound to locals rather than
+    /// written as literals: no mechanical rewrite can reach them, so `bump` and
+    /// `update` must ask for a manual edit.
+    const AUTHORED_EXPRESSION: &str = r#"local release = 1
+local version = "1.2.3"
+return {
     meta = {
         pname = "example",
-        version,
-        release,
+        version = version,
+        release = release,
         homepage = "https://example.com",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = { kind = "custom", spec = { required_tools = {}, environment = {}, phases = { setup = { steps = {} }, build = { steps = {} }, install = { steps = {} }, check = { steps = {} }, workload = { steps = {} } }, supported_hooks = { setup = false, build = false, check = false, install = false, workload = false } } },
+    sources = {},
+    native_build_inputs = {},
+    build_inputs = {},
+    check_inputs = {},
+    profiles = {},
+    architectures = {},
+    tuning = {},
+    emul32 = false,
+    mold = false,
 }
 "#;
 
-    const AUTHORED_WITH_ARCHIVE: &str = r#"let a = import! cast.authored.v1
-{
+    const AUTHORED_WITH_ARCHIVE: &str = r#"return {
     meta = {
         pname = "example",
         version = "1.2.3",
         release = 1,
         homepage = "https://example.com",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.custom a.empty.builder,
-    sources = [a.source.archive
-        "https://example.com/source.tar.xz"
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = { kind = "custom", spec = { required_tools = {}, environment = {}, phases = { setup = { steps = {} }, build = { steps = {} }, install = { steps = {} }, check = { steps = {} }, workload = { steps = {} } }, supported_hooks = { setup = false, build = false, check = false, install = false, workload = false } } },
+    sources = {
+        {
+            kind = "archive",
+            url = "https://example.com/source.tar.xz",
+            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            rename = { kind = "none" },
+            strip_dirs = { kind = "none" },
+            unpack = true,
+            unpack_dir = { kind = "none" },
+        },
+    },
+    native_build_inputs = {},
+    build_inputs = {},
+    check_inputs = {},
+    profiles = {},
+    architectures = {},
+    tuning = {},
+    emul32 = false,
+    mold = false,
 }
 "#;
 
@@ -748,7 +751,7 @@ let version = "1.2.3"
     }
 
     #[test]
-    fn all_recipe_inputs_default_to_gluon() {
+    fn all_recipe_inputs_default_to_the_authored_recipe_file() {
         let check = Command::try_parse_from(["recipe", "check"]).unwrap();
         assert!(matches!(
             check.subcommand,
@@ -877,7 +880,7 @@ let version = "1.2.3"
         fs::write(&recipe_path, b"authored bytes").unwrap();
         let drafted = Cell::new(false);
 
-        let error = generate_new_recipe(root.path(), "stone.glu", || {
+        let error = generate_new_recipe(root.path(), "stone.lua", || {
             drafted.set(true);
             Ok(draft::Draft {
                 stone: "replacement".to_owned(),
@@ -895,7 +898,7 @@ let version = "1.2.3"
         let root = tempfile::tempdir().unwrap();
         let recipe_path = root.path().join("stone.lua");
 
-        let error = generate_new_recipe(root.path(), "stone.glu", || {
+        let error = generate_new_recipe(root.path(), "stone.lua", || {
             fs::write(&recipe_path, b"raced bytes").unwrap();
             Ok(draft::Draft {
                 stone: "generated replacement".to_owned(),
@@ -936,7 +939,7 @@ let version = "1.2.3"
             &lock_path,
             format!(
                 "{}stale generated bytes",
-                crate::source_lock::GENERATED_GLUON_MARKER
+                lua_config::GENERATED_LUA_MARKER
             ),
         )
         .unwrap();
@@ -946,7 +949,7 @@ let version = "1.2.3"
         let first_metadata = fs::metadata(&lock_path).unwrap();
         let lock_bytes = fs::read(&lock_path).unwrap();
         let lock_source = std::str::from_utf8(&lock_bytes).unwrap();
-        let lock = GluonSourceLockCodec::default()
+        let lock = LuaSourceLockCodec::default()
             .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, lock_source))
             .unwrap()
             .value;
@@ -974,7 +977,7 @@ let version = "1.2.3"
             url: "https://example.com/source.tar.xz".to_owned(),
             sha256: "b".repeat(64),
         })]);
-        let encoded = GluonSourceLockCodec::default().encode(&lock).unwrap();
+        let encoded = LuaSourceLockCodec::default().encode(&lock).unwrap();
         fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), encoded).unwrap();
 
         let error = bump(path.clone(), None).unwrap_err();

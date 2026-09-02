@@ -873,7 +873,7 @@ pub enum Error {
     Cancelled,
     #[error("protect state mutation from interruption")]
     BlitSignalIgnore(#[from] signal::Error),
-    #[error("load Gluon system intent or generated state snapshot")]
+    #[error("load authored system intent or generated state snapshot")]
     LoadSystemModel(#[from] system_model::LoadError),
     #[error("update system model")]
     UpdateSystemModel(#[from] system_model::UpdateError),
@@ -897,7 +897,7 @@ pub enum Error {
     Fetch(#[source] Box<fetch::Error>),
     #[error("sync")]
     Sync(#[source] Box<sync::Error>),
-    #[error("Gluon system intent doesn't exist at {0:?}")]
+    #[error("system intent doesn't exist at {0:?}")]
     ImportSystemIntentDoesntExist(PathBuf),
     #[error("journal-coordinated new state")]
     CoordinatedNewState(#[source] Box<dyn std::error::Error + Send + Sync>),

@@ -38,9 +38,6 @@ fnmatch = { path = "../../crates/fnmatch" }
 filetime.workspace = true
 fs-err.workspace = true
 futures-util.workspace = true
-gluon.workspace = true
-gluon_codegen.workspace = true
-gluon_config = { path = "../../crates/gluon_config" }
 hex.workspace = true
 indexmap.workspace = true
 libsqlite3-sys.workspace = true

@@ -12,10 +12,7 @@ rust-version.workspace = true
 [dependencies]
 declarative_config.path = "../declarative_config"
 glob.workspace = true
-gluon.workspace = true
-gluon_codegen.workspace = true
 lua_config.path = "../lua_config"
-gluon_config.path = "../gluon_config"
 regex.workspace = true
 serde.workspace = true
 sha2.workspace = true

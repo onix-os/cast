@@ -22,7 +22,6 @@ const BASE_FILES: &[(&str, &str)] = &[
     ("crates/stone/Cargo.toml", "[package]\nname = \"stone\"\n"),
     ("crates/stone/build.rs", "fn main() {}\n"),
     ("crates/stone/src/lib.rs", "pub fn read() {}\n"),
-    ("crates/stone/gluon/stone.glu", "{ format = 1 }\n"),
 ];
 
 fn write(root: &Path, relative: &str, contents: &str) {

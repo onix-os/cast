@@ -1,4 +1,3 @@
--- Paired Lua form of docs/examples/gluon/system.glu (Phase L7).
 return {
     disable_warning = false,
     repositories = {

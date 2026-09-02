@@ -1,6 +1,6 @@
 //! Explicit, ordered repository build policy.
 //!
-//! Cast evaluates one authored Gluon manifest and applies exactly the
+//! Cast evaluates one authored manifest and applies exactly the
 //! modules named by that manifest. Directory contents and filesystem order
 //! never participate in composition.
 
@@ -13,10 +13,10 @@ use declarative_config::{
 use declarative_config::Diagnostic;
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicyEvaluator, BuildPolicyPatchSpec, BuildPolicySpec,
-    GluonBuildPolicyEvaluator, LuaBuildPolicyEvaluator, TargetPolicySpec,
+    LuaBuildPolicyEvaluator, TargetPolicySpec,
     layers::{
         BuildPolicyOperation, BuildPolicyRootConversionError,
-        BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
+        BuildPolicyRootSpec, LuaBuildPolicyRootEvaluator,
     },
 };
 use stone_recipe::derivation::{
@@ -47,8 +47,8 @@ impl BuildPolicy {
             manifest,
         } = root_declaration::load(policy_dir)?;
         let root_evaluator =
-            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
-                &GluonBuildPolicyRootEvaluator::default(),
+            <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
+                &LuaBuildPolicyRootEvaluator::default(),
                 source_root.clone(),
             );
         let mut layers = Vec::with_capacity(manifest.layers.len());
@@ -82,7 +82,7 @@ impl BuildPolicy {
         })?;
         let identity_inputs = policy_composition_identity(&manifest.name, &layers);
         let finalized_root =
-            <GluonBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
+            <LuaBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
                 &root_evaluator,
                 &root_source,
                 &identity_inputs,
@@ -131,17 +131,13 @@ impl BuildPolicy {
     }
 }
 
-/// Select the layer language by a layer file's extension, source-rooted so its
-/// (currently unused for `.lua`) imports resolve beneath the policy directory.
-/// A `.lua` layer decodes through the Lua adapter; anything else is Gluon.
-fn build_policy_evaluator_for(origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
-    let evaluator = if Path::new(origin).extension().and_then(|extension| extension.to_str())
-        == Some("lua")
-    {
-        BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default())
-    } else {
-        BuildPolicyEvaluator::Gluon(GluonBuildPolicyEvaluator::default())
-    };
+/// Build the layer evaluator, source-rooted so its imports resolve beneath the
+/// policy directory.
+///
+/// `origin` names the layer file whose language this selects; with one
+/// registered language every layer decodes through the Lua adapter.
+fn build_policy_evaluator_for(_origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
+    let evaluator = BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default());
     <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
         &evaluator,
         source_root.clone(),
@@ -271,7 +267,7 @@ fn apply_entry(
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("prepare build-policy Gluon source root {path:?}")]
+    #[error("prepare build-policy source root {path:?}")]
     SourceRoot {
         path: PathBuf,
         #[source]
@@ -375,32 +371,55 @@ mod tests {
 
     use super::*;
 
-    /// The shipped manifest — its foundation layer is Lua (`default.lua`).
-    const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.glu");
+    /// The shipped manifest — its foundation layer is `default.lua`.
+    const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.lua");
     /// The shipped Lua policy authority Cast loads.
     const REPOSITORY_DEFAULT_LUA: &str = include_str!("../data/policy/default.lua");
-    /// The retained Gluon policy + tuning catalogs, kept as the full-parity
-    /// composition-test fixtures and the source for regenerating `default.lua`.
-    const REPOSITORY_DEFAULT: &str = include_str!("../data/policy/default.glu");
-    const REPOSITORY_TUNING_FLAGS: &str = include_str!("../data/policy/tuning/flags.glu");
-    const REPOSITORY_TUNING_GROUPS: &str = include_str!("../data/policy/tuning/groups.glu");
-    /// An explicit Gluon foundation manifest, so composition-mechanics tests keep
-    /// exercising the modular Gluon path (module fingerprints, tuning-byte
-    /// participation) independently of the shipped Lua authority.
-    const GLUON_MANIFEST: &str = "let l = import! cast.build_policy.layers.v1\n\
-l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     fn fixture(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("tuning")).unwrap();
-        fs::write(root.path().join("policy.glu"), manifest).unwrap();
-        // Both authorities are present; the manifest chooses which is loaded, so
-        // Lua and Gluon manifests both resolve without a same-slot collision.
+        fs::write(root.path().join("policy.lua"), manifest).unwrap();
         fs::write(root.path().join("default.lua"), REPOSITORY_DEFAULT_LUA).unwrap();
-        fs::write(root.path().join("default.glu"), REPOSITORY_DEFAULT).unwrap();
-        fs::write(root.path().join("tuning/flags.glu"), REPOSITORY_TUNING_FLAGS).unwrap();
-        fs::write(root.path().join("tuning/groups.glu"), REPOSITORY_TUNING_GROUPS).unwrap();
         root
+    }
+
+    /// A layer manifest naming one operation per entry.
+    fn manifest(name: &str, layers: &[(&str, &[(&str, &str)])]) -> String {
+        let mut output = format!("return {{\n    name = {name:?},\n    layers = {{\n");
+        for (layer, entries) in layers {
+            output.push_str(&format!("        {{ name = {layer:?}, entries = {{ "));
+            for (operation, origin) in *entries {
+                output.push_str(&format!(
+                    "{{ operation = {{ kind = {operation:?} }}, origin = {origin:?} }}, "
+                ));
+            }
+            output.push_str("} },\n");
+        }
+        output.push_str("    },\n}\n");
+        output
+    }
+
+    /// A sparse policy patch: every field keeps its base value except
+    /// `build_subdir`. Patch fields are total, so each one is named.
+    fn build_subdir_patch(value: &str) -> String {
+        format!(
+            r#"return {{
+    build_subdir = {{ kind = "set", value = {value:?} }},
+    layout = {{ kind = "keep" }},
+    toolchains = {{ kind = "keep" }},
+    targets = {{ kind = "keep" }},
+    retired_targets = {{ kind = "keep" }},
+    sandbox = {{ kind = "keep" }},
+    build_root = {{ kind = "keep" }},
+    sources = {{ kind = "keep" }},
+    tuning = {{ kind = "keep" }},
+    environment = {{ kind = "keep" }},
+    builders = {{ kind = "keep" }},
+    analyzers = {{ kind = "keep" }},
+    pgo = {{ kind = "keep" }},
+}}
+"#
+        )
     }
 
     fn composition_digest(provenance: &PolicyProvenance) -> String {
@@ -413,7 +432,7 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
     /// The real shipped repository policy — `default.glu` plus the two large
     /// tuning catalogs it imports (`tuning/flags.glu`, `tuning/groups.glu`) —
     /// re-encodes to generated Lua and decodes back to an equal spec. This
-    /// pairs those authored Gluon files with the build-policy write path,
+    /// pairs those authored files with the build-policy write path,
     /// proving a generated-slot switch could reproduce them as `policy.lua`.
     #[test]
     fn the_repository_policy_round_trips_through_the_lua_emitter() {
@@ -472,7 +491,10 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
         let policy = BuildPolicy::repository_for_tests();
 
         assert_eq!(policy.provenance.name, "aerynos");
-        assert_eq!(policy.provenance.root.root_logical_name, "policy.glu");
+        assert_eq!(
+            policy.provenance.root.root_logical_name,
+            root_declaration::POLICY_ROOT_LOGICAL_NAME
+        );
         assert_eq!(policy.spec.build_subdir, "aerynos-builddir");
         assert_eq!(
             policy.target("x86_64").unwrap().target_triple,
@@ -502,34 +524,31 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
         let policy = BuildPolicy::repository_for_tests();
         let root = &policy.provenance.root;
 
-        assert_eq!(root.root_logical_name, "policy.glu");
+        assert_eq!(root.root_logical_name, root_declaration::POLICY_ROOT_LOGICAL_NAME);
         assert_eq!(
             root.root_source_sha256,
-            "d68e48f2314fd0ffc9e651a630cf982270d140650185ec766522c100991c1603"
+            "e909010ddbbc85a0676cb4e35e73f143441aeb873ed83fe2557fd3e5b01df7ff"
         );
-        assert_eq!(
-            root.modules
-                .iter()
-                .map(|module| (module.logical_name.as_str(), module.sha256.as_str()))
-                .collect::<Vec<_>>(),
-            [(
-                "cast.build_policy.layers.v1",
-                "c70b6d7a4f816d639615f034c84fefb0d3c4918db657c124987f7f37a3bdd064"
-            )]
+        assert!(
+            root.modules.is_empty(),
+            "the Lua policy manifest resolves no modules"
         );
-        assert_eq!(root.language.as_str(), "gluon");
-        assert_eq!(root.engine.implementation(), "gluon-vm");
-        assert_eq!(root.engine.version(), "0.18.3");
+        assert_eq!(root.language.as_str(), "lua");
+        assert_eq!(root.engine.implementation(), "lua");
+        assert_eq!(root.engine.version(), lua_config::LUA_VERSION);
         assert_eq!(root.configuration_abi.name(), "cast.configuration");
-        assert_eq!(root.configuration_abi.version(), "1");
-        assert_eq!(root.evaluator_policy.as_str(), "1");
         assert_eq!(
-            root.explicit_inputs_sha256,
-            "540d2eff1f8acc28ab4f2603f2358c23ae56ebd14ee43e23bb4f38c0c48168dd"
+            root.configuration_abi.version(),
+            lua_config::CONFIGURATION_ABI_VERSION.to_string()
         );
+        assert_eq!(
+            root.evaluator_policy.as_str(),
+            lua_config::EVALUATOR_POLICY_VERSION.to_string()
+        );
+        assert_eq!(root.explicit_inputs_sha256, composition_digest(&policy.provenance));
         assert_eq!(
             root.sha256,
-            "3ce322766ab642e15858609088f47279fd264f2fc33226616ad5623a9d639c77"
+            "8b761e7334acc2e094e6b02cc345bd99a30f914490e733989baf7c6955918d9b"
         );
         root.validate().unwrap();
     }
@@ -562,18 +581,14 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
     #[test]
     fn retains_complete_manifest_and_transition_evaluation_provenance() {
         let policy = BuildPolicy::repository_for_tests();
+        // Both the manifest and the foundation layer it names are
+        // self-contained Lua authorities: they are evaluated by the Lua engine
+        // and import nothing, so neither carries module provenance (the tuning
+        // catalogs are inlined into the layer).
         assert!(
-            policy
-                .provenance
-                .root
-                .modules
-                .iter()
-                .any(|module| module.logical_name == "cast.build_policy.layers.v1")
+            policy.provenance.root.modules.is_empty(),
+            "the Lua policy manifest imports nothing"
         );
-        // The shipped foundation layer is now the self-contained Lua authority:
-        // it is evaluated by the Lua engine and imports nothing, so its
-        // transition provenance carries no modules (the tuning catalogs are
-        // inlined). The Gluon manifest still binds its own layers ABI module.
         let transition = &policy.provenance.layers[0].transitions[0];
         assert_eq!(transition.evaluation.root_logical_name, "default.lua");
         assert_eq!(transition.evaluation.root_source_sha256.len(), 64);
@@ -596,15 +611,13 @@ l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     #[test]
     fn preserves_named_empty_layers_in_manifest_order_and_v2_identity() {
-        let root = fixture(
-            r#"
-let l = import! cast.build_policy.layers.v1
-l.policy "empty-layer-policy" [
-    l.layer "foundation" [l.add "default.glu"],
-    l.layer "reserved-site-layer" [],
-]
-"#,
-        );
+        let root = fixture(&manifest(
+            "empty-layer-policy",
+            &[
+                ("foundation", &[("add", "default.lua")]),
+                ("reserved-site-layer", &[]),
+            ],
+        ));
 
         let policy = BuildPolicy::load_from(root.path()).unwrap();
 
@@ -626,32 +639,17 @@ l.policy "empty-layer-policy" [
 
     #[test]
     fn applies_add_modify_and_replace_in_authored_order() {
-        let root = fixture(
-            r#"
-let l = import! cast.build_policy.layers.v1
-l.policy "test-policy" [
-    l.layer "foundation" [l.add "default.glu"],
-    l.layer "site" [
-        l.modify "modify.glu",
-        l.replace "replacement.glu",
-    ],
-]
-"#,
-        );
+        let root = fixture(&manifest(
+            "test-policy",
+            &[
+                ("foundation", &[("add", "default.lua")]),
+                ("site", &[("modify", "modify.lua"), ("replace", "replacement.lua")]),
+            ],
+        ));
+        fs::write(root.path().join("modify.lua"), build_subdir_patch("modified-builddir")).unwrap();
         fs::write(
-            root.path().join("modify.glu"),
-            r#"
-let b = import! cast.build_policy.v5
-b.policy_patch {
-    build_subdir = b.patch.set "modified-builddir",
-    .. b.defaults.policy_patch
-}
-"#,
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("replacement.glu"),
-            REPOSITORY_DEFAULT.replace("aerynos-builddir", "final-builddir"),
+            root.path().join("replacement.lua"),
+            REPOSITORY_DEFAULT_LUA.replace("aerynos-builddir", "final-builddir"),
         )
         .unwrap();
 
@@ -673,28 +671,23 @@ b.policy_patch {
             ]
         );
         assert_eq!(policy.provenance.layers[1].name, "site");
-        assert_eq!(policy.provenance.layers[1].transitions[0].origin, "modify.glu");
+        assert_eq!(policy.provenance.layers[1].transitions[0].origin, "modify.lua");
     }
 
     #[test]
     fn rejects_each_invalid_state_transition_with_context() {
         let cases = [
             (
-                "l.add \"default.glu\", l.add \"default.glu\"",
+                &[("add", "default.lua"), ("add", "default.lua")][..],
                 BuildPolicyOperation::Add,
                 1,
             ),
-            ("l.replace \"default.glu\"", BuildPolicyOperation::Replace, 0),
-            ("l.modify \"modify.glu\"", BuildPolicyOperation::Modify, 0),
+            (&[("replace", "default.lua")][..], BuildPolicyOperation::Replace, 0),
+            (&[("modify", "modify.lua")][..], BuildPolicyOperation::Modify, 0),
         ];
         for (entries, expected_operation, expected_order) in cases {
-            let root = fixture(&format!(
-                r#"
-let l = import! cast.build_policy.layers.v1
-l.policy "strict-policy" [l.layer "strict-layer" [{entries}]]
-"#
-            ));
-            fs::write(root.path().join("modify.glu"), "not reached").unwrap();
+            let root = fixture(&manifest("strict-policy", &[("strict-layer", entries)]));
+            fs::write(root.path().join("modify.lua"), "not reached").unwrap();
 
             let error = BuildPolicy::load_from(root.path()).unwrap_err();
             assert!(matches!(
@@ -720,26 +713,11 @@ l.policy "strict-policy" [l.layer "strict-layer" [{entries}]]
 
     #[test]
     fn rejects_invalid_intermediate_patch_with_operation_context() {
-        let root = fixture(
-            r#"
-let l = import! cast.build_policy.layers.v1
-l.policy "validated-policy" [l.layer "site" [
-    l.add "default.glu",
-    l.modify "invalid.glu",
-]]
-"#,
-        );
-        fs::write(
-            root.path().join("invalid.glu"),
-            r#"
-let b = import! cast.build_policy.v5
-b.policy_patch {
-    build_subdir = b.patch.set "",
-    .. b.defaults.policy_patch
-}
-"#,
-        )
-        .unwrap();
+        let root = fixture(&manifest(
+            "validated-policy",
+            &[("site", &[("add", "default.lua"), ("modify", "invalid.lua")])],
+        ));
+        fs::write(root.path().join("invalid.lua"), build_subdir_patch("")).unwrap();
 
         let error = BuildPolicy::load_from(root.path()).unwrap_err();
         assert!(matches!(
@@ -753,87 +731,14 @@ b.policy_patch {
                 operation: BuildPolicyOperation::Modify,
                 origin,
                 ..
-            } if policy == "validated-policy" && layer == "site" && origin == "invalid.glu"
+            } if policy == "validated-policy" && layer == "site" && origin == "invalid.lua"
         ));
-    }
-
-    #[test]
-    fn composed_identity_binds_manifest_order_and_complete_module_fingerprints() {
-        // Gluon composition-mechanics: exercise the modular foundation so a
-        // change to `default.glu`'s bytes alters the transition and composed
-        // identity while the normalized spec is unchanged.
-        let first_root = fixture(GLUON_MANIFEST);
-        let repeated_root = fixture(GLUON_MANIFEST);
-        let changed_root = fixture(GLUON_MANIFEST);
-        fs::write(
-            changed_root.path().join("default.glu"),
-            format!("{REPOSITORY_DEFAULT}\n// identity-only source change\n"),
-        )
-        .unwrap();
-
-        let first = BuildPolicy::load_from(first_root.path()).unwrap();
-        let repeated = BuildPolicy::load_from(repeated_root.path()).unwrap();
-        let changed = BuildPolicy::load_from(changed_root.path()).unwrap();
-
-        assert_eq!(first.spec, repeated.spec);
-        assert_eq!(first.provenance.root.sha256, repeated.provenance.root.sha256);
-        assert_eq!(first.spec, changed.spec);
-        assert_ne!(
-            first.provenance.layers[0].transitions[0].evaluation.sha256,
-            changed.provenance.layers[0].transitions[0].evaluation.sha256
-        );
-        assert_ne!(first.provenance.root.sha256, changed.provenance.root.sha256);
-        assert_eq!(first.provenance.root.root_logical_name, "policy.glu");
-        assert_eq!(
-            first.provenance.root.explicit_inputs_sha256,
-            composition_digest(&first.provenance)
-        );
-    }
-
-    #[test]
-    fn tuning_module_bytes_participate_in_transition_and_composed_identity() {
-        for (logical_name, source) in [
-            ("tuning/flags.glu", REPOSITORY_TUNING_FLAGS),
-            ("tuning/groups.glu", REPOSITORY_TUNING_GROUPS),
-        ] {
-            // Gluon composition: `default.glu` imports the tuning modules, so a
-            // tuning-byte change must alter the transition's module fingerprint
-            // and the composed identity. (The shipped Lua authority inlines
-            // tuning; that parity is proved by the round-trip test instead.)
-            let baseline_root = fixture(GLUON_MANIFEST);
-            let changed_root = fixture(GLUON_MANIFEST);
-            fs::write(
-                changed_root.path().join(logical_name),
-                format!("{source}\n// identity-only module change\n"),
-            )
-            .unwrap();
-
-            let baseline = BuildPolicy::load_from(baseline_root.path()).unwrap();
-            let changed = BuildPolicy::load_from(changed_root.path()).unwrap();
-            let baseline_transition = &baseline.provenance.layers[0].transitions[0].evaluation;
-            let changed_transition = &changed.provenance.layers[0].transitions[0].evaluation;
-            let baseline_module = baseline_transition
-                .modules
-                .iter()
-                .find(|module| module.logical_name == logical_name)
-                .unwrap();
-            let changed_module = changed_transition
-                .modules
-                .iter()
-                .find(|module| module.logical_name == logical_name)
-                .unwrap();
-
-            assert_eq!(baseline.spec, changed.spec);
-            assert_ne!(baseline_module.sha256, changed_module.sha256);
-            assert_ne!(baseline_transition.sha256, changed_transition.sha256);
-            assert_ne!(baseline.provenance.root.sha256, changed.provenance.root.sha256);
-        }
     }
 
     #[test]
     fn ignores_undeclared_neighbor_files() {
         let root = fixture(REPOSITORY_MANIFEST);
-        fs::write(root.path().join("ignored.glu"), "not valid Gluon").unwrap();
+        fs::write(root.path().join("ignored.lua"), "not valid Lua").unwrap();
 
         let policy = BuildPolicy::load_from(root.path()).unwrap();
 
@@ -862,11 +767,11 @@ b.policy_patch {
     #[test]
     fn registered_root_discovery_preserves_v1_name_and_exact_source_bytes() {
         let manifest = format!(
-            "{REPOSITORY_MANIFEST}\n// fixed-root discovery identity sentinel\n"
+            "{REPOSITORY_MANIFEST}\n-- fixed-root discovery identity sentinel\n"
         );
         let root = fixture(&manifest);
         fs::write(
-            root.path().join("policy.lua"),
+            root.path().join("policy.glu"),
             "this unregistered neighbor must never be inspected",
         )
         .unwrap();
@@ -889,17 +794,17 @@ b.policy_patch {
         use std::os::unix::fs::symlink;
 
         let root = fixture(REPOSITORY_MANIFEST);
-        fs::remove_file(root.path().join("policy.glu")).unwrap();
-        fs::write(root.path().join("policy-target.glu"), REPOSITORY_MANIFEST)
+        fs::remove_file(root.path().join("policy.lua")).unwrap();
+        fs::write(root.path().join("policy-target.lua"), REPOSITORY_MANIFEST)
             .unwrap();
-        symlink("policy-target.glu", root.path().join("policy.glu")).unwrap();
+        symlink("policy-target.lua", root.path().join("policy.lua")).unwrap();
         let expected = SourceRoot::new(root.path())
             .unwrap()
             .load(
-                "policy.glu",
-                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                "policy.lua",
+                <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<
                     BuildPolicyRootSpec,
-                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                >>::limits(&LuaBuildPolicyRootEvaluator::default())
                 .max_source_bytes,
             )
             .unwrap_err();
@@ -908,7 +813,7 @@ b.policy_patch {
 
         match error {
             Error::LoadRoot { path, source } => {
-                assert_eq!(path, root.path().join("policy.glu"));
+                assert_eq!(path, root.path().join("policy.lua"));
                 assert_same_diagnostic(&source, &expected);
             }
             error => panic!("expected legacy LoadRoot error, found {error:?}"),
@@ -935,14 +840,14 @@ b.policy_patch {
     #[test]
     fn registered_root_discovery_preserves_missing_manifest_diagnostics() {
         let root = fixture(REPOSITORY_MANIFEST);
-        fs::remove_file(root.path().join("policy.glu")).unwrap();
+        fs::remove_file(root.path().join("policy.lua")).unwrap();
         let expected = SourceRoot::new(root.path())
             .unwrap()
             .load(
-                "policy.glu",
-                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                "policy.lua",
+                <LuaBuildPolicyRootEvaluator as DeclarationEvaluator<
                     BuildPolicyRootSpec,
-                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                >>::limits(&LuaBuildPolicyRootEvaluator::default())
                 .max_source_bytes,
             )
             .unwrap_err();
@@ -951,7 +856,7 @@ b.policy_patch {
 
         match error {
             Error::LoadRoot { path, source } => {
-                assert_eq!(path, root.path().join("policy.glu"));
+                assert_eq!(path, root.path().join("policy.lua"));
                 assert_same_diagnostic(&source, &expected);
             }
             error => panic!("expected legacy LoadRoot error, found {error:?}"),
@@ -973,24 +878,30 @@ b.policy_patch {
         assert_eq!(through_link, direct);
     }
 
+    /// A malformed manifest reaches the caller as the engine's own diagnostic,
+    /// carrying the root slot's logical name and the position evidence the
+    /// parser produced.
     #[test]
-    fn registered_root_discovery_preserves_gluon_diagnostics() {
-        let root = fixture("let value = in value");
+    fn registered_root_discovery_preserves_engine_diagnostics() {
+        let root = fixture("return { name = ");
 
         let error = BuildPolicy::load_from(root.path()).unwrap_err();
 
-        assert!(matches!(
-            error,
-            Error::EvaluateRoot { path, source }
-                if path == root.path().join("policy.glu")
-                    && matches!(
-                        *source,
-                        DeclarationEvaluationError::Evaluation(Diagnostic {
-                            category: declarative_config::DiagnosticCategory::Parse,
-                            source_name: Some(ref source_name),
-                            ..
-                        }) if source_name == root_declaration::POLICY_ROOT_LOGICAL_NAME
-                    )
-        ));
+        let Error::EvaluateRoot { path, source } = error else {
+            panic!("expected an EvaluateRoot error, found {error:?}");
+        };
+        assert_eq!(path, root.path().join("policy.lua"));
+        let DeclarationEvaluationError::Evaluation(diagnostic) = *source else {
+            panic!("expected an engine diagnostic, found {source:?}");
+        };
+        assert_eq!(
+            diagnostic.source_name.as_deref(),
+            Some(root_declaration::POLICY_ROOT_LOGICAL_NAME)
+        );
+        assert!(diagnostic.span.is_some(), "the parser's span is preserved");
+        assert!(
+            diagnostic.message.contains("does not parse"),
+            "unexpected diagnostic {diagnostic:?}"
+        );
     }
 }

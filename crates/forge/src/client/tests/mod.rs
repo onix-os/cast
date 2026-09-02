@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use gluon_config::Source;
+use declarative_config::Source;
 
 use super::*;
 use crate::test_support::prepare_private_installation_root;
@@ -245,7 +245,7 @@ fn generated_system_snapshot(package: &str) -> SystemModel {
 
 fn assert_generated_snapshot(path: &Path, expected: &str, package: &str) {
     let encoded = fs::read_to_string(path).unwrap();
-    let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.glu", encoded.clone())).unwrap();
+    let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.lua", encoded.clone())).unwrap();
 
     assert_eq!(encoded, expected);
     assert_eq!(evaluated.encoded(), encoded);

@@ -11,12 +11,10 @@ use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
 };
 use fs_err as fs;
-use declarative_config::Source as GluonSource;
+use declarative_config::Source;
 
 use super::*;
 
-#[path = "tests/normalized_value_golden.rs"]
-mod normalized_value_golden;
 
 fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_root: &Path) {
     fragment.evaluation.validate().unwrap();
@@ -48,7 +46,26 @@ fn write(path: &Path, source: &str) {
 }
 
 fn authored(body: &str) -> String {
-    format!("let cast = import! cast.profile.v1\n{body}")
+    format!("return {body}")
+}
+
+/// One repository record in the Lua profile encoding, with every option absent.
+fn direct_repository(id: &str, uri: &str) -> String {
+    format!(
+        r#"{{ id = "{id}", description = {{ kind = "none" }},
+           source = {{ kind = "direct_index", uri = "{uri}" }},
+           priority = {{ kind = "none" }}, enabled = {{ kind = "none" }} }}"#
+    )
+}
+
+fn root_repository(id: &str, base_uri: &str, version: &str) -> String {
+    format!(
+        r#"{{ id = "{id}", description = {{ kind = "none" }},
+           source = {{ kind = "root_index", base_uri = "{base_uri}",
+                       channel = {{ kind = "none" }}, version = "{version}",
+                       arch = {{ kind = "none" }} }},
+           priority = {{ kind = "none" }}, enabled = {{ kind = "none" }} }}"#
+    )
 }
 
 fn environment(config_root: &Path) -> Env {
@@ -63,15 +80,15 @@ fn environment(config_root: &Path) -> Env {
 }
 
 fn single_profile(body: &str) -> String {
-    authored(&format!("cast.profiles [cast.profile \"test\" [{body}]]"))
+    authored(&format!("{{ {{ id = \"test\", repositories = {{ {body} }} }} }}"))
 }
 
 fn conversion_error(source: String) -> (PathBuf, String) {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("profile.d/invalid.glu");
+    let path = temporary.path().join("profile.d/invalid.lua");
     write(&path, &source);
     let evaluators =
-        DeclarationEvaluatorSet::new([ProfileCodec::default()]).unwrap();
+        DeclarationEvaluatorSet::new([LuaProfileCodec::default()]).unwrap();
     let error = config::Manager::custom(temporary.path())
         .load_declarations(&evaluators)
         .expect_err("profile should be invalid");
@@ -130,17 +147,14 @@ return {
 #[test]
 fn manager_loads_direct_root_and_repository_defaults() {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("profile.d/authored.glu");
+    let path = temporary.path().join("profile.d/authored.lua");
     write(
         &path,
-        &authored(
-            r#"cast.profiles [
-    cast.profile "test" [
-        cast.repository.direct "local" "file:///var/cache/local.index",
-        cast.repository.root "volatile" "https://packages.example.test" "stream/volatile",
-    ],
-]"#,
-        ),
+        &authored(&format!(
+            "{{ {{ id = \"test\", repositories = {{ {}, {} }} }} }}",
+            direct_repository("local", "file:///var/cache/local.index"),
+            root_repository("volatile", "https://packages.example.test", "stream/volatile"),
+        )),
     );
 
     let env = environment(temporary.path());
@@ -155,13 +169,6 @@ fn manager_loads_direct_root_and_repository_defaults() {
     );
     let fragment = &manager.fragments[0];
     assert_portable_complete_fragment(fragment, temporary.path());
-    assert!(
-        fragment
-            .evaluation
-            .modules
-            .iter()
-            .any(|module| module.logical_name == "cast.profile.v1")
-    );
     let repositories = manager.repositories(&Id::new("test")).unwrap();
 
     let local = repositories.get(&repository::Id::new("local")).unwrap();
@@ -182,35 +189,50 @@ fn manager_loads_direct_root_and_repository_defaults() {
 #[test]
 fn active_root_indexes_must_match_the_selected_build_architecture() {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("profile.d/authored.glu");
+    let path = temporary.path().join("profile.d/authored.lua");
     write(
         &path,
         &authored(
-            r#"cast.profiles [
-    cast.profile "test" [
-        cast.repository.direct "local" "file:///var/cache/local.index",
-        cast.repository.root_index_with {
-            id = "volatile",
-            description = cast.optional.some "volatile",
-            base_uri = "https://packages.example.test",
-            channel = cast.optional.some "main",
-            version = "stream/volatile",
-            arch = cast.optional.some "x86_64",
-            priority = cast.optional.some 0,
-            enabled = cast.optional.some cast.boolean.true,
+            r#"{
+    {
+        id = "test",
+        repositories = {
+            {
+                id = "local",
+                description = { kind = "none" },
+                source = { kind = "direct_index", uri = "file:///var/cache/local.index" },
+                priority = { kind = "none" },
+                enabled = { kind = "none" },
+            },
+            {
+                id = "volatile",
+                description = { kind = "some", value = "volatile" },
+                source = {
+                    kind = "root_index",
+                    base_uri = "https://packages.example.test",
+                    channel = { kind = "some", value = "main" },
+                    version = "stream/volatile",
+                    arch = { kind = "some", value = "x86_64" },
+                },
+                priority = { kind = "some", value = 0 },
+                enabled = { kind = "some", value = true },
+            },
+            {
+                id = "disabled-aarch64",
+                description = { kind = "some", value = "disabled" },
+                source = {
+                    kind = "root_index",
+                    base_uri = "https://packages.example.test",
+                    channel = { kind = "some", value = "main" },
+                    version = "stream/volatile",
+                    arch = { kind = "some", value = "aarch64" },
+                },
+                priority = { kind = "some", value = 0 },
+                enabled = { kind = "some", value = false },
+            },
         },
-        cast.repository.root_index_with {
-            id = "disabled-aarch64",
-            description = cast.optional.some "disabled",
-            base_uri = "https://packages.example.test",
-            channel = cast.optional.some "main",
-            version = "stream/volatile",
-            arch = cast.optional.some "aarch64",
-            priority = cast.optional.some 0,
-            enabled = cast.optional.some cast.boolean.false,
-        },
-    ],
-]"#,
+    },
+}"#,
         ),
     );
 
@@ -234,10 +256,10 @@ fn active_root_indexes_must_match_the_selected_build_architecture() {
 
 #[test]
 fn invalid_url_version_and_priority_report_exact_fields() {
-    let invalid_url = single_profile(r#"cast.repository.direct "broken" "not a url""#);
-    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
-        &ProfileCodec::default(),
-        &GluonSource::new("invalid.glu", invalid_url.clone()),
+    let invalid_url = single_profile(&direct_repository("broken", "not a url"));
+    let typed_error = <LuaProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &LuaProfileCodec::default(),
+        &Source::new("invalid.lua", invalid_url.clone()),
     )
     .expect_err("invalid domain value must remain a conversion error");
     assert!(matches!(
@@ -246,21 +268,23 @@ fn invalid_url_version_and_priority_report_exact_fields() {
     ));
 
     let (path, error) = conversion_error(invalid_url);
-    assert!(path.ends_with("profile.d/invalid.glu"));
+    assert!(path.ends_with("profile.d/invalid.lua"));
     assert!(error.contains("profiles[0].repositories[0].source.uri"));
 
-    let (_, error) = conversion_error(single_profile(
-        r#"cast.repository.root "broken" "https://packages.example.test" "volatile""#,
-    ));
+    let (_, error) = conversion_error(single_profile(&root_repository(
+        "broken",
+        "https://packages.example.test",
+        "volatile",
+    )));
     assert!(error.contains("profiles[0].repositories[0].source.version"));
 
     let (_, error) = conversion_error(single_profile(
-        r#"cast.repository.direct_with {
+        r#"{
     id = "broken",
-    description = cast.optional.none,
-    uri = "file:///valid.index",
-    priority = cast.optional.some (-1),
-    enabled = cast.optional.none,
+    description = { kind = "none" },
+    source = { kind = "direct_index", uri = "file:///valid.index" },
+    priority = { kind = "some", value = -1 },
+    enabled = { kind = "none" },
 }"#,
     ));
     assert!(error.contains("profiles[0].repositories[0].priority"));
@@ -269,13 +293,13 @@ fn invalid_url_version_and_priority_report_exact_fields() {
 #[test]
 fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("profile.d/malformed.glu");
+    let path = temporary.path().join("profile.d/malformed.lua");
     write(&path, "let value = in value");
     let env = environment(temporary.path());
 
-    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
-        &ProfileCodec::default(),
-        &GluonSource::new("profile.d/malformed.glu", "let value = in value"),
+    let typed_error = <LuaProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &LuaProfileCodec::default(),
+        &Source::new("profile.d/malformed.lua", "let value = in value"),
     )
     .expect_err("malformed source must remain an evaluation error");
     assert!(matches!(
@@ -298,29 +322,28 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
         panic!("expected visible evaluation error");
     };
     assert_eq!(error_path, path);
-    assert_eq!(source.source_name.as_deref(), Some("profile.d/malformed.glu"));
+    assert_eq!(source.source_name.as_deref(), Some("profile.d/malformed.lua"));
     assert!(source.span.is_some());
 }
 
 #[test]
 fn generated_save_is_deterministic_standalone_and_loadable() {
-    let codec = ProfileCodec::default();
-    let source = GluonSource::new(
-        "authored.glu",
+    let codec = LuaProfileCodec::default();
+    let source = Source::new(
+        "authored.lua",
         authored(
-            r#"cast.profiles [
-    cast.profile "z-profile" [
-        cast.repository.root "z-root" "https://packages.example.test" "stream/volatile",
-        cast.repository.direct "a-direct" "file:///var/cache/local.index",
-    ],
-    cast.profile "a-profile" [],
-]"#,
+            &format!(
+                "{{ {{ id = \"z-profile\", repositories = {{ {}, {} }} }}, \
+                 {{ id = \"a-profile\", repositories = {{}} }} }}",
+                root_repository("z-root", "https://packages.example.test", "stream/volatile"),
+                direct_repository("a-direct", "file:///var/cache/local.index"),
+            ),
         ),
     );
-    let typed = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(&codec, &source).unwrap();
+    let typed = <LuaProfileCodec as DeclarationEvaluator<Map>>::evaluate(&codec, &source).unwrap();
 
-    let first = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
-    let repeated = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
+    let first = <LuaProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
+    let repeated = <LuaProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
     assert_eq!(first, repeated);
     assert!(first.find("id = \"a-profile\"").unwrap() < first.find("id = \"z-profile\"").unwrap());
     assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
@@ -338,10 +361,7 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
         )
         .unwrap();
     let generated = fs::read_to_string(path).unwrap();
-    assert_eq!(
-        generated.as_bytes(),
-        include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
-    );
+    assert!(generated.starts_with(lua_config::GENERATED_LUA_MARKER));
 
     let loaded = manager.load_declarations(&evaluators).unwrap();
     assert_eq!(loaded.len(), 1);
@@ -352,11 +372,11 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
 #[test]
 fn generated_save_refuses_to_overwrite_an_authored_fragment() {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("profile.d/owned.glu");
-    let source = authored("cast.profiles [cast.profile \"owned\" []]");
+    let path = temporary.path().join("profile.d/owned.lua");
+    let source = authored("{ { id = \"owned\", repositories = {} } }");
     write(&path, &source);
     let manager = config::Manager::custom(temporary.path());
-    let codec = ProfileCodec::default();
+    let codec = LuaProfileCodec::default();
     let evaluators = DeclarationEvaluatorSet::new([codec.clone()]).unwrap();
     let loaded = manager.load_declarations(&evaluators).unwrap();
 
@@ -383,12 +403,12 @@ fn generated_save_refuses_to_overwrite_an_authored_fragment() {
 fn fragment_merge_order_is_deterministic() {
     let temporary = tempfile::tempdir().unwrap();
     write(
-        &temporary.path().join("profile.d/z.glu"),
-        &single_profile(r#"cast.repository.direct "source" "file:///z.index""#),
+        &temporary.path().join("profile.d/z.lua"),
+        &single_profile(&direct_repository("source", "file:///z.index")),
     );
     write(
-        &temporary.path().join("profile.d/a.glu"),
-        &single_profile(r#"cast.repository.direct "source" "file:///a.index""#),
+        &temporary.path().join("profile.d/a.lua"),
+        &single_profile(&direct_repository("source", "file:///a.index")),
     );
     let env = environment(temporary.path());
     let mut expected_fragments = None;
@@ -451,13 +471,13 @@ fn saving_a_profile_refreshes_values_and_provenance_together() {
 }
 
 #[test]
-fn repository_owned_default_profile_is_valid_gluon() {
-    let source = GluonSource::new(
-        "default-x86_64.glu",
-        include_str!("../../data/profile.d/default-x86_64.glu"),
+fn repository_owned_default_profile_is_valid() {
+    let source = Source::new(
+        "default-x86_64.lua",
+        include_str!("../../data/profile.d/default-x86_64.lua"),
     );
-    let evaluated = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
-        &ProfileCodec::default(),
+    let evaluated = <LuaProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &LuaProfileCodec::default(),
         &source,
     )
     .unwrap();

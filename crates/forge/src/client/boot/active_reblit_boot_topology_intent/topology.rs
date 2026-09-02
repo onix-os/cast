@@ -28,9 +28,10 @@ pub(super) enum BootTargetInput {
 
 
 /// Shared, engine-neutral assembly: canonicalize the ESP and boot selectors and
-/// enforce the distinct-target cross-checks. Both the Gluon and Lua adapters
-/// decode their own DTOs into raw strings and a [`BootTargetInput`], then call
-/// this so equivalent sources reach the identical validated intent value.
+/// enforce the distinct-target cross-checks. Every configuration-language
+/// adapter decodes its own DTOs into raw strings and a [`BootTargetInput`],
+/// then calls this so equivalent sources reach the identical validated intent
+/// value.
 pub(super) fn assemble_boot_topology(
     esp_partuuid: String,
     esp_mount_point: String,

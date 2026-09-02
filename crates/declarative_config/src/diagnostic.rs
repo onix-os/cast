@@ -81,6 +81,15 @@ impl Diagnostic {
         Self::new(DiagnosticCategory::Import, None, source_name, None, message)
     }
 
+    /// An import diagnostic that points at the offending region of its source.
+    pub fn import_at(
+        source_name: Option<String>,
+        span: Option<SourceSpan>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(DiagnosticCategory::Import, None, source_name, span, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(DiagnosticCategory::Internal, None, None, None, message)
     }

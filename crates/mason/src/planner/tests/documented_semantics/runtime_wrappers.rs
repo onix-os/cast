@@ -40,7 +40,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
     assert_authored_output(declaration);
     assert_runtime_wrapper_bytes(INSTALL_SCRIPT);
 
-    for module in ["runtime.glu", "package.glu"] {
+    for module in ["runtime.lua", "package.lua"] {
         assert!(
             plan.provenance
                 .recipe

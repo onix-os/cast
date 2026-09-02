@@ -659,7 +659,7 @@ install -Dm644 build/cast-plugin-output.so \
 printf '%s\n' \
     'format = 1' \
     'profile = "stone-native"' \
-    'source = "gluon"' \
+    'source = "authored"' \
     > generated-config.conf
 install -Dm644 generated-config.conf \
     "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"

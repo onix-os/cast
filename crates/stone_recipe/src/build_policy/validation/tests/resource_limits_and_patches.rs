@@ -6,22 +6,22 @@ fn repository_policy() -> BuildPolicySpec {
         "/../mason/data/policy"
     ))
     .unwrap();
-    let evaluator = GluonBuildPolicyEvaluator::default();
+    let evaluator = LuaBuildPolicyEvaluator::default();
     let source = source_root
         .load(
-            "default.glu",
-            <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(
+            "default.lua",
+            <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(
                 &evaluator,
             )
             .max_source_bytes,
         )
         .unwrap();
     let evaluator =
-        <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
+        <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
             &evaluator,
             source_root,
         );
-    <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
+    <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
         &evaluator,
         &source,
     )

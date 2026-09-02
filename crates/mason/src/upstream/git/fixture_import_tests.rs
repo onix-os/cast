@@ -17,7 +17,7 @@ mod fixture_import_tests {
 
     fn bundle() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "../../tests/fixtures/gluon/execution/git-bundles/cast-multiple-sources-protocol-1.0.0.bundle",
+            "../../tests/fixtures/execution/git-bundles/cast-multiple-sources-protocol-1.0.0.bundle",
         )
     }
 
@@ -66,7 +66,7 @@ mod fixture_import_tests {
             fs::read(root.join("include/vendor_protocol.h")).unwrap(),
             fs::read(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join(
-                    "../../tests/fixtures/gluon/execution/git-source-trees/\
+                    "../../tests/fixtures/execution/git-source-trees/\
                      cast-multiple-sources-protocol-1.0.0/include/vendor_protocol.h",
                 ),
             )

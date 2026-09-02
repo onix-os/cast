@@ -90,7 +90,7 @@ pub(super) fn assert_contract(
         index,
     };
     let python_policy = stone_recipe::derivation::InputOrigin::Policy {
-        source: "policy.glu".to_owned(),
+        source: "policy.lua".to_owned(),
         field: "build_root.analyzer_tools.python".to_owned(),
         index: 0,
     };

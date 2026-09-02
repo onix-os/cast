@@ -6,41 +6,36 @@ use stone_recipe::{OptionsSpec, ToolchainSpec};
 
 #[test]
 fn normalized_package_root_matches_the_complete_owned_value() {
-    let evaluated = evaluate_default_package(&authored(
-        r#"
-{
-    meta = {
-        pname = "phase-zero",
-        version = "1.2.3",
-        release = 4,
-        homepage = "https://example.invalid/phase-zero",
-        license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [a.dep.binary "ninja"],
-    build_inputs = [a.dep.package "zlib"],
-    check_inputs = [],
-    outputs = a.outputs.explicit [a.output "out"],
-    options = a.some.options (a.options {
-        toolchain = a.toolchain.gnu,
-        cspgo = a.false,
-        samplepgo = a.false,
-        debug = a.true,
-        strip = a.false,
-        networking = a.false,
-        compressman = a.true,
-        lastrip = a.false,
-    }),
-    profiles = [],
-    architectures = ["x86_64"],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.true,
-    hooks = a.some.hooks a.empty.hooks,
-}
-"#,
-    ))
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let evaluated = evaluate_default_package(&authored(&format!(
+        r#"{{
+    meta = {{
+        pname = "phase-zero", version = "1.2.3", release = 4,
+        homepage = "https://example.invalid/phase-zero", license = {{ "MPL-2.0" }},
+    }},
+    builder = {{ kind = "custom", spec = {{
+        required_tools = {{}}, environment = {{}}, phases = {{ {phases} }},
+        supported_hooks = {{ setup = true, build = true, check = true,
+                             install = true, workload = true }},
+    }} }},
+    native_build_inputs = {{ {} }},
+    build_inputs = {{ {} }},
+    outputs = {{ {} }},
+    options = {{ toolchain = "gnu", cspgo = false, samplepgo = false, debug = true,
+                 strip = false, networking = false, compressman = true, lastrip = false }},
+    architectures = {{ "x86_64" }},
+    mold = true,
+    hooks = {},
+}}"#,
+        dep("binary", "ninja"),
+        dep("package", "zlib"),
+        output("out", true),
+        empty_hooks(),
+    )))
     .unwrap();
 
     let expected = PackageSpec {

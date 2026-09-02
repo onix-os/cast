@@ -10,134 +10,137 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "go"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                }
             },
-            {
-                kind = "binary",
-                value = "go"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "mkdir"
+                                }
+                            },
+                            args = {
+                                "-p",
+                                "build"
                             }
                         },
-                        args = {
-                            "-p",
-                            "build"
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "test -f go.mod\ntest -f go.sum\ntest -d vendor"
                         }
-                    },
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -f go.mod\ntest -f go.sum\ntest -d vendor"
                     }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/go",
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "go"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\ngo telemetry off\ngo build -mod=vendor -trimpath -buildvcs=false -o build/glyph ./cmd/glyph"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/go",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "go"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\ngo telemetry off\ngo build -mod=vendor -trimpath -buildvcs=false -o build/glyph ./cmd/glyph"
+                        }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "install -Dm755 build/glyph \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/glyph\"\ninstall -Dm644 README.md \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/go-glyph/README.md\""
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 build/glyph \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/glyph\"\ninstall -Dm644 README.md \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/go-glyph/README.md\""
+                        }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/go",
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "go"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\ngo telemetry off\ngo test -mod=vendor -trimpath ./..."
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/go",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "go"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"\nexport GOROOT=/usr/lib/golang\nexport GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"\nexport GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"\nexport GOENV=off\nexport GOWORK=off\nexport GOTOOLCHAIN=local\nexport GOPROXY=off\nexport GOSUMDB=off\nexport GONOSUMDB='*'\nexport GONOPROXY=none\nexport GOFLAGS=\nexport GO111MODULE=on\nexport CGO_ENABLED=0\ngo telemetry off\ngo test -mod=vendor -trimpath ./..."
+                        }
                     }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

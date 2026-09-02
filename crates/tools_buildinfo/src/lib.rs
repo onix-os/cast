@@ -15,7 +15,7 @@ pub const fn get_version() -> &'static str {
 /// build context.
 ///
 /// The value is a `sha256:` fingerprint computed at build time from all
-/// production Rust and Gluon sources, embedded policy/data, Cargo manifests
+/// production Rust and declaration sources, embedded policy/data, Cargo manifests
 /// and lockfile, repository toolchain configuration, active Cargo features,
 /// target cfgs, profile, Rust and native compiler/linker/archiver identities,
 /// compiler and linker flags, and native dependency selection.  Git metadata

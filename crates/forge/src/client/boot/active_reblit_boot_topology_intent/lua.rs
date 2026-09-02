@@ -2,15 +2,15 @@
 //!
 //! Decodes an authored Lua boot-topology declaration into raw selector strings
 //! and the engine-neutral [`BootTargetInput`], then runs the *same*
-//! `assemble_boot_topology` canonicalization and cross-checks the Gluon adapter
-//! runs. Equivalent Gluon and Lua sources reach the identical validated intent
-//! value; only the evaluation identity differs by engine.
+//! `assemble_boot_topology` canonicalization and cross-checks every adapter
+//! runs. Equivalent sources in any configuration language reach the identical
+//! validated intent value; only the evaluation identity differs by engine.
 //!
-//! This is the budget-integrated adapter registered alongside the Gluon one, so
-//! a retained `etc/cast/boot-topology.lua` is discovered by extension and
+//! This is a budget-integrated registered adapter, so a retained
+//! `etc/cast/boot-topology.lua` is discovered by extension and
 //! evaluated under the same absolute deadline and byte bounds. Its evaluation
-//! contract mirrors the Gluon adapter's strictness: the fixed Lua source name,
-//! no admitted external inputs, and — because the Lua boot declaration imports
+//! contract keeps the shared strictness: the fixed Lua source name, no
+//! admitted external inputs, and — because the Lua boot declaration imports
 //! nothing — an empty module set.
 
 use std::fmt::Write as _;
@@ -39,19 +39,21 @@ pub(super) fn language_spec() -> LanguageSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaPartitionSelector {
     partuuid: String,
     mount_point: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum LuaBootTarget {
     AliasEsp,
     DistinctXbootldr { xbootldr: LuaPartitionSelector },
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LuaBootTopologyIntent {
     esp: LuaPartitionSelector,
     boot: LuaBootTarget,
@@ -71,8 +73,8 @@ impl From<LuaBootTarget> for BootTargetInput {
 
 /// Budget-integrated Lua adapter for the closed boot-topology declaration.
 ///
-/// Like the Gluon adapter it borrows the caller-owned absolute budget so the
-/// typed evaluation boundary cannot replace ActiveReblit's deadline with a fresh
+/// It borrows the caller-owned absolute budget so the typed evaluation
+/// boundary cannot replace ActiveReblit's deadline with a fresh
 /// relative timeout.
 pub(super) struct LuaBootTopologyIntentEvaluator<'budget> {
     engine: LuaEngine,
@@ -170,7 +172,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for LuaBootTopolo
 ///
 /// The assembled value stores the canonical PARTUUID and the verbatim
 /// mount-point hint, and re-canonicalizing an already-canonical PARTUUID is a
-/// no-op, so this is idempotent. Because `etc/cast/boot-topology.glu` is an
+/// no-op, so this is idempotent. Because `etc/cast/boot-topology.lua` is an
 /// *authored*, boot-critical slot, this is the canonical Lua an operator adopts
 /// as the verified replacement — never an authority Cast switches on its own.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -233,7 +235,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, Instant};
 
-    use super::super::gluon::gluon_value_for_test;
+    use super::super::topology::{BootTargetInput, assemble_boot_topology};
     use super::super::{BootTopologyIntentBudget, BootTopologyIntentPolicy};
     use super::*;
     use crate::Installation;
@@ -305,11 +307,18 @@ return {{
         )
     }
 
+    /// Decoding must land on exactly the value the shared assembly builds from
+    /// the same selectors, so the adapter adds no normalization of its own.
     #[test]
-    fn a_lua_alias_intent_matches_the_gluon_conversion() {
+    fn a_lua_alias_intent_matches_the_shared_assembly() {
         let fixture = Fixture::new();
-        let gluon = gluon_value_for_test(ESP_PARTUUID, ESP_MOUNT_POINT, None).expect("gluon alias intent converts");
-        assert_eq!(lua_value(&fixture, &alias_source()), gluon);
+        let expected = assemble_boot_topology(
+            ESP_PARTUUID.to_owned(),
+            ESP_MOUNT_POINT.to_owned(),
+            BootTargetInput::AliasEsp,
+        )
+        .expect("shared assembly accepts the alias selectors");
+        assert_eq!(lua_value(&fixture, &alias_source()), expected);
     }
 
     #[test]
@@ -327,19 +336,24 @@ return {{
     }
 
     #[test]
-    fn a_lua_distinct_intent_matches_the_gluon_conversion() {
+    fn a_lua_distinct_intent_matches_the_shared_assembly() {
         let fixture = Fixture::new();
-        let gluon = gluon_value_for_test(
-            ESP_PARTUUID,
-            ESP_MOUNT_POINT,
-            Some((XBOOTLDR_PARTUUID, XBOOTLDR_MOUNT_POINT)),
+        let expected = assemble_boot_topology(
+            ESP_PARTUUID.to_owned(),
+            ESP_MOUNT_POINT.to_owned(),
+            BootTargetInput::DistinctXbootldr {
+                partuuid: XBOOTLDR_PARTUUID.to_owned(),
+                mount_point: XBOOTLDR_MOUNT_POINT.to_owned(),
+            },
         )
-        .expect("gluon distinct intent converts");
-        assert_eq!(lua_value(&fixture, &distinct_source()), gluon);
+        .expect("shared assembly accepts the distinct selectors");
+        assert_eq!(lua_value(&fixture, &distinct_source()), expected);
     }
 
+    /// The shipped documentation examples must decode to the selectors they
+    /// document.
     #[test]
-    fn the_paired_boot_topology_documentation_examples_normalize_equally() {
+    fn the_boot_topology_documentation_examples_decode_to_their_selectors() {
         let root_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let fixture = Fixture::new();
         let esp = "11111111-2222-3333-4444-555555555555";
@@ -348,7 +362,7 @@ return {{
             .expect("lua alias example");
         assert_eq!(
             lua_value(&fixture, &alias),
-            gluon_value_for_test(esp, "/efi", None).expect("gluon alias"),
+            assemble_boot_topology(esp.to_owned(), "/efi".to_owned(), BootTargetInput::AliasEsp).unwrap(),
         );
 
         let distinct = std::fs::read_to_string(format!(
@@ -357,8 +371,15 @@ return {{
         .expect("lua distinct example");
         assert_eq!(
             lua_value(&fixture, &distinct),
-            gluon_value_for_test(esp, "/efi", Some(("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/boot")),)
-                .expect("gluon distinct"),
+            assemble_boot_topology(
+                esp.to_owned(),
+                "/efi".to_owned(),
+                BootTargetInput::DistinctXbootldr {
+                    partuuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_owned(),
+                    mount_point: "/boot".to_owned(),
+                },
+            )
+            .unwrap(),
         );
     }
 

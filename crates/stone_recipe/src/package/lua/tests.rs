@@ -19,8 +19,9 @@
     }
     fn builder() -> String {
         format!(
-            "{{ required_tools = {{}}, environment = {{ \"cmake\" }}, phases = {}, \
-             supported_hooks = {{ setup = true, build = true, check = true, install = true, workload = true }} }}",
+            "{{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{ \"cmake\" }}, \
+             phases = {}, supported_hooks = {{ setup = true, build = true, check = true, \
+             install = true, workload = true }} }} }}",
             empty_phases()
         )
     }
@@ -321,15 +322,15 @@ return {
             emul32: false,
             mold: false,
             hooks: HooksSpec::default(),
-        });
+        })
+        .expect("the equivalent authored package is valid");
         assert_eq!(package, equivalent);
     }
 
-    /// The Lua half of the rich-authoring proof: a `custom` builder (the data
-    /// escape hatch), a dependency, and an explicit output override decode
-    /// through the shared `lower`. This confirms the Lua `Custom` builder-request
-    /// path and that authored outputs replace the default set — symmetric to the
-    /// Gluon `a_rich_authored_gluon_recipe...` proof.
+    /// The rich-authoring proof: a `custom` builder (the data escape hatch), a
+    /// dependency, and an explicit output override decode through the shared
+    /// `lower`. This confirms the Lua `Custom` builder-request path and that
+    /// authored outputs replace the default set.
     #[test]
     fn an_authored_lua_recipe_with_a_custom_builder_lowers_through_shared_rust() {
         let source = r#"

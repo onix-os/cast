@@ -180,7 +180,7 @@ impl FixtureEvidence {
 
         assert_eq!(
             inputs.first_build_lock, inputs.repeat_build_lock,
-            "{}: repeated build.lock.glu bytes changed while capturing evidence",
+            "{}: repeated build.lock.lua bytes changed while capturing evidence",
             inputs.name
         );
         assert_eq!(
@@ -191,7 +191,7 @@ impl FixtureEvidence {
         );
         assert_eq!(
             inputs.repeat_build_lock_outcome, None,
-            "{}: repeated proof lock observation rewrote build.lock.glu",
+            "{}: repeated proof lock observation rewrote build.lock.lua",
             inputs.name
         );
         let first_lock = BuildLockObservation::capture("written", inputs.first_build_lock);

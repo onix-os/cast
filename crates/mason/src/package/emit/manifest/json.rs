@@ -114,38 +114,60 @@ mod tests {
 
     use super::*;
     use crate::Recipe;
-    use crate::source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock};
+    use crate::source_lock::{LuaSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock};
 
-    const RECIPE_SOURCE: &str = r#"let a = import! cast.authored.v1
-{
+    const RECIPE_SOURCE: &str = r#"return {
     meta = {
         pname = "example",
         version = "1.2.3",
         release = 1,
         homepage = "https://example.invalid",
-        license = ["MPL-2.0"],
+        license = { "MPL-2.0" },
     },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
+    builder = { kind = "custom", spec = {
+        required_tools = {},
+        environment = {},
+        phases = {
+            setup = { steps = {} },
+            build = { steps = {} },
+            install = { steps = {} },
+            check = { steps = {} },
+            workload = { steps = {} },
+        },
+        supported_hooks = { setup = false, build = false, check = false, install = false, workload = false },
+    } },
+    hooks = {
+        pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {},
+        pre_check = {}, post_check = {}, pre_install = {}, post_install = {},
+        pre_workload = {}, post_workload = {},
+    },
+    native_build_inputs = {},
+    build_inputs = {},
+    check_inputs = {},
+    options = {
+        toolchain = "llvm",
+        cspgo = false,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    },
+    profiles = {},
+    sources = {},
+    architectures = {},
+    tuning = {},
+    emul32 = false,
+    mold = false,
 }
 "#;
 
     #[test]
     fn emitted_recipe_aggregate_and_derivation_id_follow_plan_provenance() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), RECIPE_SOURCE).unwrap();
-        let lock = GluonSourceLockCodec::default().encode(&SourceLock::default()).unwrap();
+        fs::write(root.path().join("stone.lua"), RECIPE_SOURCE).unwrap();
+        let lock = LuaSourceLockCodec::default().encode(&SourceLock::default()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         fs::write(&lock_path, &lock).unwrap();
 
@@ -165,7 +187,7 @@ mod tests {
         .unwrap();
         let first_manifest = read_jsonc(&first_output);
 
-        fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
+        fs::write(&lock_path, format!("{lock}-- semantically inert provenance change\n")).unwrap();
         let changed_recipe = Recipe::load(root.path()).unwrap();
         let changed_plan = plan_with_recipe(&changed_recipe);
         let changed_derivation_id = changed_plan.derivation_id();

@@ -7,7 +7,7 @@
 //! non-literal, computed, or malformed import becomes a rejecting
 //! [`ImportRequest`] so the shared graph fails closed before VM execution.
 
-use declarative_config::ImportRequest;
+use declarative_config::{ImportRequest, SourceSpan};
 use full_moon::ast::{self, Expression, Index, Prefix, Suffix};
 use full_moon::tokenizer::TokenType;
 use full_moon::visitors::Visitor;
@@ -28,14 +28,29 @@ pub fn discover_imports(source: &str) -> Vec<ImportRequest> {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("; ");
-            return vec![ImportRequest::invalid(format!(
-                "lua source does not parse: {detail}"
-            ))];
+            let message = format!("lua source does not parse: {detail}");
+            return vec![match parse_failure_span(&errors) {
+                Some(span) => ImportRequest::invalid_at(message, span),
+                None => ImportRequest::invalid(message),
+            }];
         }
     };
     let mut collector = ImportCollector { requests: Vec::new() };
     collector.visit_ast(&ast);
     collector.requests
+}
+
+/// The byte range covering every reported parse error, so a malformed source
+/// keeps the position evidence its parser produced.
+fn parse_failure_span(errors: &[full_moon::Error]) -> Option<SourceSpan> {
+    let mut start = usize::MAX;
+    let mut end = 0;
+    for error in errors {
+        let (from, to) = error.range();
+        start = start.min(from.bytes());
+        end = end.max(to.bytes());
+    }
+    (start != usize::MAX).then_some(SourceSpan { start, end })
 }
 
 /// Classify one literal import name into an embedded or relative request.

@@ -76,7 +76,7 @@ fn a_lua_source_at_the_fixed_slot_is_discovered_revalidated_and_loaded() {
     // The fixed slot has one canonical logical name regardless of engine, and
     // the Lua declaration imports nothing.
     let fingerprint = revalidated.fingerprint();
-    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.lua");
     assert!(fingerprint.modules.is_empty());
 }
 
@@ -183,7 +183,7 @@ fn source_and_ancestor_acls_or_xattrs_are_rejected_when_supported() {
 #[test]
 fn invalid_intent_and_all_structural_failures_have_zero_mutation() {
     let fixture = Fixture::new();
-    fixture.write_source("not valid Gluon");
+    fixture.write_source("not a valid declaration");
     let before = TreeSnapshot::capture(&fixture.root);
     assert!(fixture.prepare().is_err());
     assert_eq!(TreeSnapshot::capture(&fixture.root), before);

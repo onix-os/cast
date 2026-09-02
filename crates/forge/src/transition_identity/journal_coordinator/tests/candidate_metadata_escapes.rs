@@ -101,7 +101,7 @@ fn coordinated_candidate_metadata_never_follows_lib_or_os_info_symlinks() {
             // into the external directory and left the sentinel beside them.
             assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"external-directory");
             assert!(!external.join("os-release").exists());
-            assert!(!external.join("system-model.glu").exists());
+            assert!(!external.join("system-model.lua").exists());
             assert!(fs::symlink_metadata(&candidate_lib).unwrap().file_type().is_symlink());
         } else {
             // Reading os-info through the symlink would have consumed the
@@ -119,7 +119,7 @@ fn coordinated_candidate_metadata_never_follows_lib_or_os_info_symlinks() {
 
 #[test]
 fn coordinated_candidate_metadata_never_follows_output_symlinks() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let (fixture, identity, authority) =
             fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
         let external = fixture
@@ -144,7 +144,7 @@ fn coordinated_candidate_metadata_never_follows_output_symlinks() {
 
 #[test]
 fn coordinated_candidate_metadata_never_replaces_existing_output_inodes() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         for hardlinked in [false, true] {
             let (fixture, identity, authority) =
                 fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
@@ -188,7 +188,7 @@ fn coordinated_candidate_metadata_never_replaces_existing_output_inodes() {
 
 #[test]
 fn coordinated_candidate_metadata_final_name_races_are_no_replace() {
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let (fixture, identity, authority) =
             fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
         let lib = fixture.candidate_path.join("lib");
@@ -230,7 +230,7 @@ fn coordinated_retained_metadata_proof_rejects_every_post_trigger_mutation() {
     for mutation in ["rewrite", "delete", "replace", "hardlink", "substitute"] {
         let (fixture, identity, authority) =
             fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
-        let output = fixture.candidate_path.join("lib/system-model.glu");
+        let output = fixture.candidate_path.join("lib/system-model.lua");
         let external = fixture.installation.root.join(format!("external-proof-{mutation}"));
         let ran = std::cell::Cell::new(false);
 
@@ -487,7 +487,7 @@ fn coordinated_published_candidate_metadata_is_sealed() {
     let live_lib = fixture.installation.root.join("usr/lib");
     assert_eq!(fs::read(live_lib.join("os-release")).unwrap(), COORDINATOR_OS_RELEASE);
     assert_eq!(
-        fs::read(live_lib.join("system-model.glu")).unwrap(),
+        fs::read(live_lib.join("system-model.lua")).unwrap(),
         COORDINATOR_SYSTEM_SNAPSHOT
     );
     assert_eq!(
@@ -495,7 +495,7 @@ fn coordinated_published_candidate_metadata_is_sealed() {
         allocated.to_string().as_bytes()
     );
 
-    for output in ["os-release", "system-model.glu"] {
+    for output in ["os-release", "system-model.lua"] {
         let metadata = fs::symlink_metadata(live_lib.join(output)).unwrap();
         assert!(metadata.file_type().is_file(), "{output} is not a regular file");
         assert_eq!(metadata.uid(), unsafe { nix::libc::geteuid() }, "{output} owner");
@@ -539,7 +539,7 @@ fn coordinated_candidate_clone_failure_precedes_all_metadata_decoration() {
     // Not even the containing directory is created before the clone succeeds.
     assert!(!candidate.join("lib").exists(), "a failed clone still created `lib`");
     assert!(!candidate.join("lib/os-release").exists());
-    assert!(!candidate.join("lib/system-model.glu").exists());
+    assert!(!candidate.join("lib/system-model.lua").exists());
     // The untouched candidate payload is still the one the fixture staged.
     assert_eq!(
         fs::read(candidate.join("payload-sentinel")).unwrap(),

@@ -1,7 +1,7 @@
 /// Explicit resource budget for one evaluated package declaration.
 ///
-/// Gluon evaluation already has VM and source limits, but pure functions can
-/// still construct values much larger than their authored source. These
+/// Declaration evaluation already has VM and source limits, but pure functions
+/// can still construct values much larger than their authored source. These
 /// limits keep conversion, regex/glob compilation, dependency resolution, and
 /// plan construction bounded after the value crosses into Rust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

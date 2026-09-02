@@ -38,7 +38,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
     assert_authored_phase_contract(declaration);
     assert_authored_outputs(declaration);
 
-    for module in ["artifact.glu", "package.glu"] {
+    for module in ["artifact.lua", "package.lua"] {
         assert!(
             plan.provenance
                 .recipe

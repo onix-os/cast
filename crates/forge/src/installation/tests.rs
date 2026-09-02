@@ -17,10 +17,10 @@ fn open_defers_canonical_authored_system_intent_to_the_client_gate() {
     let temporary = private_installation_tempdir();
     let path = system_model::intent_path(temporary.path());
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let authored = r#"let cast = import! cast.system.v1
-{
-    packages = ["alpha"],
-    .. cast.system
+    let authored = r#"return {
+    disable_warning = false,
+    repositories = {},
+    packages = { "alpha" },
 }
 "#;
     fs::write(&path, authored).unwrap();
@@ -50,7 +50,7 @@ fn both_open_modes_defer_invalid_system_intent_but_frozen_skips_active_state() {
     let temporary = private_installation_tempdir();
     let intent_path = system_model::intent_path(temporary.path());
     fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
-    fs::write(&intent_path, b"invalid Gluon that normal open must reject").unwrap();
+    fs::write(&intent_path, b"invalid declaration source that normal open must reject").unwrap();
     fs::create_dir_all(temporary.path().join("usr")).unwrap();
     let state_id = temporary.path().join("usr/.stateID");
     fs::write(&state_id, b"73").unwrap();

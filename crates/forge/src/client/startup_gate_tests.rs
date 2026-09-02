@@ -110,15 +110,14 @@ fn write_system_intent_with_warning(root: &Path, package: &str, disable_warning:
     fs::create_dir_all(&cast).unwrap();
     fs::set_permissions(&etc, fs::Permissions::from_mode(0o755)).unwrap();
     fs::set_permissions(&cast, fs::Permissions::from_mode(0o755)).unwrap();
-    let path = cast.join("system.glu");
+    let path = cast.join("system.lua");
     fs::write(
         &path,
         format!(
-            r#"let cast = import! cast.system.v1
-{{
-    disable_warning = cast.boolean.{},
-    packages = ["{package}"],
-    .. cast.system
+            r#"return {{
+    disable_warning = {},
+    repositories = {{}},
+    packages = {{ "{package}" }},
 }}
 "#,
             if disable_warning { "true" } else { "false" },
@@ -194,7 +193,7 @@ fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repo
     // the canonical journal in coordinator-then-journal lock order.
     let explicit_error = expect_startup_gate_error(
         Client::builder("startup-gate-explicit-journal", installation.clone())
-            .system_intent_path(temporary.path().join("must-not-load-explicit.glu"))
+            .system_intent_path(temporary.path().join("must-not-load-explicit.lua"))
             .repositories(guarded_repositories())
             .build(),
     );
@@ -541,14 +540,13 @@ fn clean_startup_loads_the_default_intent_only_after_strict_discovery() {
 fn explicit_intent_remains_authoritative_without_loading_the_malformed_default() {
     let temporary = private_installation_tempdir();
     let (default_path, malformed_default) = write_malformed_system_intent(temporary.path());
-    let explicit = temporary.path().join("explicit-system.glu");
+    let explicit = temporary.path().join("explicit-system.lua");
     fs::write(
         &explicit,
-        r#"let cast = import! cast.system.v1
-{
-    disable_warning = cast.boolean.true,
-    packages = ["explicit-loaded"],
-    .. cast.system
+        r#"return {
+    disable_warning = true,
+    repositories = {},
+    packages = { "explicit-loaded" },
 }
 "#,
     )
@@ -628,14 +626,14 @@ fn unsafe_symlink_and_hardlinked_default_sources_fail_unchanged() {
         let canonical = write_system_intent(temporary.path(), "must-not-load");
         let cast = canonical.parent().unwrap().to_owned();
         let original = fs::read(&canonical).unwrap();
-        let other = cast.join("other.glu");
+        let other = cast.join("other.lua");
 
         match kind {
             "source-mode" => fs::set_permissions(&canonical, fs::Permissions::from_mode(0o666)).unwrap(),
             "directory-mode" => fs::set_permissions(&cast, fs::Permissions::from_mode(0o777)).unwrap(),
             "symlink" => {
                 fs::rename(&canonical, &other).unwrap();
-                symlink("other.glu", &canonical).unwrap();
+                symlink("other.lua", &canonical).unwrap();
             }
             "hardlink" => {
                 fs::rename(&canonical, &other).unwrap();
@@ -651,7 +649,7 @@ fn unsafe_symlink_and_hardlinked_default_sources_fail_unchanged() {
         let after = fs::symlink_metadata(&canonical).unwrap();
         assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()), "{kind}");
         if kind == "symlink" {
-            assert_eq!(fs::read_link(&canonical).unwrap(), Path::new("other.glu"));
+            assert_eq!(fs::read_link(&canonical).unwrap(), Path::new("other.lua"));
             assert_eq!(fs::read(&other).unwrap(), original);
         } else {
             assert_eq!(fs::read(&canonical).unwrap(), original);
@@ -663,7 +661,7 @@ fn unsafe_symlink_and_hardlinked_default_sources_fail_unchanged() {
 fn default_source_substitution_after_retention_fails_closed() {
     let temporary = private_installation_tempdir();
     let canonical = write_system_intent(temporary.path(), "retained-source");
-    let retained = canonical.with_file_name("retained-system.glu");
+    let retained = canonical.with_file_name("retained-system.lua");
     let original = fs::read(&canonical).unwrap();
     let hook_canonical = canonical.clone();
     let hook_retained = retained.clone();
@@ -671,11 +669,10 @@ fn default_source_substitution_after_retention_fails_closed() {
         fs::rename(&hook_canonical, &hook_retained).unwrap();
         fs::write(
             &hook_canonical,
-            r#"let cast = import! cast.system.v1
-{
-    disable_warning = cast.boolean.true,
-    packages = ["replacement-injected"],
-    .. cast.system
+            r#"return {
+    disable_warning = true,
+    repositories = {},
+    packages = { "replacement-injected" },
 }
 "#,
         )
@@ -708,7 +705,7 @@ fn default_intent_root_and_directory_name_substitution_fail_closed() {
             "detached-cast"
         });
         let hook_root = root.clone();
-        let injected = root.join("etc/cast/system.glu");
+        let injected = root.join("etc/cast/system.lua");
 
         startup_gate::arm_after_default_directory_retained(move || {
             if replace_root {
@@ -738,9 +735,9 @@ fn default_intent_root_and_directory_name_substitution_fail_closed() {
         }
         assert!(fs::read_to_string(&injected).unwrap().contains("replacement-injected"));
         let retained_source = if replace_root {
-            parent.path().join("detached-installation/etc/cast/system.glu")
+            parent.path().join("detached-installation/etc/cast/system.lua")
         } else {
-            parent.path().join("detached-cast/system.glu")
+            parent.path().join("detached-cast/system.lua")
         };
         assert_eq!(fs::read(retained_source).unwrap(), original_bytes);
     }

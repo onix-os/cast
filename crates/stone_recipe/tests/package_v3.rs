@@ -8,7 +8,7 @@ use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, 
 use declarative_config::DiagnosticCategory;
 use stone_recipe::package::{
     BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec,
-    GluonPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
+    LuaPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -19,7 +19,170 @@ fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
 }
 
 fn authored(body: &str) -> Source {
-    Source::new("stone.glu", format!("let a = import! cast.authored.v1\n{body}"))
+    Source::new("stone.lua", format!("return {body}"))
+}
+
+/// The meta block every authored fixture needs, so bodies name only the field
+/// under test.
+fn meta(pname: &str) -> String {
+    format!(
+        r#"meta = {{ pname = "{pname}", version = "1.0.0", release = 1,
+            homepage = "https://example.com", license = {{ "MPL-2.0" }} }}"#
+    )
+}
+
+/// One output record with every option absent.
+fn output(name: &str, include_in_manifest: bool) -> String {
+    format!(
+        r#"{{ name = "{name}", include_in_manifest = {include_in_manifest},
+           summary = {{ kind = "none" }}, description = {{ kind = "none" }},
+           provides_exclude = {{}}, runtime_inputs = {{}}, runtime_exclude = {{}},
+           paths = {{}}, conflicts = {{}} }}"#
+    )
+}
+
+/// A custom builder whose named phase carries `steps` and which requires
+/// `tools`; every other phase is empty.
+fn custom_builder_with_tools(tools: &str, phase: &str, steps: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|name| {
+            let body = if name == phase { steps } else { "" };
+            format!("{name} = {{ steps = {{ {body} }} }}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ kind = \"custom\", spec = {{ required_tools = {{ {tools} }}, environment = {{}}, \
+         phases = {{ {phases} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}"
+    )
+}
+
+/// A custom builder whose named phase carries `steps`; every other phase empty.
+fn custom_builder(phase: &str, steps: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|name| {
+            let body = if name == phase { steps } else { "" };
+            format!("{name} = {{ steps = {{ {body} }} }}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}"
+    )
+}
+
+/// A complete minimal authored recipe: the given `pname`, an empty custom
+/// builder, and whatever extra fields the caller appends.
+fn authored_package(pname: &str, extra: &str) -> Source {
+    authored(&format!(
+        "{{ {}, builder = {}{} }}",
+        meta(pname),
+        custom_builder("", ""),
+        extra,
+    ))
+}
+
+/// A recipe whose named phase carries one step, for step-level rejection tests.
+fn package_with_step(pname: &str, phase: &str, step: &str) -> Source {
+    authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {} }} }}",
+        meta(pname),
+        custom_builder(phase, step),
+        output("out", true),
+    ))
+}
+
+/// A typed dependency literal. `package` and `output` carry a reference table;
+/// every other kind carries a bare string.
+fn dep(kind: &str, value: &str) -> String {
+    match kind {
+        "package" => format!(r#"{{ kind = "package", value = {{ name = "{value}" }} }}"#),
+        _ => format!(r#"{{ kind = "{kind}", value = "{value}" }}"#),
+    }
+}
+
+/// An `output` dependency naming one output of another package.
+fn output_dep(package: &str, output: &str) -> String {
+    format!(
+        r#"{{ kind = "output", value = {{ package = {{ name = "{package}" }}, output = "{output}" }} }}"#
+    )
+}
+
+/// One output record, overriding the listed fields; the rest stay absent/empty.
+fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
+    let mut fields: Vec<(&str, String)> = vec![
+        ("include_in_manifest", "true".to_owned()),
+        ("summary", r#"{ kind = "none" }"#.to_owned()),
+        ("description", r#"{ kind = "none" }"#.to_owned()),
+        ("provides_exclude", "{}".to_owned()),
+        ("runtime_inputs", "{}".to_owned()),
+        ("runtime_exclude", "{}".to_owned()),
+        ("paths", "{}".to_owned()),
+        ("conflicts", "{}".to_owned()),
+    ];
+    for (key, value) in overrides {
+        if let Some(slot) = fields.iter_mut().find(|(field, _)| field == key) {
+            slot.1 = (*value).to_owned();
+        }
+    }
+    let body = fields
+        .into_iter()
+        .map(|(field, value)| format!("{field} = {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"{{ name = "{name}", {body} }}"#)
+}
+
+/// A complete, already-lowered package spec. The input-evaluator path decodes
+/// the frozen domain directly, so it names every field.
+fn complete_package(pname: &str) -> Source {
+    authored(&format!(
+        "{{ {}, builder = {}, hooks = {}, outputs = {{ {} }} }}",
+        meta(pname),
+        custom_builder("", ""),
+        empty_hooks(),
+        output("out", true),
+    ))
+}
+
+/// An archive upstream with the given hash and optional rename/unpack_dir.
+fn archive(hash: &str, rename: &str, unpack_dir: &str) -> String {
+    format!(
+        r#"{{ kind = "archive", url = "https://example.com/source.tar.xz", hash = "{hash}",
+           rename = {rename}, strip_dirs = {{ kind = "none" }}, unpack = true,
+           unpack_dir = {unpack_dir} }}"#
+    )
+}
+
+/// Every hook slot empty.
+fn empty_hooks() -> String {
+    let slots = ["setup", "build", "check", "install", "workload"]
+        .into_iter()
+        .flat_map(|phase| [format!("pre_{phase} = {{}}"), format!("post_{phase} = {{}}")])
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {slots} }}")
+}
+
+/// A profile whose builder requires `tools` and which carries the given typed
+/// dependency lists. Every phase is empty; hooks are supported but unused.
+fn profile(name: &str, tools: &str, native: &str, build: &str, check: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ name = \"{name}\", builder = {{ required_tools = {{ {tools} }}, environment = {{}}, \
+         phases = {{ {phases} }}, supported_hooks = {{ setup = true, build = true, check = true, \
+         install = true, workload = true }} }}, hooks = {}, native_build_inputs = {{ {native} }}, \
+         build_inputs = {{ {build} }}, check_inputs = {{ {check} }} }}",
+        empty_hooks(),
+    )
 }
 
 fn binary_program(name: &str) -> ProgramSpec {
@@ -52,70 +215,27 @@ fn assert_dependency_role_conversion_error(
 }
 
 #[test]
-fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
-    for module in [
-        "boulder.package.v3",
-        "boulder.builders.cmake.v2",
-        "boulder.builders.meson.v2",
-        "boulder.builders.cargo.v2",
-        "boulder.builders.autotools.v2",
-        "cast.package.v2",
-        "cast.builders.cmake.v1",
-        "cast.builders.meson.v1",
-        "cast.builders.cargo.v1",
-        "cast.builders.autotools.v1",
-        "boulder.package.v2",
-    ] {
-        let error = evaluate_default_package(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
-        assert!(matches!(
-            error,
-            DeclarationEvaluationError::Evaluation(ref diagnostic)
-                if diagnostic.category == DiagnosticCategory::Import
-                    && diagnostic.message.contains(module)
-        ));
-    }
-}
-
-#[test]
 fn frozen_package_abi_has_no_cargo_fetch_escape_hatch() {
-    let error = evaluate_default_package(&authored("a.step.cargo_fetch")).unwrap_err();
+    let error = evaluate_default_package(&authored(&format!(
+        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{ {{ kind = \"cargo_fetch\" }} }} }}, \
+         install = {{ steps = {{}} }}, check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }} }}",
+        meta("no-cargo-fetch"),
+    )))
+    .unwrap_err();
 
-    assert!(matches!(
-        error,
-        DeclarationEvaluationError::Evaluation(ref diagnostic)
-            if diagnostic.category == DiagnosticCategory::Type
-                && diagnostic.message.contains("cargo_fetch")
-    ));
+    assert!(
+        error.to_string().contains("cargo_fetch"),
+        "the frozen ABI must reject a cargo_fetch step by name: {error}"
+    );
 }
 
 #[test]
 fn manifest_membership_is_explicit_not_inferred_from_package_name() {
-    let source = authored(
-        r#"
-let root = a.output "out"
-{
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "symbols-dbginfo", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let source = authored_package(
+        "symbols-dbginfo",
+        &format!(", outputs = {{ {} }}", output("out", true)),
     );
 
     let evaluated = evaluate_default_package(&source).unwrap();
@@ -125,47 +245,33 @@ let root = a.output "out"
 
 #[test]
 fn external_built_and_shell_steps_preserve_distinct_program_authority() {
-    let source = authored(
-        r#"
-let tool = a.package_ref "odd-tool"
-let scripts = a.scripts {
-    build = a.phase [
-        a.step.run (a.program.package tool "/opt/odd/bin/tool") ["--frozen"],
-        a.step.run_built (a.program.built "build/generated-tool") ["--self-test"],
-        a.step.shell_with {
-            interpreter = a.program.binary "dash",
-            declared_programs = [a.program.package tool "/opt/odd/bin/helper"],
-            script = "helper --check",
-        },
-        a.step.shell "echo builtin",
-    ],
-    .. a.empty.scripts
-}
-{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
-    );
+    let build_steps = r#"
+        { kind = "run",
+          program = { path = "/opt/odd/bin/tool", requirement = { kind = "package", value = { name = "odd-tool" } } },
+          args = { "--frozen" } },
+        { kind = "run_built",
+          program = { path = "build/generated-tool" },
+          args = { "--self-test" } },
+        { kind = "shell",
+          interpreter = { path = "/usr/bin/dash", requirement = { kind = "binary", value = "dash" } },
+          declared_programs = {
+              { path = "/opt/odd/bin/helper", requirement = { kind = "package", value = { name = "odd-tool" } } },
+          },
+          script = "helper --check" },
+        { kind = "shell",
+          interpreter = { path = "/usr/bin/bash", requirement = { kind = "binary", value = "bash" } },
+          declared_programs = {},
+          script = "echo builtin" }
+    "#;
+    let source = authored(&format!(
+        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
+         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{ {build_steps} }} }}, \
+         install = {{ steps = {{}} }}, check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}, \
+         outputs = {{ {} }} }}",
+        meta("example"),
+        output("out", true),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
@@ -215,37 +321,11 @@ fn built_program_paths_are_normalized_before_planning() {
         "build//tool",
         r"build\tool",
     ] {
-        let source = authored(&format!(
-            r#"
-let scripts = a.scripts {{
-    check = a.phase [a.step.run_built (a.program.built {invalid:?}) []],
-    .. a.empty.scripts
-}}
-{{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {{
-        meta = {{
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
-        ));
+        let source = package_with_step(
+            "example",
+            "check",
+            &format!(r#"{{ kind = "run_built", program = {{ path = {invalid:?} }}, args = {{}} }}"#),
+        );
         let error = evaluate_default_package(&source).unwrap_err();
         assert!(matches!(
             error,
@@ -257,62 +337,38 @@ let scripts = a.scripts {{
 
 #[test]
 fn invalid_program_bindings_are_rejected_before_planning() {
-    for (program, expected_field) in [
+    for (path, requirement, expected_field) in [
+        ("tool", dep("binary", "tool"), "builder.phases.build.steps[0].program.path"),
         (
-            r#"{ path = "tool", requirement = a.dep.binary "tool" }"#,
+            "/usr/bin/other",
+            dep("binary", "tool"),
             "builder.phases.build.steps[0].program.path",
         ),
         (
-            r#"{ path = "/usr/bin/other", requirement = a.dep.binary "tool" }"#,
-            "builder.phases.build.steps[0].program.path",
-        ),
-        (
-            r#"{ path = "/usr/bin/pkg-config", requirement = a.dep.pkgconfig "example" }"#,
+            "/usr/bin/pkg-config",
+            dep("pkg_config", "example"),
             "builder.phases.build.steps[0].program.requirement",
         ),
         (
-            r#"{ path = "/usr/bin/nested/tool", requirement = a.dep.binary "nested/tool" }"#,
+            "/usr/bin/nested/tool",
+            dep("binary", "nested/tool"),
             "builder.phases.build.steps[0].program.requirement",
         ),
         (
-            r#"{ path = "/usr/bin/tool", requirement = a.dep.package "tool-package" }"#,
+            "/usr/bin/tool",
+            dep("package", "tool-package"),
             "builder.phases.build.steps[0].program.path",
         ),
     ] {
-        let source = authored(&format!(
-            r#"
-let scripts = a.scripts {{
-    build = a.phase [a.step.run {program} []],
-    .. a.empty.scripts
-}}
-{{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {{
-        meta = {{
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
-        ));
+        let source = package_with_step(
+            "example",
+            "build",
+            &format!(
+                r#"{{ kind = "run", program = {{ path = "{path}", requirement = {requirement} }}, args = {{}} }}"#
+            ),
+        );
 
         let error = evaluate_default_package(&source).unwrap_err();
-        eprintln!("PROBE: {error}");
         assert!(matches!(error, DeclarationEvaluationError::Conversion(_)));
         assert_eq!(
             match &error {
@@ -324,35 +380,12 @@ let scripts = a.scripts {{
     }
 }
 
+/// A recipe that omits a required field is a schema type error, not a silently
+/// defaulted package. Only the optional fields named by the authored ABI may be
+/// absent; `meta` is not one of them.
 #[test]
-fn factory_missing_argument_is_a_gluon_type_error() {
-    let source = authored(
-        r#"
-let make = \deps -> {
-    native_build_inputs = [deps.cmake],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-make { wrong = a.dep.binary "cmake" }
-"#,
-    );
+fn a_missing_required_field_is_a_schema_type_error() {
+    let source = authored(&format!("{{ builder = {} }}", custom_builder("", "")));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -364,57 +397,44 @@ make { wrong = a.dep.binary "cmake" }
 
 #[test]
 fn evaluator_accepts_typed_kinds_in_ordinary_dependency_roles() {
-    let source = authored(
-        r#"
-let root = {
-    runtime_inputs = [
-        a.dep.package "runtime-package",
-        a.dep.output (a.package_ref "runtime-suite") "runtime",
-        a.dep.binary "runtime-binary",
-        a.dep.system_binary "runtime-system-binary",
-        a.dep.soname "libruntime.so.1",
-        a.dep.python "runtime_python",
-        a.dep.interpreter "/usr/lib/ld-runtime.so.1(x86_64)",
-    ],
-    conflicts = [a.dep.pkgconfig32 "conflicting-devel"],
-    .. a.output "out"
-}
-{
-    builder = a.builder.shell a.empty.scripts [
-        a.dep.package "tool-package",
-        a.dep.output (a.package_ref "tool-suite") "tools",
-        a.dep.binary "tool-binary",
-        a.dep.system_binary "tool-system-binary",
-    ],
-    native_build_inputs = [a.dep.cmake "NativeConfig"],
-    build_inputs = [a.dep.pkgconfig "target-devel", a.dep.pkgconfig32 "target-devel"],
-    check_inputs = [
-        a.dep.soname "libcheck.so.1",
-        a.dep.interpreter "/usr/lib/ld-check.so.1(x86_64)",
-    ],
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "ordinary-roles", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let runtime_inputs = [
+        dep("package", "runtime-package"),
+        output_dep("runtime-suite", "runtime"),
+        dep("binary", "runtime-binary"),
+        dep("system_binary", "runtime-system-binary"),
+        dep("soname", "libruntime.so.1"),
+        dep("python", "runtime_python"),
+        dep("interpreter", "/usr/lib/ld-runtime.so.1(x86_64)"),
+    ]
+    .join(", ");
+    let root = output_with(
+        "out",
+        &[
+            ("runtime_inputs", &format!("{{ {runtime_inputs} }}")),
+            (
+                "conflicts",
+                &format!("{{ {} }}", dep("pkg_config32", "conflicting-devel")),
+            ),
+        ],
     );
+    let tools = [
+        dep("package", "tool-package"),
+        output_dep("tool-suite", "tools"),
+        dep("binary", "tool-binary"),
+        dep("system_binary", "tool-system-binary"),
+    ]
+    .join(", ");
+    let source = authored(&format!(
+        "{{ {}, builder = {}, native_build_inputs = {{ {} }}, \
+         build_inputs = {{ {}, {} }}, check_inputs = {{ {}, {} }}, outputs = {{ {root} }} }}",
+        meta("ordinary-roles"),
+        custom_builder_with_tools(&tools, "", ""),
+        dep("cmake", "NativeConfig"),
+        dep("pkg_config", "target-devel"),
+        dep("pkg_config32", "target-devel"),
+        dep("soname", "libcheck.so.1"),
+        dep("interpreter", "/usr/lib/ld-check.so.1(x86_64)"),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
@@ -449,59 +469,43 @@ let root = {
 
 #[test]
 fn evaluator_rejects_typed_kind_mismatches_in_ordinary_dependency_roles() {
+    let runtime_mismatch = |dependency: String| {
+        format!(
+            "builder = {}, outputs = {{ {} }}",
+            custom_builder("", ""),
+            output_with("out", &[("runtime_inputs", &format!("{{ {dependency} }}"))]),
+        )
+    };
     for (field, declaration, role, kind) in [
         (
             "builder.required_tools[0]",
-            "builder = a.builder.shell a.empty.scripts [a.dep.soname \"libtool.so.1\"],",
+            format!(
+                "builder = {}",
+                custom_builder_with_tools(&dep("soname", "libtool.so.1"), "", "")
+            ),
             DependencyRole::BuilderTool,
             DependencyKind::Soname,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.cmake \"RuntimeConfig\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("cmake", "RuntimeConfig")),
             DependencyRole::Runtime,
             DependencyKind::CMake,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.pkgconfig \"runtime-devel\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("pkg_config", "runtime-devel")),
             DependencyRole::Runtime,
             DependencyKind::PkgConfig,
         ),
         (
             "outputs[0].runtime_inputs[0]",
-            "outputs = a.outputs.explicit [{ runtime_inputs = [a.dep.pkgconfig32 \"runtime-devel\"], .. a.output \"out\" }],",
+            runtime_mismatch(dep("pkg_config32", "runtime-devel")),
             DependencyRole::Runtime,
             DependencyKind::PkgConfig32,
         ),
     ] {
-        let source = authored(&format!(
-            r#"
-let base = {{
-    meta = {{
-        pname = "ordinary-role-error", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-{{
-    {declaration}
-    .. base
-}}
-"#
-        ));
+        let source = authored(&format!("{{ {}, {declaration} }}", meta("ordinary-role-error")));
 
         assert_dependency_role_conversion_error(evaluate_default_package(&source).unwrap_err(), field, role, kind);
     }
@@ -509,54 +513,34 @@ let base = {{
 
 #[test]
 fn evaluator_accepts_typed_kinds_in_a_selected_profile() {
-    let source = authored(
-        r#"
-let selected = a.profile {
-    name = "emul32/x86_64",
-    builder = {
-        required_tools = [
-            a.dep.package "profile-tool-package",
-            a.dep.output (a.package_ref "profile-tool-suite") "tools",
-            a.dep.binary "profile-tool-binary",
-            a.dep.system_binary "profile-tool-system-binary",
-        ],
-        environment = [],
-        phases = a.empty.scripts,
-        supported_hooks = a.hook_support.all,
-    },
-    hooks = a.empty.hooks,
-    native_build_inputs = [a.dep.cmake "ProfileNativeConfig"],
-    build_inputs = [a.dep.pkgconfig "profile-devel", a.dep.pkgconfig32 "profile-devel"],
-    check_inputs = [
-        a.dep.soname "libprofile-check.so.1",
-        a.dep.interpreter "/usr/lib/ld-profile-check.so.1(x86_64)",
-    ],
-}
-{
-    outputs = a.outputs.explicit [a.output "out"],
-    profiles = [selected],
-    .. {
-        meta = {
-            pname = "profile-roles", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let tools = [
+        dep("package", "profile-tool-package"),
+        output_dep("profile-tool-suite", "tools"),
+        dep("binary", "profile-tool-binary"),
+        dep("system_binary", "profile-tool-system-binary"),
+    ]
+    .join(", ");
+    let selected = profile(
+        "emul32/x86_64",
+        &tools,
+        &dep("cmake", "ProfileNativeConfig"),
+        &format!(
+            "{}, {}",
+            dep("pkg_config", "profile-devel"),
+            dep("pkg_config32", "profile-devel")
+        ),
+        &format!(
+            "{}, {}",
+            dep("soname", "libprofile-check.so.1"),
+            dep("interpreter", "/usr/lib/ld-profile-check.so.1(x86_64)")
+        ),
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {} }}, profiles = {{ {selected} }} }}",
+        meta("profile-roles"),
+        custom_builder("", ""),
+        output("out", true),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     let selected = evaluated.value.profile("emul32/x86_64").unwrap();
@@ -578,51 +562,18 @@ let selected = a.profile {
 #[test]
 fn evaluator_rejects_typed_kind_mismatches_in_a_selected_profile() {
     for (dependency, kind) in [
-        ("a.dep.pkgconfig32 \"profile-devel\"", DependencyKind::PkgConfig32),
+        (dep("pkg_config32", "profile-devel"), DependencyKind::PkgConfig32),
         (
-            "a.dep.interpreter \"/usr/lib/ld-profile.so.1(x86_64)\"",
+            dep("interpreter", "/usr/lib/ld-profile.so.1(x86_64)"),
             DependencyKind::Interpreter,
         ),
     ] {
+        let selected = profile("emul32/x86_64", &dependency, "", "", "");
         let source = authored(&format!(
-            r#"
-let selected = a.profile {{
-    name = "emul32/x86_64",
-    builder = {{
-        required_tools = [{dependency}],
-        environment = [],
-        phases = a.empty.scripts,
-        supported_hooks = a.hook_support.all,
-    }},
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}}
-{{
-    outputs = a.outputs.explicit [a.output "out"],
-    profiles = [selected],
-    .. {{
-        meta = {{
-            pname = "profile-role-error", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
+            "{{ {}, builder = {}, outputs = {{ {} }}, profiles = {{ {selected} }} }}",
+            meta("profile-role-error"),
+            custom_builder("", ""),
+            output("out", true),
         ));
 
         assert_dependency_role_conversion_error(
@@ -636,36 +587,18 @@ let selected = a.profile {{
 
 #[test]
 fn missing_local_output_reference_has_an_indexed_field() {
-    let source = authored(
-        r#"
-let root = {
-    runtime_inputs = [a.dep.output (a.package_ref "example") "missing"],
-    .. a.output "out"
-}
-{
-    outputs = a.outputs.explicit [root],
-    .. {
-        meta = {
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let root = output_with(
+        "out",
+        &[(
+            "runtime_inputs",
+            &format!("{{ {} }}", output_dep("example", "missing")),
+        )],
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {root} }} }}",
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -678,29 +611,11 @@ let root = {
 
 #[test]
 fn evaluator_validates_the_concrete_package() {
-    let source = authored(
-        r#"
-{
-    meta = {
-        pname = "example", version = "v1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-    );
+    let source = authored(&format!(
+        r#"{{ meta = {{ pname = "example", version = "v1.0.0", release = 1,
+            homepage = "https://example.com", license = {{ "MPL-2.0" }} }}, builder = {} }}"#,
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -714,66 +629,36 @@ fn evaluator_validates_the_concrete_package() {
 fn evaluator_rejects_malformed_source_fields_before_planning() {
     for (source, expected_field, expected_message) in [
         (
-            r#"a.source.archive "https://example.com/source.tar.xz" "short""#,
+            archive("short", "{ kind = \"none\" }", "{ kind = \"none\" }"),
             "sources[0].hash",
             "64 lowercase ASCII hexadecimal",
         ),
         (
-            r#"a.source.archive_with {
-                url = "https://example.com/source.tar.xz",
-                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                rename = a.optional.set "../escape",
-                strip_dirs = a.optional.unset,
-                unpack = a.true,
-                unpack_dir = a.optional.unset,
-            }"#,
+            archive(&"a".repeat(64), r#"{ kind = "some", value = "../escape" }"#, "{ kind = \"none\" }"),
             "sources[0].rename",
             "normalized filename component",
         ),
         (
-            r#"a.source.archive_with {
-                url = "https://example.com/source.tar.xz",
-                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                rename = a.optional.unset,
-                strip_dirs = a.optional.unset,
-                unpack = a.true,
-                unpack_dir = a.optional.set "../../escape",
-            }"#,
+            archive(
+                &"a".repeat(64),
+                "{ kind = \"none\" }",
+                r#"{ kind = "some", value = "../../escape" }"#,
+            ),
             "sources[0].unpack_dir",
             "normalized, non-empty relative path",
         ),
         (
-            r#"a.source.git "https://example.com/source.git" """#,
+            r#"{ kind = "git", url = "https://example.com/source.git", git_ref = "",
+               clone_dir = { kind = "none" } }"#
+                .to_owned(),
             "sources[0].git_ref",
             "must be non-empty",
         ),
     ] {
         let source = authored(&format!(
-            r#"
-let base = {{
-    meta = {{
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-{{
-    sources = [{source}],
-    .. base
-}}
-"#
+            "{{ {}, builder = {}, sources = {{ {source} }} }}",
+            meta("example"),
+            custom_builder("", ""),
         ));
 
         let error = evaluate_default_package(&source).unwrap_err();
@@ -795,27 +680,9 @@ fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
         ("example", "1/../../escape", "meta.version"),
     ] {
         let source = authored(&format!(
-            r#"
-{{
-    meta = {{
-        pname = {pname:?}, version = {version:?}, release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}
-"#
+            r#"{{ meta = {{ pname = {pname:?}, version = {version:?}, release = 1,
+               homepage = "https://example.com", license = {{ "MPL-2.0" }} }}, builder = {} }}"#,
+            custom_builder("", ""),
         ));
 
         let error = evaluate_default_package(&source).unwrap_err();
@@ -828,41 +695,19 @@ fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
 
 #[test]
 fn evaluator_rejects_unsafe_or_duplicate_profile_keys() {
-    let unsafe_profile = authored(
-        r#"
-let profile_named = \name -> a.profile {
-    name,
-    builder = a.empty.builder,
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    profiles = [profile_named "emul32/../x86_64"],
-    .. base
-}
-"#,
-    );
+    let with_profiles = |names: &[&str]| {
+        let profiles = names
+            .iter()
+            .map(|name| profile(name, "", "", "", ""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        authored(&format!(
+            "{{ {}, builder = {}, profiles = {{ {profiles} }} }}",
+            meta("example"),
+            custom_builder("", ""),
+        ))
+    };
+    let unsafe_profile = with_profiles(&["emul32/../x86_64"]);
 
     let error = evaluate_default_package(&unsafe_profile).unwrap_err();
     assert!(matches!(
@@ -873,41 +718,7 @@ let base = {
         }) if name == "emul32/../x86_64"
     ));
 
-    let duplicate_profiles = authored(
-        r#"
-let profile_named = \name -> a.profile {
-    name,
-    builder = a.empty.builder,
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    profiles = [profile_named "native", profile_named "emul32/x86_64", profile_named "native"],
-    .. base
-}
-"#,
-    );
+    let duplicate_profiles = with_profiles(&["native", "emul32/x86_64", "native"]);
 
     let error = evaluate_default_package(&duplicate_profiles).unwrap_err();
     assert!(matches!(
@@ -922,42 +733,13 @@ let base = {
 
 #[test]
 fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
-    let source = authored(
-        r#"
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    options = a.some.options (a.options {
-        toolchain = a.toolchain.llvm,
-        cspgo = a.false,
-        samplepgo = a.false,
-        debug = a.true,
-        strip = a.true,
-        networking = a.true,
-        compressman = a.false,
-        lastrip = a.true,
-    }),
-    .. base
-}
-"#,
-    );
+    let source = authored(&format!(
+        r#"{{ {}, builder = {}, options = {{ toolchain = "llvm", cspgo = false,
+           samplepgo = false, debug = true, strip = true, networking = true,
+           compressman = false, lastrip = true }} }}"#,
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
 
@@ -970,36 +752,18 @@ let base = {
 
 #[test]
 fn evaluator_keeps_special_constructor_reserved_but_rejects_concrete_package_use() {
-    let source = authored(
-        r#"
-let base = {
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-{
-    outputs = a.outputs.explicit [a.output_with {
-        paths = [a.path.special "/usr/lib/example/events.fifo"],
-        .. a.output "out"
-    }],
-    .. base
-}
-"#,
+    let root = output_with(
+        "out",
+        &[(
+            "paths",
+            r#"{ { kind = "special", path = "/usr/lib/example/events.fifo" } }"#,
+        )],
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {root} }} }}",
+        meta("example"),
+        custom_builder("", ""),
+    ));
 
     let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
@@ -1013,37 +777,14 @@ let base = {
 
 #[test]
 fn package_fingerprint_is_deterministic_and_binds_explicit_inputs() {
-    let source = authored(
-        r#"
-let abi_version: Int = a.abi_version
-{
-    meta = {
-        pname = "example", version = "1.0.0", release = 1,
-        homepage = "https://example.com", license = ["MPL-2.0"],
-    },
-    builder = a.builder.custom a.empty.builder,
-    sources = [],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}
-"#,
-    );
-    let evaluator = GluonPackageEvaluator::default();
+    let source = complete_package("example");
+    let evaluator = LuaPackageEvaluator::default();
 
     let first = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let repeated = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let changed = evaluate_package_with_inputs(&evaluator, &source, b"lock-v2").unwrap();
-    let typed = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
-        &GluonPackageEvaluator::default(),
+    let typed = <LuaPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+        &LuaPackageEvaluator::default(),
         &source,
         b"lock-v1",
     )

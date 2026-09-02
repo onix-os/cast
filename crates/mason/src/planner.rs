@@ -31,7 +31,7 @@ use crate::{
     build_lock, generated_lock,
     package::{Packager, ResolvedOutput},
     profile,
-    source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution},
+    source_lock::{LuaSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution},
 };
 
 mod freeze;
@@ -121,7 +121,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     }
     let requested_inputs = aggregate_inputs(unresolved_inputs);
 
-    let source_lock_codec = GluonSourceLockCodec::default();
+    let source_lock_codec = LuaSourceLockCodec::default();
     let source_lock_bytes = match generated_lock::read(
         &builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
         DeclarationEvaluator::<SourceLock>::limits(&source_lock_codec).max_source_bytes,
@@ -311,9 +311,9 @@ pub enum Error {
     ForgeInstallation(#[from] forge::installation::Error),
     #[error("`--refresh-repositories` requires `--update-lock`")]
     RefreshRequiresUpdate,
-    #[error("sources.lock.glu is required when a recipe declares sources")]
+    #[error("sources.lock.lua is required when a recipe declares sources")]
     MissingSourceLock,
-    #[error("read sources.lock.glu")]
+    #[error("read sources.lock.lua")]
     ReadSourceLock(#[source] Box<generated_lock::ReadError>),
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
@@ -327,7 +327,7 @@ pub enum Error {
     },
     #[error("policy analyzer tool at {field} is not an executable capability")]
     AnalyzerToolNotExecutable { field: &'static str },
-    #[error("policy analyzer tool at {field} has no exact provider in build.lock.glu: {request}")]
+    #[error("policy analyzer tool at {field} has no exact provider in build.lock.lua: {request}")]
     UnlockedAnalyzerTool { field: &'static str, request: String },
     #[error("package resolution returned an input request with no typed planner origin: {request}")]
     UnclassifiedResolvedInput { request: String },
@@ -347,7 +347,7 @@ mod tests {
     use fs_err as fs;
 
     use super::*;
-    use crate::source_lock::GluonSourceLockCodec;
+    use crate::source_lock::LuaSourceLockCodec;
     use stone_recipe::derivation::PhasePlan;
 
     fn package_shell(script: &str) -> StepSpec {
@@ -413,35 +413,78 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         fs::write(
-            root.path().join("stone.glu"),
+            root.path().join("stone.lua"),
             format!(
-                r#"let a = import! cast.authored.v1
-{{
+                r#"return {{
     meta = {{
         pname = "example",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid",
-        license = ["MPL-2.0"],
+        license = {{ "MPL-2.0" }},
     }},
-    builder = a.builder.custom a.empty.builder,
-    sources = [a.source.git_with {{
-        url = "{URL}",
-        git_ref = "main",
-        clone_dir = a.optional.set "chosen-source",
-    }}],
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-    outputs = a.outputs.default,
-    options = a.unset,
-    profiles = [],
-    architectures = [],
-    tuning = [],
-    emul32 = a.false,
-    mold = a.false,
-    hooks = a.unset,
-}}"#
+    builder = {{
+        kind = "custom",
+        spec = {{
+            required_tools = {{}},
+            environment = {{}},
+            phases = {{
+                setup = {{ steps = {{}} }},
+                build = {{ steps = {{}} }},
+                install = {{ steps = {{}} }},
+                check = {{ steps = {{}} }},
+                workload = {{ steps = {{}} }},
+            }},
+            supported_hooks = {{
+                setup = false,
+                build = false,
+                check = false,
+                install = false,
+                workload = false,
+            }},
+        }},
+    }},
+    sources = {{
+        {{
+            kind = "git",
+            url = "{URL}",
+            git_ref = "main",
+            clone_dir = {{ kind = "some", value = "chosen-source" }},
+        }},
+    }},
+    native_build_inputs = {{}},
+    build_inputs = {{}},
+    check_inputs = {{}},
+    outputs = {{
+        {{
+            name = "out",
+            include_in_manifest = true,
+            summary = {{ kind = "none" }},
+            description = {{ kind = "none" }},
+            provides_exclude = {{}},
+            runtime_inputs = {{}},
+            runtime_exclude = {{}},
+            paths = {{}},
+            conflicts = {{}},
+        }},
+    }},
+    options = {{
+        toolchain = "llvm",
+        cspgo = false,
+        samplepgo = false,
+        debug = true,
+        strip = true,
+        networking = false,
+        compressman = false,
+        lastrip = true,
+    }},
+    profiles = {{}},
+    architectures = {{}},
+    tuning = {{}},
+    emul32 = false,
+    mold = false,
+}}
+"#
             ),
         )
         .unwrap();
@@ -455,7 +498,7 @@ mod tests {
             })]);
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
-            GluonSourceLockCodec::default().encode(&lock).unwrap(),
+            LuaSourceLockCodec::default().encode(&lock).unwrap(),
         )
         .unwrap();
 

@@ -188,7 +188,7 @@ fn assert_pgo_workload_archive_matches_tracked_sources(source_tree: &Path, publi
 #[test]
 fn pgo_workload_declaration_and_training_source_fail_closed() {
     let package_root = execution_fixture_package_directory("pgo-workload");
-    let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
+    let recipe = crate::Recipe::load_authored(package_root.join("stone.lua")).unwrap();
     let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
@@ -196,7 +196,7 @@ fn pgo_workload_declaration_and_training_source_fail_closed() {
     .unwrap();
     let source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/gluon/execution/source-trees/cast-pgo-workload-fixture-1.0.0/main.c"),
+            .join("../../tests/fixtures/execution/source-trees/cast-pgo-workload-fixture-1.0.0/main.c"),
     )
     .unwrap();
     validate_pgo_workload_recipe(&recipe.declaration, &lock).unwrap();

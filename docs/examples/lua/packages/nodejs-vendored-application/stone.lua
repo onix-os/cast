@@ -10,127 +10,130 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "node"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "cp"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -f package-lock.json\ntest -d vendor/node_modules\ntest -f tools/build.mjs"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "node"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "cp"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/node",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "node"
-                                }
-                            }
-                        },
-                        script = "NODE_PATH=\"${CAST_SOURCE_DIR}/vendor/node_modules\" \\\nnode tools/build.mjs --output dist"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
                             },
-                            {
-                                path = "/usr/bin/cp",
+                            declared_programs = {},
+                            script = "test -f package-lock.json\ntest -d vendor/node_modules\ntest -f tools/build.mjs"
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "cp"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "install -Dm755 packaging/nebula-lint \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/nebula-lint\"\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint\"\ncp -a dist package.json vendor/node_modules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint/\""
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/node",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "node"
+                                    }
+                                }
+                            },
+                            script = "NODE_PATH=\"${CAST_SOURCE_DIR}/vendor/node_modules\" \\\nnode tools/build.mjs --output dist"
+                        }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/node",
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "node"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "NODE_PATH=\"${CAST_SOURCE_DIR}/vendor/node_modules\" \\\nnode tools/test.mjs --input dist"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/cp",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "cp"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 packaging/nebula-lint \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/nebula-lint\"\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint\"\ncp -a dist package.json vendor/node_modules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint/\""
+                        }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/node",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "node"
+                                    }
+                                }
+                            },
+                            script = "NODE_PATH=\"${CAST_SOURCE_DIR}/vendor/node_modules\" \\\nnode tools/test.mjs --input dist"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

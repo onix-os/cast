@@ -15,7 +15,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Import user-authored Gluon system intent from the provided path.
+    /// Import user-authored system intent from the provided path.
     pub fn system_intent_path(mut self, path: impl Into<PathBuf>) -> ClientBuilder {
         self.system_intent_path = Some(path.into());
         self
@@ -166,7 +166,7 @@ fn render_system_intent_notice(client: &Client, verbose: bool) -> Option<String>
     }
     let path = system_model.path();
     let first_line = format!(
-        "{}: authored Gluon system intent at {path:?} is active.",
+        "{}: authored system intent at {path:?} is active.",
         "INFO".green()
     );
     if system_model.disable_warning {
@@ -182,7 +182,7 @@ Hence:
   until the authored intent is updated.
 - The system state can be reverted to match the declared intent
   by doing a `cast sync`.
-- Each state stores a generated `/usr/lib/system-model.glu` snapshot;
+- Each state stores a generated `/usr/lib/system-model.lua` snapshot;
   it is not the authored source and should not be edited.
 - To disable declarative system intent, remove or rename {path:?}.",
     ))

@@ -1,4 +1,3 @@
--- Paired Lua form of docs/examples/gluon/repositories.glu (Phase L7).
 -- Decodes to the same repository map; the engine identity differs by design.
 return {
     {

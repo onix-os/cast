@@ -185,13 +185,19 @@ mod tests {
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
         let legacy_uri = Url::parse("https://cdn.aerynos.dev/stream/volatile/x86_64/stone.index").unwrap();
         let authored = format!(
-            r#"// Keep this comment and expression byte-for-byte.
-let cast = import! cast.system.v1
-{{
-    repositories = [
-        cast.repository.direct "volatile" "{legacy_uri}",
-    ],
-    .. cast.system
+            r#"-- Keep this comment and expression byte-for-byte.
+return {{
+    disable_warning = false,
+    repositories = {{
+        {{
+            id = "volatile",
+            description = {{ kind = "none" }},
+            source = {{ kind = "direct_index", uri = "{legacy_uri}" }},
+            priority = {{ kind = "none" }},
+            enabled = {{ kind = "none" }},
+        }},
+    }},
+    packages = {{}},
 }}
 "#
         );

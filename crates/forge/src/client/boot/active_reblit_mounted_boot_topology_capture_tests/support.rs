@@ -73,7 +73,7 @@ impl AliasFixture {
         for directory in [installation_root.join("etc"), source_directory] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
         }
-        let source = installation_root.join("etc/cast/boot-topology.glu");
+        let source = installation_root.join("etc/cast/boot-topology.lua");
         write_alias_source(&source, PARTUUID)?;
 
         let context_parent = temporary.path().join("context-parent");
@@ -152,7 +152,7 @@ impl AliasFixture {
         for directory in [installation.root.join("etc"), source_directory] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
         }
-        let source = installation.root.join("etc/cast/boot-topology.glu");
+        let source = installation.root.join("etc/cast/boot-topology.lua");
         write_alias_source(&source, PARTUUID)?;
         PreparedActiveReblitMountedBootTopology::prepare_fixture_until(
             installation,
@@ -340,7 +340,7 @@ fn write_alias_source(path: &PathBuf, partuuid: &str) -> io::Result<()> {
     fs::write(
         path,
         format!(
-            "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{partuuid}\", mount_point = \"{MOUNT_POINT}\" }}\n"
+            "return {{\n    esp = {{ partuuid = \"{partuuid}\", mount_point = \"{MOUNT_POINT}\" }},\n    boot = {{ kind = \"alias_esp\" }},\n}}\n"
         ),
     )?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o644))
@@ -350,7 +350,7 @@ fn write_distinct_source(path: &PathBuf) -> io::Result<()> {
     fs::write(
         path,
         format!(
-            "let cast = import! cast.boot_topology.v2\ncast.boot_topology.distinct {{ partuuid = \"{PARTUUID}\", mount_point = \"{MOUNT_POINT}\" }} {{ partuuid = \"{XBOOTLDR_PARTUUID}\", mount_point = \"{XBOOTLDR_MOUNT_POINT}\" }}\n"
+            "return {{\n    esp = {{ partuuid = \"{PARTUUID}\", mount_point = \"{MOUNT_POINT}\" }},\n    boot = {{\n        kind = \"distinct_xbootldr\",\n        xbootldr = {{ partuuid = \"{XBOOTLDR_PARTUUID}\", mount_point = \"{XBOOTLDR_MOUNT_POINT}\" }},\n    }},\n}}\n"
         ),
     )?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o644))

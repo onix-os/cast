@@ -1,7 +1,0 @@
-let a = import! cast.authored.v1
-let make_package = import! "./package.glu"
-let matrix = import! "./matrix.glu"
-
-// Two closed axes form one exhaustive configuration value. Unselected matrix
-// cells never contribute dependencies to the frozen closure.
-make_package matrix.postgresql matrix.opentelemetry

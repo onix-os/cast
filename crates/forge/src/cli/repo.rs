@@ -17,7 +17,7 @@ use url::Url;
 
 /// Control flow for the subcommands
 enum Action {
-    // Root, canonical (emit the generated Gluon fragment instead of the summary)
+    // Root, canonical (emit the generated fragment instead of the summary)
     List(bool),
     // Root, Id, Url, Comment, Root index enabled options
     Add(String, Url, String, Priority, Option<RootIndexOptions>),
@@ -83,9 +83,8 @@ pub fn command() -> Command {
                 .arg(
                     Arg::new("canonical")
                         .long("canonical")
-                        .alias("gluon")
                         .action(ArgAction::SetTrue)
-                        .help("Emit the canonical generated Gluon fragment instead of the human summary"),
+                        .help("Emit the canonical generated fragment instead of the human summary"),
                 ),
         )
         .subcommand(
@@ -199,11 +198,11 @@ fn add(
 fn list(manager: repository::Manager, canonical: bool) -> Result<(), Error> {
     let configured_repos = manager.list();
 
-    // `--canonical` emits the round-trippable generated Gluon authority fragment
+    // `--canonical` emits the round-trippable generated authority fragment
     // (an empty repo set still yields a valid empty authority); the default view
     // stays the human-readable summary below.
     if canonical {
-        print!("{}", repository::gluon::encode_configured(configured_repos)?);
+        print!("{}", repository::lua::encode_configured(configured_repos)?);
         return Ok(());
     }
 
@@ -328,7 +327,7 @@ pub enum Error {
     #[error("encode canonical repositories")]
     RepositoryEncode(#[from] repository::RepositoryConversionError),
     #[error(
-        "`cast repo {command}` is not allowed while authored Gluon system intent is active; edit repositories in {path:?}"
+        "`cast repo {command}` is not allowed while authored system intent is active; edit repositories in {path:?}"
     )]
     SystemIntentDisallowed { command: String, path: PathBuf },
     #[error("repository {0} was not found")]
@@ -352,13 +351,19 @@ mod tests {
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
         fs::set_permissions(temporary.path().join("etc"), std::fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(intent_path.parent().unwrap(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let authored = r#"// Repository intent remains administrator-owned.
-let cast = import! cast.system.v1
-{
-    repositories = [
-        cast.repository.direct "local" "file:///var/cache/cast/local.index",
-    ],
-    .. cast.system
+        let authored = r#"-- Repository intent remains administrator-owned.
+return {
+    disable_warning = false,
+    repositories = {
+        {
+            id = "local",
+            description = { kind = "none" },
+            source = { kind = "direct_index", uri = "file:///var/cache/cast/local.index" },
+            priority = { kind = "none" },
+            enabled = { kind = "none" },
+        },
+    },
+    packages = {},
 }
 "#;
         fs::write(&intent_path, authored).unwrap();

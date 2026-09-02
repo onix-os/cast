@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use lua_config::lua_string;
 use tempfile::TempDir;
 
 use super::super::{
@@ -60,7 +61,7 @@ impl Fixture {
 }
 
 pub(super) fn authored_root(root: &str) -> String {
-    format!("let cast = import! cast.root_filesystem.v1\ncast.root_filesystem {{ root = {root:?} }}\n")
+    format!("return {{ root = {} }}\n", lua_string(root))
 }
 
 #[derive(Debug, Eq, PartialEq)]

@@ -12,10 +12,8 @@ use stone::relation::{Dependency, Kind as RelationKind, ParseError};
 /// declaration language, so it is owned here rather than by an adapter.
 pub const BUILD_POLICY_ABI_VERSION: u32 = 5;
 
-pub use self::gluon::{GLUON_BUILD_POLICY_ABI, GluonBuildPolicyEvaluator};
 pub use self::lua::{BuildPolicyEvaluator, LuaBuildPolicyEvaluator, encode_lua_policy};
 
-mod gluon;
 pub mod layers;
 mod lua;
 mod validation;
@@ -446,6 +444,7 @@ pub enum SandboxCredentialPolicySpec {
 /// authored policy value. The finite modes also cannot express any `/sys`
 /// mount or a full host `/dev` view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxFilesystemPolicySpec {
     pub tmp: SandboxTmpPolicySpec,
     pub sys: SandboxSysPolicySpec,
@@ -593,7 +592,7 @@ impl AnalyzerKind {
     }
 }
 
-/// Concrete repository build policy returned from restricted Gluon.
+/// Concrete repository build policy returned by a restricted configuration-language evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicySpec {
     pub build_subdir: String,

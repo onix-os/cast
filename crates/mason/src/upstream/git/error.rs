@@ -41,7 +41,7 @@ pub enum Error {
         source: io::Error,
     },
     /// The normalized checkout differs from the bytes admitted by lock refresh.
-    #[error("Git source {index} at commit {commit} materialized as {found}, but sources.lock.glu requires {expected}")]
+    #[error("Git source {index} at commit {commit} materialized as {found}, but sources.lock.lua requires {expected}")]
     MaterializationDigestMismatch {
         index: usize,
         commit: String,

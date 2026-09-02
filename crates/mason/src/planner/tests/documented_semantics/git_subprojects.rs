@@ -89,7 +89,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
                 && directory == expected_directory
         ));
     }
-    for module in ["package.glu", "repositories.glu"] {
+    for module in ["package.lua", "repositories.lua"] {
         assert!(
             plan.provenance
                 .recipe

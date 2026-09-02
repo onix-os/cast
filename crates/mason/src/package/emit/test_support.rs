@@ -37,9 +37,13 @@ pub(crate) fn set_test_compiler_cache(plan: &mut stone_recipe::derivation::Deriv
 }
 
 #[cfg(test)]
-fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> gluon_config::EvaluationIdentity {
-    gluon_config::GluonEngine::default()
-        .evaluate_with_inputs::<i64>(&gluon_config::Source::new(logical_name, source), explicit_inputs)
+fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> declarative_config::EvaluationIdentity {
+    lua_config::LuaEngine::default()
+        .evaluate_with_inputs_within_as::<i64>(
+            &declarative_config::Source::new(logical_name, &format!("return {source}")),
+            explicit_inputs,
+            declarative_config::EvaluationDeadline::start(std::time::Duration::from_secs(30)),
+        )
         .expect("test provenance must be a real restricted evaluation")
         .identity
 }
@@ -71,11 +75,11 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     }];
     let policy_inputs = policy_composition_identity("aerynos", &layers);
     let provenance = DerivationProvenance {
-        recipe: test_evaluation("stone.glu", "3", SOURCE_LOCK_BYTES),
+        recipe: test_evaluation("stone.lua", "3", SOURCE_LOCK_BYTES),
         profiles,
         policy: PolicyProvenance {
             name: "aerynos".to_owned(),
-            root: test_evaluation("policy.glu", "4", &policy_inputs),
+            root: test_evaluation("policy.lua", "4", &policy_inputs),
             layers,
         },
     };
@@ -108,7 +112,7 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         .into_iter()
         .map(|name| {
             let mut origins = vec![InputOrigin::Policy {
-                source: "policy.glu".to_owned(),
+                source: "policy.lua".to_owned(),
                 field: "build_root.base".to_owned(),
                 index: 0,
             }];

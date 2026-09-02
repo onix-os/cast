@@ -100,8 +100,8 @@ fn directory_chain_and_installation_root_substitution_are_rejected() {
             fs::rename(&cast, &displaced).unwrap();
             fs::create_dir(&cast).unwrap();
             fs::set_permissions(&cast, fs::Permissions::from_mode(0o755)).unwrap();
-            fs::write(cast.join("boot-topology.glu"), authored_alias(ESP_PARTUUID)).unwrap();
-            fs::set_permissions(cast.join("boot-topology.glu"), fs::Permissions::from_mode(0o644)).unwrap();
+            fs::write(cast.join("boot-topology.lua"), authored_alias(ESP_PARTUUID)).unwrap();
+            fs::set_permissions(cast.join("boot-topology.lua"), fs::Permissions::from_mode(0o644)).unwrap();
         },
         || {},
     );
