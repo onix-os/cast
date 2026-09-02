@@ -444,6 +444,7 @@ pub enum SandboxCredentialPolicySpec {
 /// authored policy value. The finite modes also cannot express any `/sys`
 /// mount or a full host `/dev` view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxFilesystemPolicySpec {
     pub tmp: SandboxTmpPolicySpec,
     pub sys: SandboxSysPolicySpec,
@@ -591,7 +592,7 @@ impl AnalyzerKind {
     }
 }
 
-/// Concrete repository build policy returned from restricted Gluon.
+/// Concrete repository build policy returned by a restricted configuration-language evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicySpec {
     pub build_subdir: String,

@@ -69,23 +69,17 @@ fn evaluates_repository_build_policy_as_typed_data() {
             AnalyzerKind::IncludeAny,
         ]
     );
-    for expected in ["cast.build_policy.v5", "tuning/flags.glu", "tuning/groups.glu"] {
-        assert!(
-            evaluated
-                .identity
-                .modules
-                .iter()
-                .any(|module| module.logical_name == expected),
-            "missing repository build-policy module {expected} from fingerprint"
-        );
-    }
+    // The shipped policy is a single self-contained declaration, so its
+    // identity binds the root source alone.
+    assert!(evaluated.identity.modules.is_empty());
+    assert_eq!(evaluated.identity.root_source_sha256.len(), 64);
 }
 
 #[test]
 fn repository_policy_relative_modules_require_an_explicit_source_root() {
     let error = evaluate_default_policy(&Source::new(
         "default.lua",
-        include_str!("../../mason/data/policy/default.lua"),
+        r#"return cast.import("tuning/flags.lua")"#,
     ))
     .unwrap_err();
 
@@ -106,10 +100,7 @@ fn build_policy_v5_is_a_hard_abi_boundary() {
 fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
     let (evaluator, source) = repository_policy();
     let original = evaluate_policy(&evaluator, &source).unwrap();
-    let alternative_source = source.text().replace(
-        "dev = p.sandbox_filesystems.dev.minimal",
-        "dev = p.sandbox_filesystems.dev.none",
-    );
+    let alternative_source = source.text().replace(r#"dev = "minimal""#, r#"dev = "none""#);
     let alternative = evaluate_policy(&evaluator, &Source::new("default.lua", alternative_source)).unwrap();
 
     assert_eq!(alternative.value.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
@@ -122,10 +113,9 @@ fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
 #[test]
 fn legacy_read_only_proc_selector_is_not_available() {
     let (evaluator, source) = repository_policy();
-    let legacy_source = source.text().replace(
-        "tmp = p.sandbox_filesystems.tmp.empty",
-        "proc = p.sandbox_filesystems.proc.read_only,\n        tmp = p.sandbox_filesystems.tmp.empty",
-    );
+    let legacy_source = source
+        .text()
+        .replace(r#"tmp = "empty""#, "proc = \"read_only\",\n            tmp = \"empty\"");
 
     let error = evaluate_policy(&evaluator, &Source::new("default.lua", legacy_source)).unwrap_err();
 
