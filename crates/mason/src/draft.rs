@@ -2,13 +2,13 @@
 
 use std::{io, path::PathBuf};
 
-use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator, Source};
+use declarative_config::{DeclarationEvaluationError, Source};
 use itertools::Itertools;
 use licenses::match_licences;
 use stone::relation::{Dependency, Kind};
 use stone_recipe::{
     UpstreamSpec,
-    package::{GluonPackageEvaluator, PackageConversionError, PackageSpec},
+    package::{LuaPackageEvaluator, PackageConversionError},
 };
 use thiserror::Error;
 use url::Url;
@@ -66,11 +66,9 @@ impl Drafter {
         let build_system = require_detected_build_system(build.detected_system)?;
 
         let stone = encode_authored_recipe(&metadata, build_system, build.dependencies, licenses)?;
-        DeclarationEvaluator::<PackageSpec>::evaluate(
-            &GluonPackageEvaluator::default(),
-            &Source::new("stone.glu", stone.clone()),
-        )
-        .map_err(Error::GeneratedDraft)?;
+        LuaPackageEvaluator::default()
+            .evaluate_authored(&Source::new("stone.lua", stone.clone()))
+            .map_err(|diagnostic| Error::GeneratedDraft(DeclarationEvaluationError::Evaluation(diagnostic)))?;
 
         Ok(Draft { stone })
     }
@@ -91,6 +89,12 @@ fn require_draft_file_limit(actual: usize) -> Result<(), Error> {
     }
 }
 
+
+/// Emit a minimal-form authored recipe.
+///
+/// A draft is meant to be edited, so it carries no generated marker and writes
+/// only what an author would: everything defaulted by the package ABI is left
+/// out and filled in by the shared lowering.
 fn encode_authored_recipe(
     metadata: &Metadata,
     build_system: build::System,
@@ -101,20 +105,14 @@ fn encode_authored_recipe(
 
     // Cargo runs its checks by default; the other build systems draft with
     // checks off so a generated recipe never fails on an untriaged test suite.
-    let run_tests = if matches!(build_system, build::System::Cargo) {
-        "a.true"
-    } else {
-        "a.false"
-    };
+    let run_tests = matches!(build_system, build::System::Cargo);
     let builder = match build_system {
-        build::System::Cmake => format!("a.builder.cmake {{ flags = [], run_tests = {run_tests} }}"),
-        build::System::Meson => format!("a.builder.meson {{ flags = [], run_tests = {run_tests} }}"),
+        build::System::Cmake => format!("{{ kind = \"cmake\", flags = {{}}, run_tests = {run_tests} }}"),
+        build::System::Meson => format!("{{ kind = \"meson\", flags = {{}}, run_tests = {run_tests} }}"),
         build::System::Cargo => {
-            format!("a.builder.cargo {{ features = [], binaries = [], run_tests = {run_tests} }}")
+            format!("{{ kind = \"cargo\", features = {{}}, binaries = {{}}, run_tests = {run_tests} }}")
         }
-        build::System::Autotools => {
-            format!("a.builder.autotools {{ flags = [], run_tests = {run_tests} }}")
-        }
+        build::System::Autotools => format!("{{ kind = \"autotools\", flags = {{}}, run_tests = {run_tests} }}"),
         unsupported => {
             return Err(Error::UnsupportedDraftSystem {
                 system: unsupported.to_string(),
@@ -124,7 +122,7 @@ fn encode_authored_recipe(
 
     let dependencies = dependencies.into_iter().sorted().collect::<Vec<_>>();
 
-    let mut output = String::from("let a = import! cast.authored.v1\n{\n");
+    let mut output = String::from("return {\n");
     output.push_str("    meta = {\n");
     writeln!(
         output,
@@ -148,22 +146,34 @@ fn encode_authored_recipe(
     writeln!(output, "        license = {},", string_array(&licenses)).unwrap();
     output.push_str("    },\n");
     writeln!(output, "    builder = {builder},").unwrap();
-    output.push_str("    sources = [\n");
+    output.push_str("    sources = {\n");
     for source in metadata.upstream_specs() {
         match source {
             UpstreamSpec::Archive { url, hash, .. } => {
-                writeln!(output, "        a.source.archive {} {},", quoted(&url), quoted(&hash)).unwrap();
+                writeln!(
+                    output,
+                    "        {{ kind = \"archive\", url = {}, hash = {}, rename = {{ kind = \"none\" }}, \
+                     strip_dirs = {{ kind = \"none\" }}, unpack = true, unpack_dir = {{ kind = \"none\" }} }},",
+                    quoted(&url),
+                    quoted(&hash)
+                )
+                .unwrap();
             }
             UpstreamSpec::Git { url, git_ref, .. } => {
-                writeln!(output, "        a.source.git {} {},", quoted(&url), quoted(&git_ref)).unwrap();
+                writeln!(
+                    output,
+                    "        {{ kind = \"git\", url = {}, git_ref = {}, clone_dir = {{ kind = \"none\" }} }},",
+                    quoted(&url),
+                    quoted(&git_ref)
+                )
+                .unwrap();
             }
         }
     }
-    output.push_str("    ],\n");
-    output.push_str("    native_build_inputs = [],\n");
+    output.push_str("    },\n");
     writeln!(
         output,
-        "    build_inputs = [{}],",
+        "    build_inputs = {{{}}},",
         dependencies
             .iter()
             .map(encode_dependency)
@@ -171,18 +181,6 @@ fn encode_authored_recipe(
             .join(", ")
     )
     .unwrap();
-    output.push_str("    check_inputs = [],\n");
-    output.push_str("    outputs = a.outputs.with_root {\n");
-    output.push_str("        summary = a.optional.set \"UPDATE SUMMARY\",\n");
-    output.push_str("        description = a.optional.set \"UPDATE DESCRIPTION\",\n");
-    output.push_str("        .. a.output \"out\"\n    },\n");
-    output.push_str("    options = a.unset,\n");
-    output.push_str("    profiles = [],\n");
-    output.push_str("    architectures = [],\n");
-    output.push_str("    tuning = [],\n");
-    output.push_str("    emul32 = a.false,\n");
-    output.push_str("    mold = a.false,\n");
-    output.push_str("    hooks = a.unset,\n");
     output.push_str("}\n");
     Ok(output)
 }
@@ -196,7 +194,7 @@ fn placeholder(value: &str, fallback: &str) -> String {
 }
 
 fn encode_dependency(dependency: &Dependency) -> String {
-    let constructor = match dependency.kind {
+    let kind = match dependency.kind {
         Kind::PackageName => "package",
         Kind::SharedLibrary => "soname",
         Kind::PkgConfig => "pkgconfig",
@@ -207,7 +205,7 @@ fn encode_dependency(dependency: &Dependency) -> String {
         Kind::SystemBinary => "system_binary",
         Kind::PkgConfig32 => "pkgconfig32",
     };
-    format!("a.dep.{constructor} {}", quoted(&dependency.name))
+    format!("{{ kind = \"{kind}\", value = {} }}", quoted(&dependency.name))
 }
 
 fn quoted(value: &str) -> String {
@@ -215,7 +213,7 @@ fn quoted(value: &str) -> String {
 }
 
 fn string_array(values: &[String]) -> String {
-    format!("[{}]", values.iter().map(|value| quoted(value)).join(", "))
+    format!("{{{}}}", values.iter().map(|value| quoted(value)).join(", "))
 }
 
 fn format_licenses(licenses: Vec<String>) -> Vec<String> {
@@ -270,7 +268,7 @@ pub enum Error {
     Licenses(#[from] licenses::Error),
     #[error("io")]
     Io(#[from] io::Error),
-    #[error("generated draft failed its bounded Gluon evaluation")]
+    #[error("generated draft failed its bounded evaluation")]
     GeneratedDraft(#[source] DeclarationEvaluationError<PackageConversionError>),
     #[error("draft manifest contains {actual} regular files; limit is {limit}")]
     TooManyDraftFiles { actual: usize, limit: usize },
@@ -305,8 +303,10 @@ mod test {
         ));
     }
 
+    /// A draft must be a recipe the authored evaluator accepts as written, with
+    /// the package ABI supplying every field the draft leaves out.
     #[test]
-    fn generated_draft_is_a_valid_standalone_gluon_recipe() {
+    fn generated_draft_is_a_valid_standalone_authored_recipe() {
         let metadata = Metadata::new(vec![Upstream {
             uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
             hash: "0123456789abcdef".repeat(4),
@@ -319,21 +319,17 @@ mod test {
         )
         .unwrap();
 
-        assert_eq!(
-            source.as_bytes(),
-            include_bytes!("../../../tests/fixtures/gluon/goldens/drafted-stone.glu")
-        );
+        // A draft is edited by hand, so it must not claim to be generated.
+        assert!(!source.contains("@generated"));
 
-        let evaluated = DeclarationEvaluator::<PackageSpec>::evaluate(
-            &GluonPackageEvaluator::default(),
-            &Source::new("stone.glu", source.clone()),
-        )
-        .unwrap();
+        let evaluated = LuaPackageEvaluator::default()
+            .evaluate_authored(&Source::new("stone.lua", source.clone()))
+            .unwrap();
 
-        assert_eq!(evaluated.value.meta.pname, "example");
-        assert_eq!(evaluated.value.meta.version, "1.2.3");
-        assert_eq!(evaluated.value.sources.len(), 1);
-        assert!(!evaluated.value.options.networking);
+        assert_eq!(evaluated.meta.pname, "example");
+        assert_eq!(evaluated.meta.version, "1.2.3");
+        assert_eq!(evaluated.sources.len(), 1);
+        assert!(!evaluated.options.networking);
     }
 
     #[test]
