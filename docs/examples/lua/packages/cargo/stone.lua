@@ -11,56 +11,59 @@ return {
         }
     },
     builder = {
-        required_tools = {},
-        environment = {
-            "cargo"
-        },
-        phases = {
-            setup = {
-                steps = {}
+        kind = "custom",
+        spec = {
+            required_tools = {},
+            environment = {
+                "cargo"
             },
-            build = {
-                steps = {
-                    {
-                        kind = "cargo_build",
-                        features = {
-                            "pcre2",
-                            "unicode"
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "cargo_build",
+                            features = {
+                                "pcre2",
+                                "unicode"
+                            }
                         }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "cargo_install",
-                        binaries = {
-                            "cargo-hello"
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "cargo_install",
+                            binaries = {
+                                "cargo-hello"
+                            }
                         }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "cargo_test",
-                        features = {
-                            "pcre2",
-                            "unicode"
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "cargo_test",
+                            features = {
+                                "pcre2",
+                                "unicode"
+                            }
                         }
                     }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

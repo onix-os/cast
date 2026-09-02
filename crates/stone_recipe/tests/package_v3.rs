@@ -140,20 +140,10 @@ fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
 /// A complete, already-lowered package spec. The input-evaluator path decodes
 /// the frozen domain directly, so it names every field.
 fn complete_package(pname: &str) -> Source {
-    let phases = ["setup", "build", "install", "check", "workload"]
-        .into_iter()
-        .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
-        .collect::<Vec<_>>()
-        .join(", ");
     authored(&format!(
-        "{{ {}, builder = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
-         supported_hooks = {{ setup = false, build = false, check = false, install = false, \
-         workload = false }} }}, hooks = {}, native_build_inputs = {{}}, build_inputs = {{}}, \
-         check_inputs = {{}}, outputs = {{ {} }}, options = {{ toolchain = \"llvm\", cspgo = false, \
-         samplepgo = false, debug = true, strip = true, networking = false, compressman = false, \
-         lastrip = true }}, profiles = {{}}, sources = {{}}, architectures = {{}}, tuning = {{}}, \
-         emul32 = false, mold = false }}",
+        "{{ {}, builder = {}, hooks = {}, outputs = {{ {} }} }}",
         meta(pname),
+        custom_builder("", ""),
         empty_hooks(),
         output("out", true),
     ))

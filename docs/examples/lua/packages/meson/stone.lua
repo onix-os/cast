@@ -10,70 +10,73 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "cmake"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "cmake"
+                },
+                {
+                    kind = "binary",
+                    value = "sh"
+                },
+                {
+                    kind = "binary",
+                    value = "ninja"
+                },
+                {
+                    kind = "binary",
+                    value = "pkgconf"
+                }
             },
-            {
-                kind = "binary",
-                value = "sh"
+            environment = {
+                "meson"
             },
-            {
-                kind = "binary",
-                value = "ninja"
-            },
-            {
-                kind = "binary",
-                value = "pkgconf"
-            }
-        },
-        environment = {
-            "meson"
-        },
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "meson_setup",
-                        flags = {
-                            "-Ddefault_library=shared",
-                            "-Ddocumentation=disabled"
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "meson_setup",
+                            flags = {
+                                "-Ddefault_library=shared",
+                                "-Ddocumentation=disabled"
+                            }
                         }
                     }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "meson_build"
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "meson_build"
+                        }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "meson_install"
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "meson_install"
+                        }
                     }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "meson_test"
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "meson_test"
+                        }
                     }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

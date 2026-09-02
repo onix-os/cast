@@ -10,57 +10,60 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster\"\ninstall -m644 fonts/*.otf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster/\"\ninstall -Dm644 OFL.txt \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/aster-fonts/OFL.txt\"\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster\"\ninstall -m644 fonts/*.otf \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster/\"\ninstall -Dm644 OFL.txt \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/aster-fonts/OFL.txt\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

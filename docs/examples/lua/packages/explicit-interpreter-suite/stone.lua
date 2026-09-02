@@ -10,177 +10,180 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "python3"
-            },
-            {
-                kind = "binary",
-                value = "sed"
-            },
-            {
-                kind = "binary",
-                value = "grep"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "printf '%s\\n' \\\n    '#!@BASH@' \\\n    'set -eu' \\\n    'test \"${1-}\" = \"--self-test\"' \\\n    'printf \"%s\\n\" \"explicit interpreter suite: bash\"' \\\n    > cast-interpreter-shell\nprintf '%s\\n' \\\n    '#!@PYTHON@' \\\n    'import sys' \\\n    'if sys.argv[1:] != [\"--self-test\"]:' \\\n    '    raise SystemExit(2)' \\\n    'print(\"explicit interpreter suite: python\")' \\\n    > cast-interpreter-python"
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/sed",
-                            requirement = {
-                                kind = "binary",
-                                value = "sed"
-                            }
-                        },
-                        args = {
-                            "-i",
-                            "-e",
-                            "s|^#!@BASH@$|#!/usr/bin/bash|",
-                            "cast-interpreter-shell"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/sed",
-                            requirement = {
-                                kind = "binary",
-                                value = "sed"
-                            }
-                        },
-                        args = {
-                            "-i",
-                            "-e",
-                            "s|^#!@PYTHON@$|#!/usr/bin/python3|",
-                            "cast-interpreter-python"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "python3"
+                },
+                {
+                    kind = "binary",
+                    value = "sed"
+                },
+                {
+                    kind = "binary",
+                    value = "grep"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
+                            },
+                            declared_programs = {},
+                            script = "printf '%s\\n' \\\n    '#!@BASH@' \\\n    'set -eu' \\\n    'test \"${1-}\" = \"--self-test\"' \\\n    'printf \"%s\\n\" \"explicit interpreter suite: bash\"' \\\n    > cast-interpreter-shell\nprintf '%s\\n' \\\n    '#!@PYTHON@' \\\n    'import sys' \\\n    'if sys.argv[1:] != [\"--self-test\"]:' \\\n    '    raise SystemExit(2)' \\\n    'print(\"explicit interpreter suite: python\")' \\\n    > cast-interpreter-python"
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/sed",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "sed"
+                                }
+                            },
+                            args = {
+                                "-i",
+                                "-e",
+                                "s|^#!@BASH@$|#!/usr/bin/bash|",
+                                "cast-interpreter-shell"
                             }
                         },
-                        script = "install -Dm755 cast-interpreter-shell \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-shell\"\ninstall -Dm755 cast-interpreter-python \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-python\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/sed",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "sed"
+                                }
+                            },
+                            args = {
+                                "-i",
+                                "-e",
+                                "s|^#!@PYTHON@$|#!/usr/bin/python3|",
+                                "cast-interpreter-python"
                             }
-                        },
-                        args = {
-                            "-Fqx",
-                            "#!/usr/bin/bash",
-                            "cast-interpreter-shell"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
-                            }
-                        },
-                        args = {
-                            "-Fqx",
-                            "#!/usr/bin/python3",
-                            "cast-interpreter-python"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        args = {
-                            "cast-interpreter-shell",
-                            "--self-test"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/python3",
-                            requirement = {
-                                kind = "binary",
-                                value = "python3"
-                            }
-                        },
-                        args = {
-                            "cast-interpreter-python",
-                            "--self-test"
                         }
                     }
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 cast-interpreter-shell \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-shell\"\ninstall -Dm755 cast-interpreter-python \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-python\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "#!/usr/bin/bash",
+                                "cast-interpreter-shell"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "#!/usr/bin/python3",
+                                "cast-interpreter-python"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            args = {
+                                "cast-interpreter-shell",
+                                "--self-test"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/python3",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "python3"
+                                }
+                            },
+                            args = {
+                                "cast-interpreter-python",
+                                "--self-test"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

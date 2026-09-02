@@ -10,72 +10,75 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "ln"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            },
-                            {
-                                path = "/usr/bin/ln",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "ln"
-                                }
-                            }
-                        },
-                        script = "\nprintf '%s\\n' '#!/usr/bin/bash' 'exit 0' > typed-router\nprintf '%s\\n' 'Typed output routing example' > README\nprintf '%s\\n' 'p /run/typed-router/events.fifo 0600 root root -' > typed-router.conf\ninstall -Dm755 typed-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router\"\nln -s typed-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router-current\"\ninstall -Dm644 README \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/typed-router/README\"\ninstall -Dm644 typed-router.conf \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/typed-router.conf\"\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "ln"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/ln",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "ln"
+                                    }
+                                }
+                            },
+                            script = "\nprintf '%s\\n' '#!/usr/bin/bash' 'exit 0' > typed-router\nprintf '%s\\n' 'Typed output routing example' > README\nprintf '%s\\n' 'p /run/typed-router/events.fifo 0600 root root -' > typed-router.conf\ninstall -Dm755 typed-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router\"\nln -s typed-router \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router-current\"\ninstall -Dm644 README \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/typed-router/README\"\ninstall -Dm644 typed-router.conf \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/typed-router.conf\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

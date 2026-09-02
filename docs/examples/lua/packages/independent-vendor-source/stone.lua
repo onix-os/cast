@@ -10,116 +10,119 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "cargo"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "cargo"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                }
             },
-            {
-                kind = "binary",
-                value = "install"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "test -f \"${CAST_SOURCE_DIR}/application/Cargo.toml\"\ntest -f \"${CAST_SOURCE_DIR}/application/Cargo.lock\"\ntest -d \"${CAST_SOURCE_DIR}/vendor\"\ntest ! -e \"${CAST_SOURCE_DIR}/application/vendor\""
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/cargo",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "cargo"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport CARGO_HOME=\"${CAST_BUILD_ROOT}/cargo-home\"\nexport CARGO_NET_OFFLINE=true\nexport CARGO_INCREMENTAL=0\ncargo build \\\n    --manifest-path \"${CAST_SOURCE_DIR}/application/Cargo.toml\" \\\n    --target-dir \"${CAST_BUILDER_DIR}/target\" \\\n    --release --frozen --offline \\\n    --config 'net.offline=true' \\\n    --config 'source.crates-io.replace-with=\"declared-vendor\"' \\\n    --config \"source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'\""
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm755 \"${CAST_BUILDER_DIR}/target/release/vendor-note\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/vendor-note\"\ninstall -Dm644 \"${CAST_SOURCE_DIR}/application/README.md\" \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/vendor-note/README.md\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/cargo",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "cargo"
+                                    }
+                                }
+                            },
+                            script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport CARGO_HOME=\"${CAST_BUILD_ROOT}/cargo-home\"\nexport CARGO_NET_OFFLINE=true\nexport CARGO_INCREMENTAL=0\ncargo test \\\n    --manifest-path \"${CAST_SOURCE_DIR}/application/Cargo.toml\" \\\n    --target-dir \"${CAST_BUILDER_DIR}/target\" \\\n    --frozen --offline \\\n    --config 'net.offline=true' \\\n    --config 'source.crates-io.replace-with=\"declared-vendor\"' \\\n    --config \"source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'\""
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -f \"${CAST_SOURCE_DIR}/application/Cargo.toml\"\ntest -f \"${CAST_SOURCE_DIR}/application/Cargo.lock\"\ntest -d \"${CAST_SOURCE_DIR}/vendor\"\ntest ! -e \"${CAST_SOURCE_DIR}/application/vendor\""
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/cargo",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "cargo"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport CARGO_HOME=\"${CAST_BUILD_ROOT}/cargo-home\"\nexport CARGO_NET_OFFLINE=true\nexport CARGO_INCREMENTAL=0\ncargo build \\\n    --manifest-path \"${CAST_SOURCE_DIR}/application/Cargo.toml\" \\\n    --target-dir \"${CAST_BUILDER_DIR}/target\" \\\n    --release --frozen --offline \\\n    --config 'net.offline=true' \\\n    --config 'source.crates-io.replace-with=\"declared-vendor\"' \\\n    --config \"source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'\""
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "install -Dm755 \"${CAST_BUILDER_DIR}/target/release/vendor-note\" \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/vendor-note\"\ninstall -Dm644 \"${CAST_SOURCE_DIR}/application/README.md\" \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/vendor-note/README.md\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/cargo",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "cargo"
-                                }
-                            }
-                        },
-                        script = "export HOME=\"${CAST_BUILD_ROOT}/home\"\nexport CARGO_HOME=\"${CAST_BUILD_ROOT}/cargo-home\"\nexport CARGO_NET_OFFLINE=true\nexport CARGO_INCREMENTAL=0\ncargo test \\\n    --manifest-path \"${CAST_SOURCE_DIR}/application/Cargo.toml\" \\\n    --target-dir \"${CAST_BUILDER_DIR}/target\" \\\n    --frozen --offline \\\n    --config 'net.offline=true' \\\n    --config 'source.crates-io.replace-with=\"declared-vendor\"' \\\n    --config \"source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'\""
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

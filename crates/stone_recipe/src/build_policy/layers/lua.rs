@@ -1,10 +1,10 @@
 //! Lua adapter for the ordered build-policy composition manifest (Phase L5).
 //!
-//! Decodes an authored Lua manifest into the same shared [`BuildPolicyRootSpec`]
-//! the Gluon adapter produces and runs the identical `validate` pass. The
-//! operation variants use the Lua tagged encoding; equivalent Gluon and Lua
-//! sources normalize to equal specs with intentionally distinct evaluation
-//! identities. This domain admits explicit inputs, so the adapter implements
+//! Decodes an authored Lua manifest into the shared [`BuildPolicyRootSpec`] and
+//! runs the shared `validate` pass. The operation variants use the Lua tagged
+//! encoding; equivalent sources in any configuration language normalize to
+//! equal specs with intentionally distinct evaluation identities. This domain
+//! admits explicit inputs, so the adapter implements
 //! [`DeclarationInputEvaluator`] as well and binds them into the identity.
 
 use declarative_config::{

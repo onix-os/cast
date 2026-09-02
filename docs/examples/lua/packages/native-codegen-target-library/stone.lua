@@ -10,174 +10,177 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "ln"
-            },
-            {
-                kind = "binary",
-                value = "test"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "ln"
+                },
+                {
+                    kind = "binary",
+                    value = "test"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/libexec/packet-schema/packet-codegen",
-                            requirement = {
-                                kind = "output",
-                                value = {
-                                    package = {
-                                        name = "packet-schema-tools"
-                                    },
-                                    output = "compiler"
-                                }
-                            }
-                        },
-                        args = {
-                            "--input",
-                            "source/schema/packet.idl",
-                            "--header",
-                            "build/packet-generated.h",
-                            "--source",
-                            "build/packet-generated.c"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-fPIC",
-                            "-O2",
-                            "-c",
-                            "build/packet-generated.c",
-                            "-o",
-                            "build/packet-generated.o"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-shared",
-                            "-Wl,-soname,libpacket-generated.so.1",
-                            "build/packet-generated.o",
-                            "-lpacket-runtime",
-                            "-o",
-                            "build/libpacket-generated.so.1.0.0"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
                             },
-                            {
-                                path = "/usr/bin/ln",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "ln"
-                                }
+                            args = {
+                                "-p",
+                                "build"
                             }
-                        },
-                        script = "\ninstall -Dm755 build/libpacket-generated.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1.0.0\"\nln -s libpacket-generated.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1\"\nln -s libpacket-generated.so.1 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so\"\ninstall -Dm644 build/packet-generated.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/packet-generated.h\"\n"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/test",
-                            requirement = {
-                                kind = "binary",
-                                value = "test"
-                            }
-                        },
-                        args = {
-                            "-s",
-                            "build/packet-generated.h"
                         }
                     }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/libexec/packet-schema/packet-codegen",
+                                requirement = {
+                                    kind = "output",
+                                    value = {
+                                        package = {
+                                            name = "packet-schema-tools"
+                                        },
+                                        output = "compiler"
+                                    }
+                                }
+                            },
+                            args = {
+                                "--input",
+                                "source/schema/packet.idl",
+                                "--header",
+                                "build/packet-generated.h",
+                                "--source",
+                                "build/packet-generated.c"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-fPIC",
+                                "-O2",
+                                "-c",
+                                "build/packet-generated.c",
+                                "-o",
+                                "build/packet-generated.o"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-shared",
+                                "-Wl,-soname,libpacket-generated.so.1",
+                                "build/packet-generated.o",
+                                "-lpacket-runtime",
+                                "-o",
+                                "build/libpacket-generated.so.1.0.0"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/ln",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "ln"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm755 build/libpacket-generated.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1.0.0\"\nln -s libpacket-generated.so.1.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1\"\nln -s libpacket-generated.so.1 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so\"\ninstall -Dm644 build/packet-generated.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/packet-generated.h\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/test",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "test"
+                                }
+                            },
+                            args = {
+                                "-s",
+                                "build/packet-generated.h"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

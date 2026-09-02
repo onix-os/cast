@@ -1,7 +1,7 @@
 //! Lua declaration DTOs for the package recipe domain (Phase L5, in progress).
 //!
 //! Like the build policy, the package recipe reaches its domain value through an
-//! infallible `From<GluonPackageSpec>`, so it is the neutral shape — pure
+//! infallible `From<LuaPackageSpec>`, so it is the neutral shape — pure
 //! struct/unit types derive `Deserialize` directly on the domain type, while the
 //! tuple/newtype enums (`DependencySpec`, `StepSpec`, …) get struct-variant Lua
 //! DTOs with `From` conversions. This module holds that DTO tree; it is
@@ -343,48 +343,6 @@ impl From<LuaUpstreamSpec> for UpstreamSpec {
     }
 }
 
-/// The Lua encoding of a complete [`PackageSpec`]. Pure fields (`meta`,
-/// `options`, `tuning`, `architectures`, `emul32`, `mold`) decode directly; the
-/// rest use the sub-spec DTOs above.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LuaPackageSpec {
-    pub meta: MetaSpec,
-    pub builder: LuaBuilderSpec,
-    pub hooks: LuaHooksSpec,
-    pub native_build_inputs: Vec<LuaDependencySpec>,
-    pub build_inputs: Vec<LuaDependencySpec>,
-    pub check_inputs: Vec<LuaDependencySpec>,
-    pub outputs: Vec<LuaOutputSpec>,
-    pub options: OptionsSpec,
-    pub profiles: Vec<LuaProfileSpec>,
-    pub sources: Vec<LuaUpstreamSpec>,
-    pub architectures: Vec<String>,
-    pub tuning: Vec<NamedTuningSpec>,
-    pub emul32: bool,
-    pub mold: bool,
-}
-
-impl From<LuaPackageSpec> for PackageSpec {
-    fn from(package: LuaPackageSpec) -> Self {
-        Self {
-            meta: package.meta,
-            builder: package.builder.into(),
-            hooks: package.hooks.into(),
-            native_build_inputs: dependency_vec(package.native_build_inputs),
-            build_inputs: dependency_vec(package.build_inputs),
-            check_inputs: dependency_vec(package.check_inputs),
-            outputs: package.outputs.into_iter().map(Into::into).collect(),
-            options: package.options,
-            profiles: package.profiles.into_iter().map(Into::into).collect(),
-            sources: package.sources.into_iter().map(Into::into).collect(),
-            architectures: package.architectures,
-            tuning: package.tuning,
-            emul32: package.emul32,
-            mold: package.mold,
-        }
-    }
-}
-
 /// The default value for a builder request's `run_tests` flag. Authored recipes
 /// omit `run_tests` to run the standard build system's checks; only a recipe
 /// that explicitly wants them skipped writes `run_tests = false`.
@@ -675,9 +633,13 @@ fn supported_hooks(s: &SupportedHooksSpec) -> String {
     )
 }
 
+/// A lowered builder is emitted as the `custom` builder request — the authored
+/// spelling for a builder supplied as complete data — so an emitted recipe uses
+/// the same single authoring ABI a hand-written one does.
 fn builder(b: &BuilderSpec) -> String {
     format!(
-        "{{ required_tools = {}, environment = {}, phases = {}, supported_hooks = {} }}",
+        "{{ kind = \"custom\", spec = {{ required_tools = {}, environment = {}, phases = {}, \
+         supported_hooks = {} }} }}",
         seq(&b.required_tools, dependency),
         seq(&b.environment, |e| builder_environment(e).to_owned()),
         phases(&b.phases),
@@ -812,7 +774,16 @@ pub struct LuaPackageEvaluator {
 impl LuaPackageEvaluator {
     /// Decode a complete authored package recipe.
     pub(crate) fn evaluate(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
-        Ok(self.engine.evaluate_as::<LuaPackageSpec>(source)?.value.into())
+        let authored: AuthoredPackage = self.engine.evaluate_as::<LuaAuthoredPackage>(source)?.value.into();
+        lower(authored).map_err(|error| {
+            Diagnostic::new(
+                declarative_config::DiagnosticCategory::Type,
+                None,
+                Some(source.logical_name().to_owned()),
+                None,
+                error.to_string(),
+            )
+        })
     }
 
     /// Decode a *minimal-form* authored recipe: a Lua table that omits every
@@ -859,8 +830,8 @@ impl LuaPackageEvaluator {
 
 impl DeclarationEvaluator<PackageSpec> for LuaPackageEvaluator {
     // The Lua conversion (`From<LuaPackageSpec>`) is infallible, so no
-    // conversion error is ever produced; the shared error type keeps the Lua
-    // and Gluon recipe evaluators uniform for a registered set.
+    // conversion error is ever produced; the shared error type keeps every
+    // recipe evaluator uniform for a registered set.
     type Identity = EvaluationIdentity;
     type Error = PackageConversionError;
 
@@ -883,14 +854,7 @@ impl DeclarationEvaluator<PackageSpec> for LuaPackageEvaluator {
         source: &Source,
         deadline: EvaluationDeadline,
     ) -> Result<Evaluation<PackageSpec, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
-        let evaluation = self
-            .engine
-            .evaluate_within_as::<LuaPackageSpec>(source, deadline)
-            .map_err(DeclarationEvaluationError::Evaluation)?;
-        Ok(Evaluation {
-            value: evaluation.value.into(),
-            identity: evaluation.identity,
-        })
+        self.evaluate_authored_within(source, deadline)
     }
 }
 
@@ -903,10 +867,12 @@ impl DeclarationInputEvaluator<PackageSpec> for LuaPackageEvaluator {
     ) -> Result<Evaluation<PackageSpec, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
         let evaluation = self
             .engine
-            .evaluate_with_inputs_within_as::<LuaPackageSpec>(source, explicit_inputs, deadline)
+            .evaluate_with_inputs_within_as::<LuaAuthoredPackage>(source, explicit_inputs, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
+        let value = lower(AuthoredPackage::from(evaluation.value))
+            .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(Evaluation {
-            value: evaluation.value.into(),
+            value,
             identity: evaluation.identity,
         })
     }

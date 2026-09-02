@@ -10,86 +10,89 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "output",
-                value = {
-                    package = {
-                        name = "protocol-engine"
-                    },
-                    output = "tools"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "output",
+                    value = {
+                        package = {
+                            name = "protocol-engine"
+                        },
+                        output = "tools"
+                    }
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/opt/protocol-engine/bin/protocol-inspect",
-                            requirement = {
-                                kind = "output",
-                                value = {
-                                    package = {
-                                        name = "protocol-engine"
-                                    },
-                                    output = "tools"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/opt/protocol-engine/bin/protocol-inspect",
+                                requirement = {
+                                    kind = "output",
+                                    value = {
+                                        package = {
+                                            name = "protocol-engine"
+                                        },
+                                        output = "tools"
+                                    }
                                 }
+                            },
+                            args = {
+                                "--emit-completions",
+                                "protocol-inspect.completions"
                             }
-                        },
-                        args = {
-                            "--emit-completions",
-                            "protocol-inspect.completions"
                         }
                     }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "\nprintf '%s\\n' '#!/usr/bin/bash' 'exec /opt/protocol-engine/bin/protocol-inspect \"$@\"' > protocol-inspect\ninstall -Dm755 protocol-inspect \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/protocol-inspect\"\ninstall -Dm644 protocol-inspect.completions \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/bash-completion/completions/protocol-inspect\"\n"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\nprintf '%s\\n' '#!/usr/bin/bash' 'exec /opt/protocol-engine/bin/protocol-inspect \"$@\"' > protocol-inspect\ninstall -Dm755 protocol-inspect \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/protocol-inspect\"\ninstall -Dm644 protocol-inspect.completions \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/bash-completion/completions/protocol-inspect\"\n"
+                        }
                     }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            check = {
-                steps = {}
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

@@ -10,153 +10,156 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "sed"
-            },
-            {
-                kind = "binary",
-                value = "grep"
-            },
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/sed",
-                            requirement = {
-                                kind = "binary",
-                                value = "sed"
-                            }
-                        },
-                        args = {
-                            "-i",
-                            "-e",
-                            "s|@SERVICE_NAME@|session-index|g",
-                            "-e",
-                            "s|@SOCKET_PATH@|/run/session-index/control.sock|g",
-                            "-e",
-                            "s|@WORKER_COUNT@|4|g",
-                            "-e",
-                            "s|@ACCESS_MODE@|read-only|g",
-                            "config/session-index.conf.in"
-                        }
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "sed"
+                },
+                {
+                    kind = "binary",
+                    value = "grep"
+                },
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/sed",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "sed"
                                 }
+                            },
+                            args = {
+                                "-i",
+                                "-e",
+                                "s|@SERVICE_NAME@|session-index|g",
+                                "-e",
+                                "s|@SOCKET_PATH@|/run/session-index/control.sock|g",
+                                "-e",
+                                "s|@WORKER_COUNT@|4|g",
+                                "-e",
+                                "s|@ACCESS_MODE@|read-only|g",
+                                "config/session-index.conf.in"
                             }
-                        },
-                        script = "install -Dm644 config/session-index.conf.in \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/session-index/session-index.conf\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
-                            }
-                        },
-                        args = {
-                            "-Fqx",
-                            "service_name = session-index",
-                            "config/session-index.conf.in"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
-                            }
-                        },
-                        args = {
-                            "-Fqx",
-                            "socket_path = /run/session-index/control.sock",
-                            "config/session-index.conf.in"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
-                            }
-                        },
-                        args = {
-                            "-Fqx",
-                            "worker_count = 4",
-                            "config/session-index.conf.in"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/grep",
-                            requirement = {
-                                kind = "binary",
-                                value = "grep"
-                            }
-                        },
-                        args = {
-                            "-Fqx",
-                            "access_mode = read-only",
-                            "config/session-index.conf.in"
                         }
                     }
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "install -Dm644 config/session-index.conf.in \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/session-index/session-index.conf\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "service_name = session-index",
+                                "config/session-index.conf.in"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "socket_path = /run/session-index/control.sock",
+                                "config/session-index.conf.in"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "worker_count = 4",
+                                "config/session-index.conf.in"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/grep",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "grep"
+                                }
+                            },
+                            args = {
+                                "-Fqx",
+                                "access_mode = read-only",
+                                "config/session-index.conf.in"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

@@ -10,194 +10,197 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "output",
-                value = {
-                    package = {
-                        name = "wire-schema"
-                    },
-                    output = "compiler"
-                }
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "ln"
-            },
-            {
-                kind = "binary",
-                value = "test"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "output",
+                    value = {
+                        package = {
+                            name = "wire-schema"
                         },
-                        args = {
-                            "-p",
-                            "build"
-                        }
+                        output = "compiler"
                     }
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "ln"
+                },
+                {
+                    kind = "binary",
+                    value = "test"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/libexec/wire-schema/wire-codegen",
-                            requirement = {
-                                kind = "output",
-                                value = {
-                                    package = {
-                                        name = "wire-schema"
-                                    },
-                                    output = "compiler"
-                                }
-                            }
-                        },
-                        args = {
-                            "--language",
-                            "c",
-                            "--input",
-                            "protocol/wire.schema",
-                            "--header",
-                            "build/wire-schema.h",
-                            "--source",
-                            "build/wire-schema.c"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-fPIC",
-                            "-O2",
-                            "-c",
-                            "build/wire-schema.c",
-                            "-o",
-                            "build/wire-schema.o"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-shared",
-                            "-Wl,-soname,libwire-schema.so.2",
-                            "build/wire-schema.o",
-                            "-o",
-                            "build/libwire-schema.so.2.0.0"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
                             },
-                            {
-                                path = "/usr/bin/ln",
+                            args = {
+                                "-p",
+                                "build"
+                            }
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/libexec/wire-schema/wire-codegen",
+                                requirement = {
+                                    kind = "output",
+                                    value = {
+                                        package = {
+                                            name = "wire-schema"
+                                        },
+                                        output = "compiler"
+                                    }
+                                }
+                            },
+                            args = {
+                                "--language",
+                                "c",
+                                "--input",
+                                "protocol/wire.schema",
+                                "--header",
+                                "build/wire-schema.h",
+                                "--source",
+                                "build/wire-schema.c"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
                                 requirement = {
                                     kind = "binary",
-                                    value = "ln"
+                                    value = "cc"
                                 }
+                            },
+                            args = {
+                                "-fPIC",
+                                "-O2",
+                                "-c",
+                                "build/wire-schema.c",
+                                "-o",
+                                "build/wire-schema.o"
                             }
                         },
-                        script = "\ninstall -Dm644 protocol/wire.schema \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/wire-schema/wire.schema\"\ninstall -Dm755 build/libwire-schema.so.2.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2.0.0\"\nln -s libwire-schema.so.2.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2\"\nln -s libwire-schema.so.2 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so\"\ninstall -Dm644 build/wire-schema.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/wire-schema/wire-schema.h\"\n"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/test",
-                            requirement = {
-                                kind = "binary",
-                                value = "test"
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-shared",
+                                "-Wl,-soname,libwire-schema.so.2",
+                                "build/wire-schema.o",
+                                "-o",
+                                "build/libwire-schema.so.2.0.0"
                             }
-                        },
-                        args = {
-                            "-s",
-                            "build/wire-schema.c"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/test",
-                            requirement = {
-                                kind = "binary",
-                                value = "test"
-                            }
-                        },
-                        args = {
-                            "-s",
-                            "build/wire-schema.h"
                         }
                     }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/ln",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "ln"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm644 protocol/wire.schema \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/wire-schema/wire.schema\"\ninstall -Dm755 build/libwire-schema.so.2.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2.0.0\"\nln -s libwire-schema.so.2.0.0 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2\"\nln -s libwire-schema.so.2 \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so\"\ninstall -Dm644 build/wire-schema.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/wire-schema/wire-schema.h\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/test",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "test"
+                                }
+                            },
+                            args = {
+                                "-s",
+                                "build/wire-schema.c"
+                            }
+                        },
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/test",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "test"
+                                }
+                            },
+                            args = {
+                                "-s",
+                                "build/wire-schema.h"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

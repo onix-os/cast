@@ -10,112 +10,115 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "zig"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "zig"
+                }
+            },
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {},
+                            script = "test -f build.zig\ntest -f build.zig.zon\ntest -d vendor"
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/zig",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "zig"
+                                    }
+                                }
+                            },
+                            script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build -Doptimize=ReleaseSafe"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/zig",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "zig"
+                                    }
+                                }
+                            },
+                            script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build install -Doptimize=ReleaseSafe --prefix \"${CAST_INSTALL_ROOT}${CAST_PREFIX}\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/zig",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "zig"
+                                    }
+                                }
+                            },
+                            script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build test -Doptimize=ReleaseSafe"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {},
-                        script = "test -f build.zig\ntest -f build.zig.zon\ntest -d vendor"
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/zig",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "zig"
-                                }
-                            }
-                        },
-                        script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build -Doptimize=ReleaseSafe"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/zig",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "zig"
-                                }
-                            }
-                        },
-                        script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build install -Doptimize=ReleaseSafe --prefix \"${CAST_INSTALL_ROOT}${CAST_PREFIX}\""
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/zig",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "zig"
-                                }
-                            }
-                        },
-                        script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\" \\\nZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\" \\\nzig build test -Doptimize=ReleaseSafe"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

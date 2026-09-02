@@ -10,77 +10,80 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "cc"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                }
             },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "bash"
                                 }
-                            }
-                        },
-                        script = "\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header\"\ninstall -m644 include/*.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header/\"\ninstall -Dm644 vector-header.pc \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/vector-header.pc\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/vector-header/LICENSE\"\n"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "-I./include",
-                            "-fsyntax-only",
-                            "tests/smoke.c"
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -d \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header\"\ninstall -m644 include/*.h \"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header/\"\ninstall -Dm644 vector-header.pc \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/vector-header.pc\"\ninstall -Dm644 LICENSE \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/vector-header/LICENSE\"\n"
                         }
                     }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "-I./include",
+                                "-fsyntax-only",
+                                "tests/smoke.c"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

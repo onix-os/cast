@@ -10,57 +10,60 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "\ninstall -Dm644 integration/device-broker.service \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/device-broker.service\"\ninstall -Dm644 integration/device-broker.sysusers \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/device-broker.conf\"\ninstall -Dm644 integration/device-broker.tmpfiles \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/device-broker.conf\"\ninstall -Dm644 integration/70-device-broker.rules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/udev/rules.d/70-device-broker.rules\"\ninstall -Dm644 integration/io.example.DeviceBroker.rules \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/rules.d/io.example.DeviceBroker.rules\"\n"
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm644 integration/device-broker.service \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/device-broker.service\"\ninstall -Dm644 integration/device-broker.sysusers \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/device-broker.conf\"\ninstall -Dm644 integration/device-broker.tmpfiles \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/device-broker.conf\"\ninstall -Dm644 integration/70-device-broker.rules \"${CAST_INSTALL_ROOT}${CAST_LIBDIR}/udev/rules.d/70-device-broker.rules\"\ninstall -Dm644 integration/io.example.DeviceBroker.rules \"${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/rules.d/io.example.DeviceBroker.rules\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

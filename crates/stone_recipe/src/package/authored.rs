@@ -6,11 +6,10 @@
 //! in Rust. [`lower`] fills those defaults, lowers the builder request, and
 //! produces the frozen [`PackageSpec`] domain the executor consumes.
 //!
-//! This is the shared "common" layer that replaces the former Gluon
-//! `cast.package.v3` module (`package.glu`). Because the defaults and lowering
-//! live here — not in a config-language module — Gluon and Lua are
-//! interchangeable authoring syntaxes and either can be removed without losing
-//! the ability to author a complete package.
+//! This is the shared "common" layer. Because the defaults and lowering live
+//! here — not in a config-language module — configuration-language adapters
+//! are interchangeable authoring syntaxes and any one of them can be removed
+//! without losing the ability to author a complete package.
 
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 

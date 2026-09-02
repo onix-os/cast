@@ -10,93 +10,96 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "make"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "make"
+                },
+                {
+                    kind = "binary",
+                    value = "modinfo"
+                },
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                }
             },
-            {
-                kind = "binary",
-                value = "modinfo"
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/make",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "make"
+                                }
+                            },
+                            args = {
+                                "KERNEL_RELEASE=6.12.28-onix1",
+                                "KERNEL_DIR=/usr/lib/modules/6.12.28-onix1/build",
+                                "modules"
+                            }
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            args = {
+                                "packaging/install-module",
+                                "6.12.28-onix1"
+                            }
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/modinfo",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "modinfo"
+                                }
+                            },
+                            args = {
+                                "build/atlas-sensor.ko"
+                            }
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/make",
-                            requirement = {
-                                kind = "binary",
-                                value = "make"
-                            }
-                        },
-                        args = {
-                            "KERNEL_RELEASE=6.12.28-onix1",
-                            "KERNEL_DIR=/usr/lib/modules/6.12.28-onix1/build",
-                            "modules"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        args = {
-                            "packaging/install-module",
-                            "6.12.28-onix1"
-                        }
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/modinfo",
-                            requirement = {
-                                kind = "binary",
-                                value = "modinfo"
-                            }
-                        },
-                        args = {
-                            "build/atlas-sensor.ko"
-                        }
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

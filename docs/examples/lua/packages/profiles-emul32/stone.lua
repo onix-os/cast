@@ -10,59 +10,62 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "sh"
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "sh"
+                },
+                {
+                    kind = "binary",
+                    value = "ninja"
+                }
             },
-            {
-                kind = "binary",
-                value = "ninja"
+            environment = {
+                "cmake"
+            },
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "cmake_configure",
+                            flags = {}
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "cmake_build"
+                        }
+                    }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "cmake_install"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "cmake_test"
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
+                }
+            },
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        environment = {
-            "cmake"
-        },
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "cmake_configure",
-                        flags = {}
-                    }
-                }
-            },
-            build = {
-                steps = {
-                    {
-                        kind = "cmake_build"
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "cmake_install"
-                    }
-                }
-            },
-            check = {
-                steps = {
-                    {
-                        kind = "cmake_test"
-                    }
-                }
-            },
-            workload = {
-                steps = {}
-            }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {
@@ -443,62 +446,65 @@ return {
         {
             name = "emul32",
             builder = {
-                required_tools = {
-                    {
-                        kind = "binary",
-                        value = "sh"
+                kind = "custom",
+                spec = {
+                    required_tools = {
+                        {
+                            kind = "binary",
+                            value = "sh"
+                        },
+                        {
+                            kind = "binary",
+                            value = "ninja"
+                        }
                     },
-                    {
-                        kind = "binary",
-                        value = "ninja"
-                    }
-                },
-                environment = {
-                    "cmake"
-                },
-                phases = {
-                    setup = {
-                        steps = {
-                            {
-                                kind = "cmake_configure",
-                                flags = {
-                                    "-DCMAKE_INSTALL_LIBDIR=lib32",
-                                    "-DENABLE_TOOLS=OFF"
+                    environment = {
+                        "cmake"
+                    },
+                    phases = {
+                        setup = {
+                            steps = {
+                                {
+                                    kind = "cmake_configure",
+                                    flags = {
+                                        "-DCMAKE_INSTALL_LIBDIR=lib32",
+                                        "-DENABLE_TOOLS=OFF"
+                                    }
                                 }
                             }
-                        }
-                    },
-                    build = {
-                        steps = {
-                            {
-                                kind = "cmake_build"
+                        },
+                        build = {
+                            steps = {
+                                {
+                                    kind = "cmake_build"
+                                }
                             }
-                        }
-                    },
-                    install = {
-                        steps = {
-                            {
-                                kind = "cmake_install"
+                        },
+                        install = {
+                            steps = {
+                                {
+                                    kind = "cmake_install"
+                                }
                             }
-                        }
-                    },
-                    check = {
-                        steps = {
-                            {
-                                kind = "cmake_test"
+                        },
+                        check = {
+                            steps = {
+                                {
+                                    kind = "cmake_test"
+                                }
                             }
+                        },
+                        workload = {
+                            steps = {}
                         }
                     },
-                    workload = {
-                        steps = {}
+                    supported_hooks = {
+                        setup = true,
+                        build = true,
+                        check = true,
+                        install = true,
+                        workload = true
                     }
-                },
-                supported_hooks = {
-                    setup = true,
-                    build = true,
-                    check = true,
-                    install = true,
-                    workload = true
                 }
             },
             hooks = {
@@ -535,61 +541,64 @@ return {
         {
             name = "x86_64-v3x",
             builder = {
-                required_tools = {
-                    {
-                        kind = "binary",
-                        value = "sh"
+                kind = "custom",
+                spec = {
+                    required_tools = {
+                        {
+                            kind = "binary",
+                            value = "sh"
+                        },
+                        {
+                            kind = "binary",
+                            value = "ninja"
+                        }
                     },
-                    {
-                        kind = "binary",
-                        value = "ninja"
-                    }
-                },
-                environment = {
-                    "cmake"
-                },
-                phases = {
-                    setup = {
-                        steps = {
-                            {
-                                kind = "cmake_configure",
-                                flags = {
-                                    "-DENABLE_DISPATCH=ON"
+                    environment = {
+                        "cmake"
+                    },
+                    phases = {
+                        setup = {
+                            steps = {
+                                {
+                                    kind = "cmake_configure",
+                                    flags = {
+                                        "-DENABLE_DISPATCH=ON"
+                                    }
                                 }
                             }
-                        }
-                    },
-                    build = {
-                        steps = {
-                            {
-                                kind = "cmake_build"
+                        },
+                        build = {
+                            steps = {
+                                {
+                                    kind = "cmake_build"
+                                }
                             }
-                        }
-                    },
-                    install = {
-                        steps = {
-                            {
-                                kind = "cmake_install"
+                        },
+                        install = {
+                            steps = {
+                                {
+                                    kind = "cmake_install"
+                                }
                             }
-                        }
-                    },
-                    check = {
-                        steps = {
-                            {
-                                kind = "cmake_test"
+                        },
+                        check = {
+                            steps = {
+                                {
+                                    kind = "cmake_test"
+                                }
                             }
+                        },
+                        workload = {
+                            steps = {}
                         }
                     },
-                    workload = {
-                        steps = {}
+                    supported_hooks = {
+                        setup = true,
+                        build = true,
+                        check = true,
+                        install = true,
+                        workload = true
                     }
-                },
-                supported_hooks = {
-                    setup = true,
-                    build = true,
-                    check = true,
-                    install = true,
-                    workload = true
                 }
             },
             hooks = {

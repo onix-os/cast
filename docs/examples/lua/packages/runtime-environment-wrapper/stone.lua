@@ -10,61 +10,64 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "bash"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {}
-            },
-            build = {
-                steps = {}
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
-                                requirement = {
-                                    kind = "binary",
-                                    value = "install"
-                                }
-                            }
-                        },
-                        script = "printf '%s' '#!/usr/bin/bash\nexport GRAPHITE_PLUGIN_DIR=/usr/lib/graphite-renderer/plugins\nexport GRAPHITE_DATA_DIR=/usr/share/graphite-renderer\nexport SSL_CERT_FILE=/usr/share/system-trust/ca-bundle.pem\nexport GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas\nexec /usr/libexec/graphite-renderer/graphite-renderer \"$@\"\n' > graphite-renderer\n/usr/bin/install -Dm755 graphite-renderer \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/graphite-renderer\""
-                    }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "bash"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
                 }
             },
-            check = {
-                steps = {}
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {}
+                },
+                build = {
+                    steps = {}
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                }
+                            },
+                            script = "printf '%s' '#!/usr/bin/bash\nexport GRAPHITE_PLUGIN_DIR=/usr/lib/graphite-renderer/plugins\nexport GRAPHITE_DATA_DIR=/usr/share/graphite-renderer\nexport SSL_CERT_FILE=/usr/share/system-trust/ca-bundle.pem\nexport GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas\nexec /usr/libexec/graphite-renderer/graphite-renderer \"$@\"\n' > graphite-renderer\n/usr/bin/install -Dm755 graphite-renderer \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/graphite-renderer\""
+                        }
+                    }
+                },
+                check = {
+                    steps = {}
+                },
+                workload = {
+                    steps = {}
+                }
             },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {

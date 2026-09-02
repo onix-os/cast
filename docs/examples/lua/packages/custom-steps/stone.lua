@@ -10,139 +10,142 @@ return {
         }
     },
     builder = {
-        required_tools = {
-            {
-                kind = "binary",
-                value = "mkdir"
-            },
-            {
-                kind = "package",
-                value = {
-                    name = "schema-compiler"
-                }
-            },
-            {
-                kind = "binary",
-                value = "cc"
-            },
-            {
-                kind = "binary",
-                value = "install"
-            },
-            {
-                kind = "binary",
-                value = "ln"
-            }
-        },
-        environment = {},
-        phases = {
-            setup = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/mkdir",
-                            requirement = {
-                                kind = "binary",
-                                value = "mkdir"
-                            }
-                        },
-                        args = {
-                            "-p",
-                            "build"
-                        }
+        kind = "custom",
+        spec = {
+            required_tools = {
+                {
+                    kind = "binary",
+                    value = "mkdir"
+                },
+                {
+                    kind = "package",
+                    value = {
+                        name = "schema-compiler"
                     }
+                },
+                {
+                    kind = "binary",
+                    value = "cc"
+                },
+                {
+                    kind = "binary",
+                    value = "install"
+                },
+                {
+                    kind = "binary",
+                    value = "ln"
                 }
             },
-            build = {
-                steps = {
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/opt/schema-compiler/bin/schema-compile",
-                            requirement = {
-                                kind = "package",
-                                value = {
-                                    name = "schema-compiler"
-                                }
-                            }
-                        },
-                        args = {
-                            "--input",
-                            "schema",
-                            "--output",
-                            "build/generated.c"
-                        }
-                    },
-                    {
-                        kind = "run",
-                        program = {
-                            path = "/usr/bin/cc",
-                            requirement = {
-                                kind = "binary",
-                                value = "cc"
-                            }
-                        },
-                        args = {
-                            "build/generated.c",
-                            "-o",
-                            "build/custom-tool"
-                        }
-                    }
-                }
-            },
-            install = {
-                steps = {
-                    {
-                        kind = "shell",
-                        interpreter = {
-                            path = "/usr/bin/bash",
-                            requirement = {
-                                kind = "binary",
-                                value = "bash"
-                            }
-                        },
-                        declared_programs = {
-                            {
-                                path = "/usr/bin/install",
+            environment = {},
+            phases = {
+                setup = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/mkdir",
                                 requirement = {
                                     kind = "binary",
-                                    value = "install"
+                                    value = "mkdir"
                                 }
                             },
-                            {
-                                path = "/usr/bin/ln",
+                            args = {
+                                "-p",
+                                "build"
+                            }
+                        }
+                    }
+                },
+                build = {
+                    steps = {
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/opt/schema-compiler/bin/schema-compile",
                                 requirement = {
-                                    kind = "binary",
-                                    value = "ln"
+                                    kind = "package",
+                                    value = {
+                                        name = "schema-compiler"
+                                    }
                                 }
+                            },
+                            args = {
+                                "--input",
+                                "schema",
+                                "--output",
+                                "build/generated.c"
                             }
                         },
-                        script = "\ninstall -Dm755 build/custom-tool \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool\"\nln -s custom-tool \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool-compat\"\n"
+                        {
+                            kind = "run",
+                            program = {
+                                path = "/usr/bin/cc",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "cc"
+                                }
+                            },
+                            args = {
+                                "build/generated.c",
+                                "-o",
+                                "build/custom-tool"
+                            }
+                        }
                     }
+                },
+                install = {
+                    steps = {
+                        {
+                            kind = "shell",
+                            interpreter = {
+                                path = "/usr/bin/bash",
+                                requirement = {
+                                    kind = "binary",
+                                    value = "bash"
+                                }
+                            },
+                            declared_programs = {
+                                {
+                                    path = "/usr/bin/install",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "install"
+                                    }
+                                },
+                                {
+                                    path = "/usr/bin/ln",
+                                    requirement = {
+                                        kind = "binary",
+                                        value = "ln"
+                                    }
+                                }
+                            },
+                            script = "\ninstall -Dm755 build/custom-tool \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool\"\nln -s custom-tool \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool-compat\"\n"
+                        }
+                    }
+                },
+                check = {
+                    steps = {
+                        {
+                            kind = "run_built",
+                            program = {
+                                path = "build/custom-tool"
+                            },
+                            args = {}
+                        }
+                    }
+                },
+                workload = {
+                    steps = {}
                 }
             },
-            check = {
-                steps = {
-                    {
-                        kind = "run_built",
-                        program = {
-                            path = "build/custom-tool"
-                        },
-                        args = {}
-                    }
-                }
-            },
-            workload = {
-                steps = {}
+            supported_hooks = {
+                setup = true,
+                build = true,
+                check = true,
+                install = true,
+                workload = true
             }
-        },
-        supported_hooks = {
-            setup = true,
-            build = true,
-            check = true,
-            install = true,
-            workload = true
         }
     },
     hooks = {
