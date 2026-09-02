@@ -68,7 +68,7 @@ impl Drafter {
         let stone = encode_authored_recipe(&metadata, build_system, build.dependencies, licenses)?;
         LuaPackageEvaluator::default()
             .evaluate_authored(&Source::new("stone.lua", stone.clone()))
-            .map_err(|diagnostic| Error::GeneratedDraft(DeclarationEvaluationError::Evaluation(diagnostic)))?;
+            .map_err(Error::GeneratedDraft)?;
 
         Ok(Draft { stone })
     }

@@ -321,7 +321,8 @@ return {
             emul32: false,
             mold: false,
             hooks: HooksSpec::default(),
-        });
+        })
+        .expect("the equivalent authored package is valid");
         assert_eq!(package, equivalent);
     }
 

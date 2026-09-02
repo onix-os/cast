@@ -31,7 +31,6 @@ pub(super) fn evaluate_package(
 ) -> Result<PackageEvaluation, PackageDeclarationError> {
     evaluator
         .evaluate_authored_within(source, declarative_config::EvaluationDeadline::start(TIMEOUT))
-        .map_err(PackageDeclarationError::Evaluation)
 }
 
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);

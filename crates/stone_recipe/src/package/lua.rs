@@ -820,10 +820,17 @@ impl LuaPackageEvaluator {
     /// table decodes into the language-agnostic [`AuthoredPackage`] and the
     /// shared [`lower`] fills the package-ABI defaults and lowers the builder
     /// request into typed steps — no authoring logic runs in Lua.
-    pub fn evaluate_authored(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
-        let authored: AuthoredPackage =
-            self.engine.evaluate_as::<LuaAuthoredPackage>(source)?.value.into();
-        Ok(lower(authored))
+    pub fn evaluate_authored(
+        &self,
+        source: &Source,
+    ) -> Result<PackageSpec, DeclarationEvaluationError<PackageConversionError>> {
+        let authored: AuthoredPackage = self
+            .engine
+            .evaluate_as::<LuaAuthoredPackage>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?
+            .value
+            .into();
+        lower(authored).map_err(DeclarationEvaluationError::Conversion)
     }
 
     /// Decode a minimal-form authored recipe, retaining its evaluation
@@ -833,10 +840,18 @@ impl LuaPackageEvaluator {
         &self,
         source: &Source,
         deadline: EvaluationDeadline,
-    ) -> Result<Evaluation<PackageSpec, EvaluationIdentity>, Diagnostic> {
-        let evaluation = self.engine.evaluate_within_as::<LuaAuthoredPackage>(source, deadline)?;
+    ) -> Result<
+        Evaluation<PackageSpec, EvaluationIdentity>,
+        DeclarationEvaluationError<PackageConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_within_as::<LuaAuthoredPackage>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let value = lower(AuthoredPackage::from(evaluation.value))
+            .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(Evaluation {
-            value: lower(AuthoredPackage::from(evaluation.value)),
+            value,
             identity: evaluation.identity,
         })
     }

@@ -15,8 +15,8 @@
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 
 use super::{
-    BuilderRequest, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageRef,
-    PackageSpec, ProfileSpec, lower_builder,
+    BuilderRequest, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError,
+    PackageRef, PackageSpec, ProfileSpec, lower_builder,
 };
 
 /// The minimal, language-agnostic authored package. Optional fields are filled
@@ -42,11 +42,16 @@ pub struct AuthoredPackage {
 }
 
 /// Lower an authored package into the frozen [`PackageSpec`] domain.
-pub fn lower(authored: AuthoredPackage) -> PackageSpec {
+///
+/// Lowering validates: the authored domain can express values the frozen domain
+/// forbids, so the transition is fallible. Validating here rather than in each
+/// language adapter is what keeps the backends interchangeable — a backend
+/// cannot decline to check what it just decoded.
+pub fn lower(authored: AuthoredPackage) -> Result<PackageSpec, PackageConversionError> {
     let outputs = authored
         .outputs
         .unwrap_or_else(|| default_output_set(&authored.meta.pname));
-    PackageSpec {
+    let spec = PackageSpec {
         builder: lower_builder(authored.builder),
         meta: authored.meta,
         hooks: authored.hooks,
@@ -61,7 +66,9 @@ pub fn lower(authored: AuthoredPackage) -> PackageSpec {
         tuning: authored.tuning,
         emul32: authored.emul32,
         mold: authored.mold,
-    }
+    };
+    spec.validate()?;
+    Ok(spec)
 }
 
 fn any(path: &str) -> PathSpec {
@@ -311,7 +318,7 @@ mod tests {
 
     #[test]
     fn lower_fills_defaults_and_lowers_the_builder() {
-        let spec = lower(minimal("hello"));
+        let spec = lower(minimal("hello")).expect("the minimal authored package is valid");
         assert_eq!(spec.meta.pname, "hello");
         // builder was a request; lowering produced typed cmake steps.
         assert_eq!(
@@ -327,7 +334,7 @@ mod tests {
     fn authored_outputs_override_the_default_set() {
         let mut authored = minimal("hello");
         authored.outputs = Some(vec![output("out")]);
-        let spec = lower(authored);
+        let spec = lower(authored).expect("the overridden output set is valid");
         assert_eq!(spec.outputs, vec![output("out")]);
     }
 }

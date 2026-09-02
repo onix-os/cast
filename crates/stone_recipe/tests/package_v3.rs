@@ -41,16 +41,40 @@ fn output(name: &str, include_in_manifest: bool) -> String {
     )
 }
 
-/// A complete minimal authored recipe: the given `pname`, a custom builder, and
-/// whatever extra fields the caller appends.
+/// A custom builder whose named phase carries `steps`; every other phase empty.
+fn custom_builder(phase: &str, steps: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|name| {
+            let body = if name == phase { steps } else { "" };
+            format!("{name} = {{ steps = {{ {body} }} }}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, phases = {{ {phases} }}, \
+         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}"
+    )
+}
+
+/// A complete minimal authored recipe: the given `pname`, an empty custom
+/// builder, and whatever extra fields the caller appends.
 fn authored_package(pname: &str, extra: &str) -> Source {
     authored(&format!(
-        "{{ {}, builder = {{ kind = \"custom\", spec = {{ required_tools = {{}}, environment = {{}}, \
-         phases = {{ setup = {{ steps = {{}} }}, build = {{ steps = {{}} }}, install = {{ steps = {{}} }}, \
-         check = {{ steps = {{}} }}, workload = {{ steps = {{}} }} }}, \
-         supported_hooks = {{ setup = false, build = false, check = false, install = false, workload = false }} }} }}{} }}",
+        "{{ {}, builder = {}{} }}",
         meta(pname),
+        custom_builder("", ""),
         extra,
+    ))
+}
+
+/// A recipe whose named phase carries one step, for step-level rejection tests.
+fn package_with_step(pname: &str, phase: &str, step: &str) -> Source {
+    authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {} }} }}",
+        meta(pname),
+        custom_builder(phase, step),
+        output("out", true),
     ))
 }
 
@@ -215,37 +239,11 @@ fn built_program_paths_are_normalized_before_planning() {
         "build//tool",
         r"build\tool",
     ] {
-        let source = authored(&format!(
-            r#"
-let scripts = a.scripts {{
-    check = a.phase [a.step.run_built (a.program.built {invalid:?}) []],
-    .. a.empty.scripts
-}}
-{{
-    builder = a.builder.shell scripts [],
-    outputs = a.outputs.explicit [a.output "out"],
-    .. {{
-        meta = {{
-            pname = "example", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
-        ));
+        let source = package_with_step(
+            "example",
+            "check",
+            &format!(r#"{{ kind = "run_built", program = {{ path = {invalid:?} }}, args = {{}} }}"#),
+        );
         let error = evaluate_default_package(&source).unwrap_err();
         assert!(matches!(
             error,
