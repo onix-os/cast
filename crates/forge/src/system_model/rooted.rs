@@ -209,7 +209,7 @@ fn retain(path: &Path, source: io::Error) -> LoadError {
     }
 }
 
-fn evaluation(source: gluon_config::Diagnostic) -> LoadError {
+fn evaluation(source: declarative_config::Diagnostic) -> LoadError {
     LoadError::Declaration(declarative_config::DeclarationEvaluationError::Evaluation(source))
 }
 

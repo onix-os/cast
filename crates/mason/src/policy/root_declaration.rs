@@ -12,7 +12,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::EvaluationIdentity;
+use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::layers::{
     BuildPolicyRootConversionError, BuildPolicyRootSpec,
     GluonBuildPolicyRootEvaluator,

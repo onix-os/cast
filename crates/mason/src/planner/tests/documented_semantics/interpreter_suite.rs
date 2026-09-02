@@ -415,7 +415,7 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
 }
 
 fn imported_sha256<'a>(
-    fingerprint: &'a gluon_config::EvaluationIdentity,
+    fingerprint: &'a declarative_config::EvaluationIdentity,
     logical_name: &str,
 ) -> &'a str {
     fingerprint

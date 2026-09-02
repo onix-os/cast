@@ -1,4 +1,4 @@
-use gluon_config::EvaluationIdentityValidationError;
+use declarative_config::EvaluationIdentityValidationError;
 use thiserror::Error;
 
 use crate::{build_policy::layers::BuildPolicyOperation, spec::SourceUrlValidationError};

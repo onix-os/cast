@@ -563,7 +563,7 @@ let a = import! cast.authored.v1
             panic!("unexpected error: {error}");
         };
 
-        assert_eq!(diagnostic.category, gluon_config::DiagnosticCategory::Type);
+        assert_eq!(diagnostic.category, declarative_config::DiagnosticCategory::Type);
         assert_eq!(diagnostic.source_name.as_deref(), Some("stone.glu"));
         assert!(diagnostic.span.is_some());
     }

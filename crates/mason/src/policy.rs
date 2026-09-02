@@ -10,7 +10,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, SourceRoot,
 };
-use gluon_config::Diagnostic;
+use declarative_config::Diagnostic;
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicyEvaluator, BuildPolicyPatchSpec, BuildPolicySpec,
     GluonBuildPolicyEvaluator, LuaBuildPolicyEvaluator, TargetPolicySpec,

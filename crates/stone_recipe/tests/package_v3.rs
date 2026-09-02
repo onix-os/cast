@@ -5,7 +5,7 @@ use adapter::{
     PackageDeclarationError, evaluate_default_package, evaluate_package_with_inputs,
 };
 use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, Source};
-use gluon_config::DiagnosticCategory;
+use declarative_config::DiagnosticCategory;
 use stone_recipe::package::{
     BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec,
     GluonPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,

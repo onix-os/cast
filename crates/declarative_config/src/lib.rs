@@ -25,7 +25,8 @@ pub use identity::{
     IdentityModule,
 };
 pub use language::{
-    AbiId, DescriptorError, EngineId, EvaluatorPolicyId, LanguageId, LanguageSpec,
+    AbiId, CONFIGURATION_ABI_VERSION, DescriptorError, EVALUATOR_POLICY_VERSION, EngineId,
+    EvaluatorPolicyId, LanguageId, LanguageSpec, configuration_abi, evaluator_policy,
 };
 pub use limits::Limits;
 pub use module_graph::{

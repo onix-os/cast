@@ -687,7 +687,7 @@ fn format_locked_identity(formatter: &mut Formatter, indent: usize, name: &str, 
 fn format_evaluation_fingerprint(
     formatter: &mut Formatter,
     indent: usize,
-    fingerprint: &gluon_config::EvaluationIdentity,
+    fingerprint: &declarative_config::EvaluationIdentity,
 ) {
     formatter.open(indent, "evaluation");
     formatter.string(indent + 1, "root_logical_name", &fingerprint.root_logical_name);

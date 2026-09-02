@@ -19,7 +19,7 @@ use declarative_config::{
     LanguageSpec, Limits, Source, SourceRoot,
 };
 use fs_err as fs;
-use gluon_config::EvaluationIdentity;
+use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, GluonPackageEvaluator, HooksSpec, LuaPackageEvaluator, PackageConversionError,
@@ -521,7 +521,7 @@ pub enum Error {
         source: RootDeclarationDiscoveryError,
     },
     #[error("load Gluon recipe source")]
-    LoadRecipeSource(#[source] gluon_config::Diagnostic),
+    LoadRecipeSource(#[source] declarative_config::Diagnostic),
     #[error("load recipe declaration")]
     LoadRecipeDeclaration(
         #[source]

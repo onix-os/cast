@@ -22,8 +22,10 @@ use thiserror::Error;
 use crate::{generated_declaration, generated_lock};
 
 mod gluon_adapter;
+mod lua;
 
 pub use gluon_adapter::{GENERATED_GLUON_MARKER, GluonSourceLockCodec};
+pub use lua::LuaSourceLockCodec;
 
 /// Canonical file name for generated source resolution data.
 pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
@@ -32,7 +34,7 @@ pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
 pub const SOURCE_LOCK_SCHEMA_VERSION: u32 = 2;
 
 /// Versioned generated source resolution data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SourceLock {
     pub schema_version: u32,
     pub sources: Vec<SourceResolution>,
@@ -189,7 +191,8 @@ impl Default for SourceLock {
 }
 
 /// One resolved source, retaining its position in the authored upstream list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceResolution {
     Archive(ArchiveResolution),
     Git(GitResolution),
@@ -268,7 +271,7 @@ pub enum ValidationError {
 }
 
 /// Resolution data for an archive source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ArchiveResolution {
     pub order: u32,
     pub url: String,
@@ -276,7 +279,7 @@ pub struct ArchiveResolution {
 }
 
 /// Resolution data for a Git source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct GitResolution {
     pub order: u32,
     pub url: String,
@@ -565,7 +568,7 @@ type SourceLock = {
             panic!("unexpected error: {error}");
         };
 
-        assert_eq!(diagnostic.category, gluon_config::DiagnosticCategory::Import);
+        assert_eq!(diagnostic.category, declarative_config::DiagnosticCategory::Import);
     }
 
     #[test]
@@ -676,6 +679,31 @@ type SourceLock = {
 
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(fs::read_to_string(path).unwrap(), "authored lock\n");
+    }
+
+    /// The Lua adapter must round-trip the same lock the Gluon adapter does and
+    /// reach an equal domain value, so the generated slot can move languages
+    /// without changing what the lock means.
+    #[test]
+    fn lua_source_lock_round_trips_and_matches_the_gluon_domain_value() {
+        let lock = sample_lock();
+        let encoded = LuaSourceLockCodec::default().encode(&lock).unwrap();
+
+        assert!(encoded.starts_with(lua_config::GENERATED_LUA_MARKER));
+        assert!(!encoded.contains("import!"));
+
+        let decoded = LuaSourceLockCodec::default()
+            .evaluate(&declarative_config::Source::new(SOURCE_LOCK_FILE_NAME, &encoded))
+            .unwrap()
+            .value;
+
+        assert_eq!(decoded.schema_version, SOURCE_LOCK_SCHEMA_VERSION);
+        assert_eq!(
+            decoded.sources.iter().map(SourceResolution::order).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(LuaSourceLockCodec::default().encode(&decoded).unwrap(), encoded);
+        assert_eq!(decoded, evaluate_source_lock(SOURCE_LOCK_FILE_NAME, &canonical_source_lock(&lock)).unwrap());
     }
 
     fn sample_lock() -> SourceLock {

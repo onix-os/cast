@@ -2,7 +2,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation, Source, SourceRoot,
 };
-use gluon_config::EvaluationIdentity;
+use declarative_config::EvaluationIdentity;
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicySpec, GluonBuildPolicyEvaluator,
 };

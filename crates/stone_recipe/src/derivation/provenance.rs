@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use gluon_config::{EvaluationIdentity, ModuleClass};
+use declarative_config::{EvaluationIdentity, ModuleClass};
 
 use crate::build_policy::layers::BuildPolicyOperation;
 

@@ -1,7 +1,7 @@
 fn repository_policy() -> BuildPolicySpec {
     use declarative_config::DeclarationEvaluator;
 
-    let source_root = gluon_config::SourceRoot::new(concat!(
+    let source_root = declarative_config::SourceRoot::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../mason/data/policy"
     ))

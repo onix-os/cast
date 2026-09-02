@@ -123,6 +123,33 @@ impl AbiId {
     }
 }
 
+/// Version of the Rust/declaration-language configuration boundary.
+///
+/// The boundary is a property of the declaration contract, not of any one
+/// language: two adapters that accept the same semantic declarations share it.
+/// Each adapter used to define its own copy of this constant and of the
+/// descriptors below, all with identical values, which is a shared contract
+/// maintained as parallel lists and free to drift.
+pub const CONFIGURATION_ABI_VERSION: u32 = 1;
+
+/// Version of the evaluator security and determinism policy.
+pub const EVALUATOR_POLICY_VERSION: u32 = 1;
+
+/// The neutral configuration-ABI descriptor every adapter commits to in its
+/// evaluation identity. Engine and language identity live in the evaluation
+/// identity, not in this name.
+pub fn configuration_abi() -> AbiId {
+    AbiId::new("cast.configuration", CONFIGURATION_ABI_VERSION.to_string())
+        .expect("the configuration ABI descriptor is canonical")
+}
+
+/// The neutral evaluator-policy descriptor for adapter security and determinism
+/// rules.
+pub fn evaluator_policy() -> EvaluatorPolicyId {
+    EvaluatorPolicyId::new(EVALUATOR_POLICY_VERSION.to_string())
+        .expect("the evaluator policy descriptor is canonical")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EvaluatorPolicyId(CanonicalName);
 

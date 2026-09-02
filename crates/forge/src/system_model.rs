@@ -12,7 +12,7 @@ use config::declaration::{
     RootDeclarationSlot, TypedDeclarationEvaluatorSet, load_fixed_root_declaration,
 };
 use declarative_config::{DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Source};
-use gluon_config::EvaluationIdentity;
+use declarative_config::EvaluationIdentity;
 use thiserror::Error;
 
 use crate::{Package, dependency, repository};

@@ -299,7 +299,7 @@ impl BuildLockObservation {
     fn capture(write_outcome: &'static str, bytes: &[u8]) -> Self {
         assert!(!bytes.is_empty(), "build lock evidence is empty");
         assert!(
-            bytes.len() <= gluon_config::Limits::default().max_source_bytes,
+            bytes.len() <= declarative_config::Limits::default().max_source_bytes,
             "build lock evidence exceeds the evaluator source boundary"
         );
         Self {
