@@ -303,11 +303,11 @@ fn validation_rejects_ambient_or_non_normalized_provenance_names() {
     for (expected, corrupt) in cases {
         let mut plan = sample_plan();
         corrupt(&mut plan);
-        assert!(matches!(
-            plan.validate(),
-            Err(DerivationValidationError::InvalidLogicalName { field, .. })
-                if field == expected
-        ));
+        let outcome = plan.validate();
+        assert!(
+            matches!(&outcome, Err(DerivationValidationError::InvalidLogicalName { field, .. }) if field == expected),
+            "{expected} was not rejected as a logical name: {outcome:?}"
+        );
     }
 }
 

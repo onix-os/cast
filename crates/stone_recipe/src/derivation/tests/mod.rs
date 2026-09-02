@@ -1,4 +1,4 @@
-use declarative_config::{EvaluationDeadline, EvaluationIdentity, ModuleClass, Source};
+use declarative_config::{AbiCatalog, EvaluationDeadline, EvaluationIdentity, ModuleClass, Source};
 use lua_config::LuaEngine;
 use stone::relation::{Dependency, Kind as StoneRelationKind};
 
@@ -21,9 +21,24 @@ fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> Evalu
 }
 
 /// A second identity distinct from `evaluation`, standing in for a fragment
-/// that reached its value through an import.
+/// that reached its value through an import. The module is imported for real
+/// from an in-memory ABI catalog, so the engine seals the aggregate itself.
 fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
-    evaluation(logical_name, "4", explicit_inputs)
+    let mut catalog = AbiCatalog::new();
+    assert!(catalog.insert_source(
+        "sample.provenance",
+        "sample.provenance",
+        Source::new("sample.provenance", "return 4"),
+    ));
+    LuaEngine::default()
+        .with_abi_catalog(catalog)
+        .evaluate_with_inputs_within_as::<i64>(
+            &Source::new(logical_name, "return cast.import(\"sample.provenance\")"),
+            explicit_inputs,
+            EvaluationDeadline::start(std::time::Duration::from_secs(30)),
+        )
+        .unwrap()
+        .identity
 }
 
 fn sample_provenance() -> DerivationProvenance {

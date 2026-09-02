@@ -81,20 +81,21 @@ fn every_typed_input_origin_round_trips_through_the_generated_lock() {
     let decoded = decode(&encoded).unwrap();
 
     assert_eq!(decoded, expected);
-    for constructor in [
-        "BuilderToolOrigin",
-        "NativeBuildOrigin",
-        "BuildOrigin",
-        "CheckOrigin",
-        "OutputRuntimeOrigin",
-        "PolicyOrigin",
-        "JobExecutableOrigin",
-        "AnalyzerOrigin",
-        "CompilerExecutableOrigin",
-        "CompilerCacheOrigin",
-        "MoldLinkerOrigin",
+    for kind in [
+        "builder_tool",
+        "native_build",
+        "build",
+        "check",
+        "output_runtime",
+        "policy",
+        "job_executable",
+        "analyzer",
+        "compiler_executable",
+        "compiler_cache",
+        "mold_linker",
     ] {
-        assert!(encoded.contains(constructor), "missing generated {constructor}");
+        let tag = format!(r#"kind = "{kind}""#);
+        assert!(encoded.contains(&tag), "missing generated origin kind {kind}");
     }
 }
 

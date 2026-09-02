@@ -28,6 +28,10 @@ use super::{
 /// `build.lock.glu` to `build.lock.lua`.
 
 pub fn encode_lua_lock(lock: &BuildLock) -> String {
+    let mut lock = lock.clone();
+    lock.normalize();
+    let lock = &lock;
+
     let mut output = String::from(GENERATED_LUA_MARKER);
     let _ = write!(
         output,
