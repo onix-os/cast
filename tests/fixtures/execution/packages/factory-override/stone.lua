@@ -13,7 +13,6 @@ return make({
     builder = {
         kind = "cmake",
         flags = { "-DCAST_FACTORY_VARIANT=stone-override" },
-        run_tests = false,
     },
     sources = {
         {
