@@ -137,6 +137,33 @@ fn output_with(name: &str, overrides: &[(&str, &str)]) -> String {
     format!(r#"{{ name = "{name}", {body} }}"#)
 }
 
+/// Every hook slot empty.
+fn empty_hooks() -> String {
+    let slots = ["setup", "build", "check", "install", "workload"]
+        .into_iter()
+        .flat_map(|phase| [format!("pre_{phase} = {{}}"), format!("post_{phase} = {{}}")])
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {slots} }}")
+}
+
+/// A profile whose builder requires `tools` and which carries the given typed
+/// dependency lists. Every phase is empty; hooks are supported but unused.
+fn profile(name: &str, tools: &str, native: &str, build: &str, check: &str) -> String {
+    let phases = ["setup", "build", "install", "check", "workload"]
+        .into_iter()
+        .map(|phase| format!("{phase} = {{ steps = {{}} }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ name = \"{name}\", builder = {{ required_tools = {{ {tools} }}, environment = {{}}, \
+         phases = {{ {phases} }}, supported_hooks = {{ setup = true, build = true, check = true, \
+         install = true, workload = true }} }}, hooks = {}, native_build_inputs = {{ {native} }}, \
+         build_inputs = {{ {build} }}, check_inputs = {{ {check} }} }}",
+        empty_hooks(),
+    )
+}
+
 fn binary_program(name: &str) -> ProgramSpec {
     ProgramSpec {
         path: format!("/usr/bin/{name}"),
@@ -465,54 +492,34 @@ fn evaluator_rejects_typed_kind_mismatches_in_ordinary_dependency_roles() {
 
 #[test]
 fn evaluator_accepts_typed_kinds_in_a_selected_profile() {
-    let source = authored(
-        r#"
-let selected = a.profile {
-    name = "emul32/x86_64",
-    builder = {
-        required_tools = [
-            a.dep.package "profile-tool-package",
-            a.dep.output (a.package_ref "profile-tool-suite") "tools",
-            a.dep.binary "profile-tool-binary",
-            a.dep.system_binary "profile-tool-system-binary",
-        ],
-        environment = [],
-        phases = a.empty.scripts,
-        supported_hooks = a.hook_support.all,
-    },
-    hooks = a.empty.hooks,
-    native_build_inputs = [a.dep.cmake "ProfileNativeConfig"],
-    build_inputs = [a.dep.pkgconfig "profile-devel", a.dep.pkgconfig32 "profile-devel"],
-    check_inputs = [
-        a.dep.soname "libprofile-check.so.1",
-        a.dep.interpreter "/usr/lib/ld-profile-check.so.1(x86_64)",
-    ],
-}
-{
-    outputs = a.outputs.explicit [a.output "out"],
-    profiles = [selected],
-    .. {
-        meta = {
-            pname = "profile-roles", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        },
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }
-}
-"#,
+    let tools = [
+        dep("package", "profile-tool-package"),
+        output_dep("profile-tool-suite", "tools"),
+        dep("binary", "profile-tool-binary"),
+        dep("system_binary", "profile-tool-system-binary"),
+    ]
+    .join(", ");
+    let selected = profile(
+        "emul32/x86_64",
+        &tools,
+        &dep("cmake", "ProfileNativeConfig"),
+        &format!(
+            "{}, {}",
+            dep("pkg_config", "profile-devel"),
+            dep("pkg_config32", "profile-devel")
+        ),
+        &format!(
+            "{}, {}",
+            dep("soname", "libprofile-check.so.1"),
+            dep("interpreter", "/usr/lib/ld-profile-check.so.1(x86_64)")
+        ),
     );
+    let source = authored(&format!(
+        "{{ {}, builder = {}, outputs = {{ {} }}, profiles = {{ {selected} }} }}",
+        meta("profile-roles"),
+        custom_builder("", ""),
+        output("out", true),
+    ));
 
     let evaluated = evaluate_default_package(&source).unwrap();
     let selected = evaluated.value.profile("emul32/x86_64").unwrap();
@@ -534,51 +541,18 @@ let selected = a.profile {
 #[test]
 fn evaluator_rejects_typed_kind_mismatches_in_a_selected_profile() {
     for (dependency, kind) in [
-        ("a.dep.pkgconfig32 \"profile-devel\"", DependencyKind::PkgConfig32),
+        (dep("pkg_config32", "profile-devel"), DependencyKind::PkgConfig32),
         (
-            "a.dep.interpreter \"/usr/lib/ld-profile.so.1(x86_64)\"",
+            dep("interpreter", "/usr/lib/ld-profile.so.1(x86_64)"),
             DependencyKind::Interpreter,
         ),
     ] {
+        let selected = profile("emul32/x86_64", &dependency, "", "", "");
         let source = authored(&format!(
-            r#"
-let selected = a.profile {{
-    name = "emul32/x86_64",
-    builder = {{
-        required_tools = [{dependency}],
-        environment = [],
-        phases = a.empty.scripts,
-        supported_hooks = a.hook_support.all,
-    }},
-    hooks = a.empty.hooks,
-    native_build_inputs = [],
-    build_inputs = [],
-    check_inputs = [],
-}}
-{{
-    outputs = a.outputs.explicit [a.output "out"],
-    profiles = [selected],
-    .. {{
-        meta = {{
-            pname = "profile-role-error", version = "1.0.0", release = 1,
-            homepage = "https://example.com", license = ["MPL-2.0"],
-        }},
-        builder = a.builder.custom a.empty.builder,
-        sources = [],
-        native_build_inputs = [],
-        build_inputs = [],
-        check_inputs = [],
-        outputs = a.outputs.default,
-        options = a.unset,
-        profiles = [],
-        architectures = [],
-        tuning = [],
-        emul32 = a.false,
-        mold = a.false,
-        hooks = a.unset,
-    }}
-}}
-"#
+            "{{ {}, builder = {}, outputs = {{ {} }}, profiles = {{ {selected} }} }}",
+            meta("profile-role-error"),
+            custom_builder("", ""),
+            output("out", true),
         ));
 
         assert_dependency_role_conversion_error(
